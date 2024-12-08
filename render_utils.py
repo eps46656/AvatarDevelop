@@ -124,15 +124,15 @@ def RasterizeTriangle(points: np.ndarray,
             return list()
 
     b0s = [
-        -c0s[0] / c1s[0],
-        -c0s[1] / c1s[1],
-        -c0s[2] / c1s[2],
+        None if c1s[0] == 0 else -c0s[0] / c1s[0],
+        None if c1s[1] == 0 else -c0s[1] / c1s[1],
+        None if c1s[2] == 0 else -c0s[2] / c1s[2],
     ]
 
     b1s = [
-        (inv_mat[0, 0] + inv_mat[1, 0]) / c1s[0],
-        -inv_mat[0, 0] / c1s[1],
-        -inv_mat[1, 0] / c1s[2],
+        None if c1s[0] == 0 else (inv_mat[0, 0] + inv_mat[1, 0]) / c1s[0],
+        None if c1s[1] == 0 else -inv_mat[0, 0] / c1s[1],
+        None if c1s[2] == 0 else -inv_mat[1, 0] / c1s[2],
     ]
 
     for cur_h in range(math.ceil(h_min), math.floor(h_max) + 1):
@@ -141,12 +141,11 @@ def RasterizeTriangle(points: np.ndarray,
 
         for i in range(3):
             c1 = c1s[i]
-            b = b0s[i] + b1s[i] * cur_h
 
             if c1 < 0:
-                cur_w_max = min(cur_w_max, b)
+                cur_w_max = min(cur_w_max, b0s[i] + b1s[i] * cur_h)
             elif 0 < c1:
-                cur_w_min = max(cur_w_min, b)
+                cur_w_min = max(cur_w_min, b0s[i] + b1s[i] * cur_h)
 
         if scan_type == 1:
             ret.extend((cur_h, cur_w) for cur_w in range(

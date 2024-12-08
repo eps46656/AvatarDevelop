@@ -1,3 +1,4 @@
+import collections
 import itertools
 import typing
 
@@ -24,9 +25,9 @@ def FindRoots_(adj_lists: dict[object, set[object]]):
             indegs[u] += 1
 
             if 2 <= indegs[u]:
-                return None
+                return
 
-    return {v for v, indeg in indegs.items() if indeg == 0}
+    yield from (v for v, indeg in indegs.items() if indeg == 0)
 
 
 @typechecked
@@ -40,9 +41,7 @@ def BFS_(adj_lists: dict[object, set[object]],
          sources: typing.Iterable[object]):
     passed = set()
 
-    q = list()
-
-    i = 0
+    q = collections.deque()
 
     for source in sources:
         assert source in adj_lists
@@ -50,14 +49,16 @@ def BFS_(adj_lists: dict[object, set[object]],
         if not utils.SetAdd(passed, source):
             continue
 
+        yield source
         q.append(source)
 
-        while i < len(q):
-            for u in adj_lists[q[i]]:
-                if utils.SetAdd(passed, u):
-                    q.append(u)
+        while 0 < len(q):
+            v = q.popleft()
 
-    return q
+            for u in adj_lists[v]:
+                if utils.SetAdd(passed, u):
+                    yield u
+                    q.append(u)
 
 
 @typechecked
@@ -77,23 +78,25 @@ def TPS_(adj_lists: dict[object, set[object]],
             if u in indegs:
                 indegs[u] += 1
 
-    q = [v for v, indeg in indegs.items() if indeg == 0]
+    q = collections.deque()
 
-    i = 0
+    for v, indeg in indegs.items():
+        if indeg == 0:
+            yield v
+            q.append(v)
 
-    while i < len(q):
-        v = q[i]
+    while 0 < len(q):
+        v = q.popleft()
 
-        for u in adj_lists[q[i]]:
+        for u in adj_lists[v]:
             if u not in indegs:
                 continue
 
             indegs[u] -= 1
 
             if indegs[u] == 0:
+                yield v
                 q.append(u)
-
-    return q if len(q) == len(indegs) else None
 
 
 @typechecked
@@ -105,7 +108,6 @@ def TPS(adj_lists: dict[object, set[object]],
 
 @typechecked
 class Graph:
-
     def __init__(self,
                  adj_lists: typing.Optional[dict[object, set[object]]] = None):
         self.__adj_lists: dict[object, set[object]] = dict()
@@ -132,9 +134,6 @@ class Graph:
     def inv_adjacents(self, src: object):
         assert src in self.__inv_adj_lists
         return iter(self.__inv_adj_lists[src])
-
-    def GetVerticesCnt(self):
-        return len(self.__adj_lists)
 
     def GetEdgesCount(self):
         return sum(len(adj_list) for adj_list in self.__adj_lists.values())
