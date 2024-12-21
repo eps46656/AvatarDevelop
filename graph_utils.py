@@ -119,19 +119,19 @@ class Graph:
         if adj_lists is not None:
             self.Import(adj_lists)
 
-    def vertices(self):
+    def GetVertices(self):
         return self.__adj_lists.keys()
 
-    def edges(self):
+    def GetEdges(self):
         for v, adj_list in self.__adj_lists.items():
             for u in adj_list:
                 yield (v, u)
 
-    def adjacents(self, src: object):
+    def GetAdjacents(self, src: object):
         assert src in self.__adj_lists
         return iter(self.__adj_lists[src])
 
-    def inv_adjacents(self, src: object):
+    def GetInvAdjacents(self, src: object):
         assert src in self.__inv_adj_lists
         return iter(self.__inv_adj_lists[src])
 
@@ -149,14 +149,10 @@ class Graph:
         return (dst in self.__adj_lists.get(src, set()) or (bidirectional and src in self.__adj_lists.get(dst)))
 
     def AddVertex(self, vertex: object):
-        v, adj_list, success = utils.DictInsert(
-            self.__adj_lists, vertex, set())
-
-        if not success:
+        if not utils.DictInsert(self.__adj_lists, vertex, set())[2]:
             return False
 
-        utils.DictInsert(
-            self.__inv_adj_lists, vertex, set())
+        utils.DictInsert(self.__inv_adj_lists, vertex, set())
 
         self.__idegs[vertex] = 0
         self.__odegs[vertex] = 0
@@ -185,7 +181,8 @@ class Graph:
             self.__odegs[dst] += 1
 
     def RemoveVertex(self, src: object):
-        assert src in self.__adj_lists
+        if src not in self.__adj_lists:
+            return False
 
         us = [v for v in itertools.chain(
             self.__adj_lists[src], self.__inv_adj_lists[src])]
@@ -198,6 +195,8 @@ class Graph:
 
         self.__adj_lists.pop(src)
         self.__inv_adj_lists.pop(src)
+
+        return True
 
     def RemoveEdge(self,
                    src: object,

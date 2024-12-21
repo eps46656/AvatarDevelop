@@ -8,6 +8,7 @@ import numpy as np
 from typeguard import typechecked
 
 
+@typechecked
 def CheckStatusChanged(func: typing.Callable[[], object],
                        probe: typing.Callable[[], object]):
     old_status = probe()
@@ -54,8 +55,8 @@ def WriteImage(path: object, img: np.array):
 
     os.makedirs(path.parents[0], exist_ok=True)
 
-    cv.imencode(os.path.splitext(path)[1],
-                cv.cvtColor(img, cv.COLOR_RGB2BGR))[1].tofile(path)
+    cv.imencode(os.path.splitext(path)[1], cv.cvtColor(
+        img, cv.COLOR_RGB2BGR))[1].tofile(path)
 
 
 @typechecked
@@ -83,3 +84,13 @@ class Timer:
     def __exit__(self, type, value, traceback):
         self.Stop()
         print(f"duration: {self.duration()}")
+
+
+@typechecked
+def Union(*iters: typing.Iterable):
+    s = set()
+
+    for iter in iters:
+        for o in iter:
+            if SetAdd(s, o):
+                yield o

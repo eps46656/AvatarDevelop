@@ -1,6 +1,5 @@
 
 import copy
-import typing
 
 import torch
 from typeguard import typechecked
@@ -13,7 +12,7 @@ class Skeloton:
     def __init__(self,
                  graph: graph_utils.Graph,
                  base_transforms: dict[object, torch.Tensor],
-                 art_transforms: typing.Optional[dict[object, torch.Tensor]],
+                 art_transforms: dict[object, torch.Tensor],
                  ):
         self.__graph = copy.deepcopy(graph)
 
@@ -23,9 +22,9 @@ class Skeloton:
         # --
 
         self.__parents = {
-            v: None for v in self.__graph.vertices()}
+            v: None for v in self.__graph.GetVertices()}
 
-        for v, u in self.__graph.edges():
+        for v, u in self.__graph.GetEdges():
             assert self.__parents[u] is None
             self.__parents[u] = v
 
@@ -41,28 +40,20 @@ class Skeloton:
 
         self.__tp_vertices = list(self.__graph.TPS((self.__root)))
 
-        assert len(self.__tp_vertices) == len(self.__graph.vertices())
+        assert len(self.__tp_vertices) == len(self.__graph.GetVertices())
 
         # --
-
-        dtype = base_transforms.type
-        device = base_transforms.device
 
         # --
 
         self.__base_transforms = {
             coord: base_transforms[coord]
-            for coord in self.__graph.vertices()}
+            for coord in self.__graph.GetVertices()}
 
         # --
 
-        if art_transforms is None:
-            self.__art_transforms = {
-                v: torch.identity(4).to(dtype=dtype, device=device)
-                for v in self.__graph.vertices()}
-        else:
-            self.__art_transforms = None
-            self.SetArtTransforms(art_transforms)
+        self.__art_transforms = None
+        self.SetArtTransforms(art_transforms)
 
         # --
 
@@ -75,14 +66,14 @@ class Skeloton:
 
         self.__local_transforms = {
             coord: self.__base_transforms[coord] @ self.__art_transforms[coord]
-            for coord in self.__graph.vertices()}
+            for coord in self.__graph.GetVertices()}
 
     def GetLocalTransforms(self):
         self.__CalcLocalTransforms()
 
         return {
             coord: self.__local_transforms[coord]
-            for coord in self.__graph.vertices()}
+            for coord in self.__graph.GetVertices()}
 
     def __CalcWorldTransforms(self):
         if self.__world_transforms is not None:
@@ -107,16 +98,16 @@ class Skeloton:
 
         return {
             coord: self.__world_transforms[coord]
-            for coord in self.__graph.vertices()}
+            for coord in self.__graph.GetVertices()}
 
     def SetArtTransforms(self, art_transforms: dict[object, torch.Tensor]):
-        for v in self.__graph.vertices():
+        for v in self.__graph.GetVertices():
             assert v in art_transforms
             assert art_transforms[v].shape == (4, 4)
 
         self.__art_transforms = {
             v: art_transforms[v]
-            for v in self.__graph.vertices()}
+            for v in self.__graph.GetVertices()}
 
         self.__local_transforms = None
         self.__world_transforms = None

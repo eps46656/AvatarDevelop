@@ -3,19 +3,21 @@ import pathlib
 
 import numpy as np
 
-import Mesh
+import AbstractMesh
 import utils
-import render_utils
+import rendering_utils
 import typing
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
 
-def IsUnique(x: list[object]):
-    old_size = len(x)
-    ret = set(x)
-    assert len(ret) == old_size
+def IsUnique(x: typing.Iterable[object]):
+    ret = set()
+
+    for obj in x:
+        assert utils.SetAdd(ret, obj)
+
     return ret
 
 
@@ -36,11 +38,11 @@ def main1():
 
         with timer_a:
             naive_pixels = IsUnique(
-                render_utils.NaiveRasterizeTriangle(points, (0, H), (0, W)))
+                rendering_utils.NaiveRasterizeTriangle(points, (0, H), (0, W)))
 
         with timer_b:
             pixels = IsUnique(
-                render_utils.RasterizeTriangle(points, (0, H), (0, W)))
+                rendering_utils.RasterizeTriangle(points, (0, H), (0, W)))
 
         print(f"{timer_b.duration() / timer_a.duration() * 100=}")
 
