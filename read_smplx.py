@@ -133,30 +133,6 @@ def main3():
 
         print("")
 
-    kintree_table = model_data["kintree_table"]
-
-    print(kintree_table.shape)
-
-    J = kintree_table.shape[1]
-
-    for j in range(J):
-        a = int(kintree_table[0, j])
-        b = int(kintree_table[1, j])
-
-        print(f"{a}, {b}")
-
-        if a < 0 or J <= a:
-            a_name = "none"
-        else:
-            a_name = SMPL_Skeleton.JointIdxToJointName(a)
-
-        if b < 0 or J <= b:
-            b_name = "none"
-        else:
-            b_name = SMPL_Skeleton.JointIdxToJointName(b)
-
-        print(f"{a_name}, {b_name}")
-
 
 if __name__ == "__main__":
     main3()

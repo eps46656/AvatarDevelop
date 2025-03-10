@@ -105,11 +105,8 @@ def SMPLXForward(
     binding_pose_ts[..., kin_tree.root, :] = \
         0 if root_transl is None else root_transl
 
-    for u in kin_tree.joints_tp:
+    for u in kin_tree.joints_tp[1:]:
         p = kin_tree.parents[u]
-
-        if p == -1:
-            continue
 
         binding_pose_ts[..., u, :] = joints[..., u, :] - joints[..., p, :]
 

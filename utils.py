@@ -13,10 +13,18 @@ from typeguard import typechecked
 
 import config
 
-EPS = 1e-5
+EPS = 1e-8
 
 RAD = 1.0
 DEG = math.pi / 180.0
+
+INT = torch.int32
+FLOAT = torch.float32
+
+ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
+X_AXIS = torch.tensor([1, 0, 0], dtype=FLOAT)
+Y_AXIS = torch.tensor([0, 1, 0], dtype=FLOAT)
+Z_AXIS = torch.tensor([0, 0, 1], dtype=FLOAT)
 
 
 @typechecked
@@ -67,8 +75,8 @@ def MakeIdxTable(l: typing.Iterable):
 
 @typechecked
 def DimPermute(data: np.ndarray | torch.Tensor, src: str, dst: str):
-    assert len(data.shape) == len(src)
-    assert len(data.shape) == len(dst)
+    assert data.dim() == len(src)
+    assert data.dim() == len(dst)
 
     src_idx_table = MakeIdxTable(src)
     dst_idx_table = MakeIdxTable(dst)
@@ -101,7 +109,7 @@ def ReadImage(path: object, order: str):
 
 @typechecked
 def WriteImage(path: object, img: torch.Tensor, order: str):
-    assert len(img.shape) == 3
+    assert img.dim() == 3
 
     img_ = img.to(dtype=torch.uint8, device=torch.device("cpu"))
 
@@ -159,7 +167,7 @@ class Timer:
         self.Stop()
 
         print(
-            f"{self.filename}:{self.line_num}\t\t{self.function}\t\tduration: {self.duration()} sec")
+            f"{self.filename}:{self.line_num}\t\t{self.function}\t\tduration: {self.duration() * 1000:>18.6f} ms")
 
 
 @typechecked
@@ -251,9 +259,35 @@ def Cart2Sph(x: float, y: float, z: float):
 
 
 @typechecked
-def RandUnit(size):
-    v = torch.normal(mean=0, std=1, size=size)
+def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
+    shape_mat = [[int(d) for d in shape] for shape in shapes]
+
+    k = max(len(shape) for shape in shape_mat)
+
+    ret = tuple(
+        max((shape[i] if i < len(shape) else 1)
+            for shape in shape_mat)
+        for i in range(k)
+    )
+
+    assert all(all(
+        shape[i] == 1 or shape[i] == ret[i]
+        for i in range(-1, -1 - len(shape), -1))
+        for shape in shape_mat)
+
+    return ret
+
+
+@typechecked
+def RandUnit(size, dtype: torch.dtype, device: torch.device):
+    v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
     return v / (EPS + torch.linalg.vector_norm(v, dim=-1, keepdim=True))
+
+
+@typechecked
+def RandRotVec(size, dtype: torch.dtype, device: torch.device):
+    return RandUnit(size, dtype, device) * \
+        torch.rand(size, dtype=dtype, device=device) * math.pi
 
 
 @typechecked
@@ -285,9 +319,9 @@ def FindTransMat(
 @typechecked
 def GetRotMat(
     axis: torch.Tensor,  # [..., 3]
-    angle: torch.Tensor | None = None,  # [...]
+    angle: typing.Optional[torch.Tensor] = None,  # [...]
 ):
-    assert 1 <= len(axis)
+    assert 1 <= axis.dim()
 
     assert axis.shape[-1] == 3
 
@@ -338,14 +372,39 @@ def GetRotMat(
 
 
 @typechecked
-def DoRT(
-    rs: torch.Tensor,  # [..., P, Q],
-    ts: torch.Tensor,  # [..., P],
-    vs: torch.Tensor,  # [..., Q],
+def GetAxisAngle(
+    rot_mat: torch.Tensor  # [..., 3, 3]
 ):
-    assert 2 <= len(rs.shape)
-    assert 1 <= len(ts.shape)
-    assert 1 <= len(vs.shape)
+    assert 2 <= rot_mat.dim()
+    assert rot_mat.shape[-2:] == (3, 3)
+
+    tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
+
+    angle = torch.acos((tr - 1) / 2)
+    # [...]
+
+    axis = torch.empty(rot_mat.shape[:-1],
+                       dtype=rot_mat.dtype, device=rot_mat.device)
+    # [..., 3]
+
+    k = 0.5 / torch.sin(angle)
+
+    axis[..., 0] = k * (rot_mat[..., 2, 1] - rot_mat[..., 1, 2])
+    axis[..., 1] = k * (rot_mat[..., 0, 2] - rot_mat[..., 2, 0])
+    axis[..., 2] = k * (rot_mat[..., 1, 0] - rot_mat[..., 0, 1])
+
+    return axis, angle
+
+
+@typechecked
+def DoRT(
+    rs: torch.Tensor,  # [..., P, Q]
+    ts: torch.Tensor,  # [..., P]
+    vs: torch.Tensor,  # [..., Q]
+):
+    assert 2 <= rs.dim()
+    assert 1 <= ts.dim()
+    assert 1 <= vs.dim()
 
     P, Q = rs.shape[-2:]
 
@@ -358,15 +417,18 @@ def DoRT(
 
 @typechecked
 def MergeRT(
-    a_rs: torch.Tensor,  # [..., P, Q],
-    a_ts: torch.Tensor,  # [..., P],
-    b_rs: torch.Tensor,  # [..., Q, R],
-    b_ts: torch.Tensor,  # [..., Q],
-) -> tuple[torch.Tensor, torch.Tensor]:  # [..., P, R], [..., P]
-    assert 2 <= len(a_rs.shape)
-    assert 1 <= len(a_ts.shape)
-    assert 2 <= len(b_rs.shape)
-    assert 1 <= len(b_ts.shape)
+    a_rs: torch.Tensor,  # [..., P, Q]
+    a_ts: torch.Tensor,  # [..., P]
+    b_rs: torch.Tensor,  # [..., Q, R]
+    b_ts: torch.Tensor,  # [..., Q]
+) -> tuple[
+    torch.Tensor,  # rs[..., P, R]
+    torch.Tensor,  # ts[..., P]
+]:
+    assert 2 <= a_rs.dim()
+    assert 1 <= a_ts.dim()
+    assert 2 <= b_rs.dim()
+    assert 1 <= b_ts.dim()
 
     P, Q = a_rs.shape[-2:]
     R = b_rs.shape[-1]
@@ -387,11 +449,14 @@ def MergeRT(
 
 @typechecked
 def GetInvRT(
-    rs: torch.Tensor,  # [..., D, D],
-    ts: torch.Tensor,  # [..., D],
-) -> tuple[torch.Tensor, torch.Tensor]:  # [..., D, D], [..., D]
-    assert 2 <= len(rs.shape)
-    assert 1 <= len(ts.shape)
+    rs: torch.Tensor,  # [..., D, D]
+    ts: torch.Tensor,  # [..., D]
+) -> tuple[
+    torch.Tensor,  # inv_rs[..., D, D]
+    torch.Tensor,  # inv_ts[..., D]
+]:
+    assert 2 <= rs.dim()
+    assert 1 <= ts.dim()
 
     D = rs.shape[-1]
 
@@ -405,3 +470,12 @@ def GetInvRT(
     # [..., D]
 
     return inv_rs, inv_ts
+
+
+@typechecked
+def GetL2RMS(
+    x: torch.Tensor,  # [..., D]
+):
+    assert 1 <= x.dim()
+    n = x.numel() // x.shape[-1]
+    return (x.square().sum() / n).sqrt()
