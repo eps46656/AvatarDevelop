@@ -12,7 +12,7 @@ import torch
 import blending_utils
 import camera_utils
 import config
-import smplx.smplx
+from smplx import smplx
 import utils
 from kin_tree import KinTree
 

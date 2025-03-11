@@ -16,24 +16,17 @@ FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
 
-INT = torch.int32
-FLOAT = torch.float32
 DEVICE = torch.device("cuda")
 
 
-ORIGIN = torch.tensor([[0], [0], [0]], dtype=FLOAT)
-X_AXIS = torch.tensor([[1], [0], [0]], dtype=FLOAT)
-Y_AXIS = torch.tensor([[0], [1], [0]], dtype=FLOAT)
-Z_AXIS = torch.tensor([[0], [0], [1]], dtype=FLOAT)
+SMPLX_FT = +utils.Z_AXIS
+SMPLX_BK = -utils.Z_AXIS
 
-SMPLX_FT = +Z_AXIS
-SMPLX_BK = -Z_AXIS
+SMPLX_LT = +utils.X_AXIS
+SMPLX_RT = -utils.X_AXIS
 
-SMPLX_LT = +X_AXIS
-SMPLX_RT = -X_AXIS
-
-SMPLX_UP = +Y_AXIS
-SMPLX_DW = -Y_AXIS
+SMPLX_UP = +utils.Y_AXIS
+SMPLX_DW = -utils.Y_AXIS
 
 
 class AlbedoMeshShader(pytorch3d.renderer.mesh.shader.ShaderBase):
@@ -51,24 +44,24 @@ def main1():
         torch.linalg.lstsq(
             # model coordinate
             torch.tensor([
-                ORIGIN.flatten().tolist() + [1],  # position trnasform
-                SMPLX_FT.flatten().tolist() + [0],  # direction transform
-                SMPLX_RT.flatten().tolist() + [0],  # direction transform
-                SMPLX_UP.flatten().tolist() + [0],  # direction transform
-            ], dtype=FLOAT),
+                utils.ORIGIN.tolist() + [1],  # position trnasform
+                SMPLX_FT.tolist() + [0],  # direction transform
+                SMPLX_RT.tolist() + [0],  # direction transform
+                SMPLX_UP.tolist() + [0],  # direction transform
+            ], dtype=utils.FLOAT),
 
             # world coordinate
             torch.tensor([
-                ORIGIN.flatten().tolist() + [1],  # position trnasform
-                X_AXIS.flatten().tolist() + [0],  # direction transform
-                Z_AXIS.flatten().tolist() + [0],  # direction transform
-                Y_AXIS.flatten().tolist() + [0],  # direction transform
-            ], dtype=FLOAT),
+                utils.ORIGIN.tolist() + [1],  # position trnasform
+                utils.X_AXIS.tolist() + [0],  # direction transform
+                utils.Z_AXIS.tolist() + [0],  # direction transform
+                utils.Y_AXIS.tolist() + [0],  # direction transform
+            ], dtype=utils.FLOAT),
         )[0].transpose(0, 1)
 
     # model_mat = utils.GetRotMat(Y_AXIS, 0*utils.DEG) @ model_mat
 
-    model_mat = model_mat.to(dtype=FLOAT, device=DEVICE)
+    model_mat = model_mat.to(dtype=utils.FLOAT, device=DEVICE)
 
     with open(DIR / "smplx_param.json") as f:
         pose_params = json.load(f)
@@ -78,23 +71,23 @@ def main1():
             model_path=DIR / "smplx/models/smplx",
             num_betas=10,
             use_pca=False,
-            dtype=FLOAT
+            dtype=utils.FLOAT
         )
 
     with utils.Timer():
         smplx_model = smplx_builder.forward(
             betas=torch.tensor(
-                pose_params["shape"], dtype=FLOAT).reshape((1, -1)),
+                pose_params["shape"], dtype=utils.FLOAT).reshape((1, -1)),
             body_pose=torch.tensor(
-                pose_params["body_pose"], dtype=FLOAT).reshape((1, -1, 3)),
+                pose_params["body_pose"], dtype=utils.FLOAT).reshape((1, -1, 3)),
             left_hand_pose=torch.tensor(
-                pose_params["lhand_pose"], dtype=FLOAT).reshape((1, -1)),
+                pose_params["lhand_pose"], dtype=utils.FLOAT).reshape((1, -1)),
             right_hand_pose=torch.tensor(
-                pose_params["rhand_pose"], dtype=FLOAT).reshape((1, -1)),
+                pose_params["rhand_pose"], dtype=utils.FLOAT).reshape((1, -1)),
             jaw_pose=torch.tensor(
-                pose_params["jaw_pose"], dtype=FLOAT).reshape((1, 3)),
+                pose_params["jaw_pose"], dtype=utils.FLOAT).reshape((1, 3)),
             expression=torch.tensor(
-                pose_params["expr"], dtype=FLOAT).reshape((1, -1)),
+                pose_params["expr"], dtype=utils.FLOAT).reshape((1, -1)),
             return_full_pose=True,
             return_verts=True,
             return_shaped=True,
@@ -106,7 +99,7 @@ def main1():
         model_data = pickle.load(model_file, encoding="latin1")
 
     vertices = torch.tensor(
-        smplx_model.vertices, dtype=FLOAT, device=DEVICE).reshape((-1, 3))
+        smplx_model.vertices, dtype=utils.FLOAT, device=DEVICE).reshape((-1, 3))
     # [V, 3]
 
     vertices = vertices @ model_mat[:3, :3].transpose(0, 1) + \
@@ -114,19 +107,19 @@ def main1():
     # [V, 3]
 
     faces = torch.tensor(
-        model_data["f"], dtype=INT, device=DEVICE).reshape((-1, 3))
+        model_data["f"], dtype=utils.INT, device=DEVICE).reshape((-1, 3))
     # [F, 3]
 
     face_textures = torch.tensor(
-        model_data["ft"], dtype=INT, device=DEVICE).reshape((-1, 3))
+        model_data["ft"], dtype=utils.INT, device=DEVICE).reshape((-1, 3))
     # [F, 3]
 
     vertex_textures = torch.tensor(
-        model_data["vt"], dtype=FLOAT, device=DEVICE).reshape((-1, 2))
+        model_data["vt"], dtype=utils.FLOAT, device=DEVICE).reshape((-1, 2))
     # [V, 2]
 
     albedo_map = utils.ReadImage(DIR / "black_male.png", "hwc"
-                                 ).to(dtype=FLOAT, device=DEVICE)
+                                 ).to(dtype=utils.FLOAT, device=DEVICE)
     print(f"{albedo_map.shape=}")
 
     albedo_texture = pytorch3d.renderer.TexturesUV(
@@ -149,17 +142,15 @@ def main1():
     theta = 60 * utils.DEG
     phi = (180 + 45) * utils.DEG
 
-    print(f"{ORIGIN=}")
-    print(f"{X_AXIS=}")
-    print(f"{Y_AXIS=}")
-    print(f"{Z_AXIS=}")
-
     view_mat = camera_utils.MakeViewMat(
-        origin=utils.Sph2XYZ(radius, theta, phi, Z_AXIS, X_AXIS, Y_AXIS),
-        aim=ORIGIN,
-        quasi_u_dir=Y_AXIS,
+        origin=utils.Sph2XYZ(radius, theta, phi,
+                             utils.Z_AXIS, utils.X_AXIS, utils.Y_AXIS),
+        aim=utils.ORIGIN,
+        quasi_u_dir=utils.Y_AXIS,
         view_axes="luf",
-    ).to(dtype=FLOAT, device=DEVICE)
+        dtype=utils.FLOAT,
+        device=DEVICE,
+    ).to(dtype=utils.FLOAT, device=DEVICE)
 
     print(f"{view_mat=}")
 

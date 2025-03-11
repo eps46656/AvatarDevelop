@@ -80,40 +80,66 @@ def MakeProjMatWithURF(
 @typechecked
 def MakeViewMatWithURF(
     *,
-    origin: torch.Tensor,
-    u_vec: torch.Tensor,
-    r_vec: torch.Tensor,
-    f_vec: torch.Tensor,
+    origin: torch.Tensor,  # [..., 3]
+    u_vec: torch.Tensor,  # [..., 3]
+    r_vec: torch.Tensor,  # [..., 3]
+    f_vec: torch.Tensor,  # [..., 3]
     view_axes: str,
+    dtype: torch.dtype,
+    device: torch.device,
 ):
     view_axes = ArrangeAxesStr(view_axes)
 
-    assert origin.shape.numel() == 3
-    assert u_vec.shape.numel() == 3
-    assert r_vec.shape.numel() == 3
-    assert f_vec.shape.numel() == 3
+    assert 1 <= origin.dim()
+    assert 1 <= u_vec.dim()
+    assert 1 <= r_vec.dim()
+    assert 1 <= f_vec.dim()
 
-    origin = origin.flatten()
-    u_vec = u_vec.flatten()
-    r_vec = r_vec.flatten()
-    f_vec = f_vec.flatten()
+    assert origin.shape[-1] == 3
+    assert u_vec.shape[-1] == 3
+    assert r_vec.shape[-1] == 3
+    assert f_vec.shape[-1] == 3
 
-    vec_map = {
-        "l": -r_vec, "r": +r_vec,
-        "u": +u_vec, "d": -u_vec,
-        "f": +f_vec, "b": -f_vec,
-    }
+    def GetVec(axis):
+        match axis:
+            case "l": return -r_vec
+            case "r": return r_vec
+            case "u": return u_vec
+            case "d": return -u_vec
+            case "f": return f_vec
+            case "b": return -f_vec
 
-    a_vec = vec_map[view_axes[0]]
-    b_vec = vec_map[view_axes[1]]
-    c_vec = vec_map[view_axes[2]]
+    x_vec = GetVec(view_axes[0])
+    y_vec = GetVec(view_axes[1])
+    z_vec = GetVec(view_axes[2])
 
-    return torch.inverse(torch.tensor([
-        [a_vec[0], b_vec[0], c_vec[0], origin[0]],
-        [a_vec[1], b_vec[1], c_vec[1], origin[1]],
-        [a_vec[2], b_vec[2], c_vec[2], origin[2]],
-        [0, 0, 0, 1],
-    ], dtype=torch.float))
+    batch_dims = list(utils.GetCommonShape([
+        x_vec.shape[:-1],
+        y_vec.shape[:-1],
+        z_vec.shape[:-1],
+    ]))
+
+    ret = torch.empty(batch_dims + [4, 4], dtype=dtype, device=device)
+
+    ret[..., 0, 0] = x_vec[..., 0]
+    ret[..., 0, 1] = y_vec[..., 0]
+    ret[..., 0, 2] = z_vec[..., 0]
+    ret[..., 0, 3] = origin[..., 0]
+
+    ret[..., 1, 0] = x_vec[..., 1]
+    ret[..., 1, 1] = y_vec[..., 1]
+    ret[..., 1, 2] = z_vec[..., 1]
+    ret[..., 1, 3] = origin[..., 1]
+
+    ret[..., 2, 0] = x_vec[..., 2]
+    ret[..., 2, 1] = y_vec[..., 2]
+    ret[..., 2, 2] = z_vec[..., 2]
+    ret[..., 2, 3] = origin[..., 2]
+
+    ret[..., 3, :3] = 0
+    ret[..., 3, 3] = 1
+
+    return torch.inverse(ret)
 
 
 @typechecked
@@ -174,39 +200,24 @@ def MakeProjMat(
 
 @typechecked
 def MakeViewMat(
-    origin: torch.Tensor,
-    aim: torch.Tensor,
-    quasi_u_dir: torch.Tensor,
+    origin: torch.Tensor,  # [..., 3]
+    aim: torch.Tensor,  # [..., 3]
+    quasi_u_dir: torch.Tensor,  # [..., 3]
     view_axes: str,
+    dtype: torch.dtype,
+    device: torch.device,
 ):
-    assert origin.shape.numel() == 3
-    assert aim.shape.numel() == 3
-    assert quasi_u_dir.shape.numel() == 3
+    assert 1 <= origin.dim()
+    assert 1 <= aim.dim()
+    assert 1 <= quasi_u_dir.dim()
 
-    origin = origin.flatten()
-    aim = aim.flatten()
-    quasi_u_dir = quasi_u_dir.flatten()
+    assert origin.shape[-1] == 3
+    assert aim.shape[-1] == 3
+    assert quasi_u_dir.shape[-1] == 3
 
-    f_dir = aim - origin
-    f_dir_norm = torch.norm(f_dir)
-    assert utils.EPS < f_dir_norm
-    f_vec = f_dir / f_dir_norm
-
-    r_dir = torch.cross(f_vec, quasi_u_dir, dim=0)
-    r_dir_norm = torch.norm(r_dir)
-    assert utils.EPS < r_dir_norm
-    r_vec = r_dir / r_dir_norm
-
-    u_dir = torch.cross(r_dir, f_vec, dim=0)
-    u_dir_norm = torch.norm(u_dir)
-    assert utils.EPS < u_dir_norm
-    u_vec = u_dir / u_dir_norm
-
-    print(f"{origin=}")
-    print(f"{aim=}")
-    print(f"{f_vec=}")
-    print(f"{r_vec=}")
-    print(f"{u_vec=}")
+    f_vec = utils.Normalized(aim - origin)
+    r_vec = utils.Normalized(torch.cross(f_vec, quasi_u_dir, dim=-1))
+    u_vec = torch.cross(r_vec, f_vec, dim=0)
 
     return MakeViewMatWithURF(
         origin=origin,
@@ -214,6 +225,8 @@ def MakeViewMat(
         r_vec=r_vec,
         f_vec=f_vec,
         view_axes=view_axes,
+        dtype=dtype,
+        device=device,
     )
 
 

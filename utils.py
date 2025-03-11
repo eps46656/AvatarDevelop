@@ -259,6 +259,14 @@ def Cart2Sph(x: float, y: float, z: float):
 
 
 @typechecked
+def Normalized(
+    x: torch.Tensor,  # [..., D]
+    dim: int = -1,
+):
+    return x / (EPS + torch.linalg.vector_norm(x, dim=dim, keepdim=True))
+
+
+@typechecked
 def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
     shape_mat = [[int(d) for d in shape] for shape in shapes]
 

@@ -1,4 +1,5 @@
 import torch
+import typing
 from typeguard import typechecked
 
 from kin_tree import KinTree
@@ -48,23 +49,30 @@ def GetJointRTs(
 def LBS(
     *,
     kin_tree: KinTree,
+
     vertices: torch.Tensor,  # [..., V, D]
     lbs_weights: torch.Tensor,  # [..., V, J]
+
     binding_pose_rs: torch.Tensor,  # [..., J, D, D]
     binding_pose_ts: torch.Tensor,  # [..., J, D]
+
     pose_rs: torch.Tensor,  # [..., J, D, D]
     pose_ts: torch.Tensor,  # [..., J, D]
 ) -> tuple[
     torch.Tensor,  # binding_joint_rs[..., J, D, D]
     torch.Tensor,  # binding_joint_ts[..., J, D]
+
     torch.Tensor,  # joint_rs[..., J, D, D]
     torch.Tensor,  # joint_ts[..., J, D]
+
     torch.Tensor,  # vertices[..., V, D]
 ]:
     assert 2 <= vertices.dim()
     assert 2 <= lbs_weights.dim()
+
     assert 3 <= binding_pose_rs.dim()
     assert 2 <= binding_pose_ts.dim()
+
     assert 3 <= pose_rs.dim()
     assert 2 <= pose_ts.dim()
 
@@ -72,10 +80,13 @@ def LBS(
     V, D = vertices.shape[-2:]
 
     assert kin_tree.joints_cnt == J
+
     assert vertices.shape[-2:] == (V, D)
     assert lbs_weights.shape[-2:] == (V, J)
+
     assert binding_pose_rs.shape[-3:] == (J, D, D)
     assert binding_pose_ts.shape[-2:] == (J, D)
+
     assert pose_rs.shape[-3:] == (J, D, D)
     assert pose_ts.shape[-2:] == (J, D)
 

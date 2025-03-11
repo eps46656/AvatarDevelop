@@ -1,13 +1,12 @@
 import dataclasses
 import pickle
+import typing
 
 import torch
-import typing
 
 import blending_utils
 import utils
 from kin_tree import KinTree
-
 
 SMPLX_FT = +utils.Z_AXIS
 SMPLX_BK = -utils.Z_AXIS
@@ -38,26 +37,42 @@ RHAND_POSES_CNT = 15
 BODY_SHAPES_SPACE_DIM = 300
 
 
-def SMPLXBlending(
+def ConcateShapes(
     *,
-    kin_tree: KinTree,
-
-    vertices: torch.Tensor,  # [..., V, 3]
-    joint_regressor: torch.Tensor,  # [..., J, V]
-
-    shape_dirs: typing.Optional[torch.Tensor],
-    # [..., V, 3, BODY_SHAPES_CNT + EXPR_SHAPES_CNT]
-
     body_shapes: typing.Optional[torch.Tensor] = None,
     # [..., BODY_POSES_CNT]
 
     expr_shapes: typing.Optional[torch.Tensor] = None,
     # [..., EXPR_SHAPES_CNT]
 
-    lbs_weights: torch.Tensor,  # [..., V, J]
+    device: torch.device,
+):
+    if body_shapes is None:
+        body_shapes = torch.zeros((10,), dtype=utils.FLOAT, device=device)
 
+    if expr_shapes is None:
+        expr_shapes = torch.zeros((10,), dtype=utils.FLOAT, device=device)
+
+    assert 1 <= body_shapes.dim()
+    assert 1 <= expr_shapes.dim()
+
+    assert body_shapes.shape[-1] == 10
+    assert expr_shapes.shape[-1] == 10
+
+    shapes_batch_dims = list(utils.GetCommonShape(
+        [body_shapes.shape[:-1], expr_shapes[:-1]]))
+
+    ret = torch.cat((
+        body_shapes.expand(shapes_batch_dims + [10]),
+        expr_shapes.expand(shapes_batch_dims + [10]),
+    ), dim=-1)
+
+    return ret
+
+
+def ConcatPoses(
+    *,
     root_rs: torch.Tensor = None,  # [..., 3]
-    root_ts: torch.Tensor = None,  # [..., 3]
 
     body_poses: typing.Optional[torch.Tensor] = None,
     # [..., BODY_POSES_CNT, 3]
@@ -80,51 +95,10 @@ def SMPLXBlending(
     lhand_poses_mean: torch.Tensor,  # [..., LHAND_POSES_CNT, 3]
     rhand_poses_mean: torch.Tensor,  # [..., RHAND_POSES_CNT, 3]
 
-    device: torch.device
+    device: torch.device,
 ):
-    assert 2 <= len(vertices)
-    assert 2 <= len(joint_regressor)
-
-    J = kin_tree.joints_cnt
-    V = vertices.shape[0]
-
-    assert vertices.shape[-2:] == (V, 3)
-    assert joint_regressor.shape[-2:] == (J, V)
-
-    # ---
-
-    assert 3 <= len(shape_dirs)
-    assert shape_dirs.shape[-3:-1] == (V, 3)
-
-    if body_shapes is None:
-        body_shapes = torch.zeros((10,), dtype=utils.FLOAT, device=device)
-
-    if expr_shapes is None:
-        expr_shapes = torch.zeros((10,), dtype=utils.FLOAT, device=device)
-
-    assert 1 <= body_shapes.dim()
-    assert 1 <= expr_shapes.dim()
-
-    assert body_shapes.shape[-1] == 10
-    assert expr_shapes.shape[-1] == 10
-
-    shapes_batch_dims = list(utils.GetCommonShape(
-        [body_shapes.shape[:-1], expr_shapes[:-1]]))
-
-    shapes = torch.cat((
-        body_shapes.expand(shapes_batch_dims + [10]),
-        expr_shapes.expand(shapes_batch_dims + [10]),
-    ), dim=-1)
-
-    # ---
-
-    assert lbs_weights.shape[-2:] == (V, J)
-
     if root_rs is None:
         root_rs = torch.zeros((3,), dtype=utils.FLOAT, device=device)
-
-    if root_ts is None:
-        root_ts = torch.zeros((3,), dtype=utils.FLOAT, device=device)
 
     if body_poses is None:
         body_poses = torch.zeros(
@@ -151,18 +125,14 @@ def SMPLXBlending(
             (RHAND_POSES_CNT, 3), dtype=utils.FLOAT, device=device)
 
     assert 1 <= root_rs.dim()
-    assert 1 <= root_ts.dim()
     assert 2 <= body_poses.dim()
     assert 2 <= jaw_poses.dim()
     assert 2 <= leye_poses.dim()
     assert 2 <= reye_poses.dim()
     assert 2 <= lhand_poses.dim()
     assert 2 <= rhand_poses.dim()
-    assert 2 <= lhand_poses_mean.dim()
-    assert 2 <= rhand_poses_mean.dim()
 
     assert root_rs.shape[-1] == 3
-    assert root_ts.shape[-1] == 3
     assert body_poses.shape[-2:] == (BODY_POSES_CNT, 3)
     assert jaw_poses.shape[-2:] == (JAW_POSES_CNT, 3)
     assert leye_poses.shape[-2:] == (LEYE_POSES_CNT, 3)
@@ -185,7 +155,7 @@ def SMPLXBlending(
         rhand_poses.shape[:-2],
     ]))
 
-    poses = torch.cat((
+    ret = torch.cat((
         root_rs.expand(poses_batch_dims + [1, 3]),
         body_poses.expand(poses_batch_dims + [BODY_POSES_CNT, 3]),
         jaw_poses.expand(poses_batch_dims + [JAW_POSES_CNT, 3]),
@@ -194,6 +164,62 @@ def SMPLXBlending(
         lhand_poses.expand(poses_batch_dims + [LHAND_POSES_CNT, 3]),
         rhand_poses.expand(poses_batch_dims + [RHAND_POSES_CNT, 3]),
     ), dim=-2)
+
+    return ret
+
+
+def Blending(
+    *,
+    kin_tree: KinTree,
+
+    vertices: torch.Tensor,  # [..., V, 3]
+    joint_regressor: torch.Tensor,  # [..., J, V]
+
+    shape_dirs: typing.Optional[torch.Tensor],
+    # [..., V, 3, BODY_SHAPES_CNT + EXPR_SHAPES_CNT]
+
+    shapes: typing.Optional[torch.Tensor] = None,
+    # [..., BODY_POSES_CNT + EXPR_SHAPES_CNT]
+
+    lbs_weights: torch.Tensor,  # [..., V, J]
+
+    global_transl: torch.Tensor = None,  # [..., 3]
+
+    poses: torch.Tensor,  # [... ?, 3]
+
+    device: torch.device
+):
+    assert 2 <= len(vertices)
+    assert 2 <= len(joint_regressor)
+
+    J = kin_tree.joints_cnt
+    V = vertices.shape[0]
+
+    assert vertices.shape[-2:] == (V, 3)
+    assert joint_regressor.shape[-2:] == (J, V)
+
+    assert 3 <= len(shape_dirs)
+    assert shape_dirs.shape[-3:-1] == (V, 3)
+
+    assert lbs_weights.shape[-2:] == (V, J)
+
+    # ---
+
+    assert shapes.shape[-1] == shape_dirs[-1]
+
+    # ---
+
+    assert poses.shape[-2] == (
+        1 +  # global rot
+        BODY_POSES_CNT +
+        JAW_POSES_CNT +
+        LEYE_POSES_CNT +
+        REYE_POSES_CNT +
+        LHAND_POSES_CNT +
+        RHAND_POSES_CNT
+    )
+
+    assert poses.shape[-1] == 3
 
     # ---
 
@@ -228,9 +254,9 @@ def SMPLXBlending(
             pose_ts=binding_pose_ts,
         )
 
-    if root_ts is not None:
-        joint_ts = root_ts + joint_ts
-        vs = root_ts + vs
+    if global_transl is not None:
+        joint_ts = global_transl + joint_ts
+        vs = global_transl + vs
 
     return SMPLXModel(
         joints=joint_ts,
