@@ -1,9 +1,13 @@
+import itertools
 import math
 import os
 import pathlib
 import sys
 import time
+import types
 import typing
+
+from beartype import beartype
 
 import cv2 as cv
 import numpy as np
@@ -25,6 +29,12 @@ ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
 X_AXIS = torch.tensor([1, 0, 0], dtype=FLOAT)
 Y_AXIS = torch.tensor([0, 1, 0], dtype=FLOAT)
 Z_AXIS = torch.tensor([0, 0, 1], dtype=FLOAT)
+
+
+class Empty:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(key, value)
 
 
 @typechecked
@@ -180,6 +190,65 @@ def Union(*iters: typing.Iterable):
                 yield o
 
 
+@beartype
+def CheckShapes(*args):
+    assert len(args) % 2 == 0
+
+    undet_shapes = dict()
+
+    for i in range(0, len(args), 2):
+        t = args[i]
+        p = args[i + 1]
+
+        assert isinstance(t, torch.Tensor)
+        assert isinstance(p, tuple)
+
+        ellipsis_cnt = p.count(...)
+
+        assert ellipsis_cnt <= 1
+
+        for p_val in p:
+            assert p_val is ... or isinstance(p_val, int)
+
+        if ellipsis_cnt == 0:
+            assert len(p) == t.dim(), \
+                f"Tensor dimenion {t.shape} mismatches pattern {p}."
+
+            t_idx_iter = range(t.dim())
+            p_idx_iter = range(len(p))
+        else:
+            assert len(p) - 1 <= t.dim(), \
+                f"Tensor dimenion {t.shape} mismatches pattern {p}."
+
+            ellipsis_idx = p.index(...)
+
+            t_idx_iter = itertools.chain(
+                range(ellipsis_idx),
+                range(t.dim() - len(p) + ellipsis_idx + 1, t.dim()))
+
+            p_idx_iter = itertools.chain(
+                range(ellipsis_idx), range(ellipsis_idx + 1, len(p)))
+
+        for t_idx, p_idx in zip(t_idx_iter, p_idx_iter):
+            t_val = t.shape[t_idx]
+            p_val = p[p_idx]
+
+            if 0 <= p_val:
+                assert t_val == p_val, \
+                    f"Tensor shape {t.shape} mismatches pattern {p}."
+            else:
+                old_p_val = undet_shapes.setdefault(
+                    p_val, t_val)
+
+                assert old_p_val == t_val, \
+                    f"Tensor shape {old_p_val} and {t_val} are inconsistant."
+
+    return tuple(
+        undet_shape
+        for _, undet_shape in sorted(undet_shapes.items(), reverse=True)
+    )
+
+
 def AssertXYZAxes(axes: str):
     s = {
         "-x", "+x",
@@ -222,9 +291,8 @@ def ArrangeXYZ(a, b, c, src_axes: str, dst_axes: str):
         if dst_axes[0:2] in values else -values[GetInvAxis(dst_axes[0:2])], \
         values[dst_axes[2:4]] \
         if dst_axes[2:4] in values else -values[GetInvAxis(dst_axes[2:4])], \
-        values[dst_axes[4:6]] \
-        if dst_axes[4:6] in values else -values[GetInvAxis(dst_axes[4:6])], \
-
+        values[dst_axes[4:6]]\
+        if dst_axes[4:6] in values else -values[GetInvAxis(dst_axes[4:6])]
 
 
 @typechecked
@@ -261,9 +329,11 @@ def Cart2Sph(x: float, y: float, z: float):
 @typechecked
 def Normalized(
     x: torch.Tensor,  # [..., D]
-    dim: int = -1,
+    dim: int,
+    length: float | int | torch.Tensor = None,
 ):
-    return x / (EPS + torch.linalg.vector_norm(x, dim=dim, keepdim=True))
+    norm = (EPS + torch.linalg.vector_norm(x, dim=dim, keepdim=True))
+    return x / norm if length is None else x * (length / norm)
 
 
 @typechecked
@@ -329,9 +399,7 @@ def GetRotMat(
     axis: torch.Tensor,  # [..., 3]
     angle: typing.Optional[torch.Tensor] = None,  # [...]
 ):
-    assert 1 <= axis.dim()
-
-    assert axis.shape[-1] == 3
+    CheckShapes(axis, (..., 3))
 
     norm = torch.linalg.vector_norm(axis, dim=-1)
 
@@ -383,8 +451,7 @@ def GetRotMat(
 def GetAxisAngle(
     rot_mat: torch.Tensor  # [..., 3, 3]
 ):
-    assert 2 <= rot_mat.dim()
-    assert rot_mat.shape[-2:] == (3, 3)
+    CheckShapes(rot_mat, (..., 3, 3))
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
@@ -410,15 +477,13 @@ def DoRT(
     ts: torch.Tensor,  # [..., P]
     vs: torch.Tensor,  # [..., Q]
 ):
-    assert 2 <= rs.dim()
-    assert 1 <= ts.dim()
-    assert 1 <= vs.dim()
+    P, Q = -1, -2
 
-    P, Q = rs.shape[-2:]
-
-    assert rs.shape[-2:] == (P, Q)
-    assert ts.shape[-1] == P
-    assert vs.shape[-1] == Q
+    P, Q = CheckShapes(
+        rs, (..., P, Q),
+        ts, (..., P),
+        vs, (..., Q),
+    )
 
     return (rs @ vs.unsqueeze(-1)).squeeze(-1) + ts
 
@@ -433,18 +498,14 @@ def MergeRT(
     torch.Tensor,  # rs[..., P, R]
     torch.Tensor,  # ts[..., P]
 ]:
-    assert 2 <= a_rs.dim()
-    assert 1 <= a_ts.dim()
-    assert 2 <= b_rs.dim()
-    assert 1 <= b_ts.dim()
+    P, Q, R = -1, -2, -3
 
-    P, Q = a_rs.shape[-2:]
-    R = b_rs.shape[-1]
-
-    assert a_rs.shape[-2:] == (P, Q)
-    assert a_ts.shape[-1] == P
-    assert b_rs.shape[-2:] == (Q, R)
-    assert b_ts.shape[-1] == Q
+    P, Q, R = CheckShapes(
+        a_rs, (..., P, Q),
+        a_ts, (..., P),
+        b_rs, (..., Q, R),
+        b_ts, (..., Q),
+    )
 
     ret_rs = a_rs @ b_rs
     # [..., P, R]
@@ -463,13 +524,10 @@ def GetInvRT(
     torch.Tensor,  # inv_rs[..., D, D]
     torch.Tensor,  # inv_ts[..., D]
 ]:
-    assert 2 <= rs.dim()
-    assert 1 <= ts.dim()
-
-    D = rs.shape[-1]
-
-    assert rs.shape[-2:] == (D, D)
-    assert ts.shape[-1] == D
+    D = CheckShapes(
+        rs, (..., -1, -1),
+        ts, (..., -1),
+    )
 
     inv_rs = torch.inverse(rs)
     # [..., D, D]

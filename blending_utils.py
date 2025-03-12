@@ -1,6 +1,6 @@
 import torch
-import typing
 from typeguard import typechecked
+import utils
 
 from kin_tree import KinTree
 from utils import GetInvRT, MergeRT, DoRT
@@ -15,14 +15,12 @@ def GetJointRTs(
     torch.Tensor,  # joint_rs[..., J, D, D]
     torch.Tensor,  # joint_ts[..., J, D]
 ]:
-    assert 3 <= pose_rs.dim()
-    assert 2 <= pose_ts.dim()
+    J = kin_tree.joints_cnt
 
-    J, D, _ = pose_rs.shape[-3:]
-
-    assert kin_tree.joints_cnt == J
-    assert pose_rs.shape[-3:] == (J, D, D)
-    assert pose_ts.shape[-2:] == (J, D)
+    D, = utils.CheckShapes(
+        pose_rs, (..., J, -1, -1),
+        pose_ts, (..., J, -1),
+    )
 
     joint_rs = torch.empty_like(pose_rs)
     joint_rs[..., kin_tree.root, :, :] = pose_rs[..., kin_tree.root, :, :]
@@ -59,36 +57,26 @@ def LBS(
     pose_rs: torch.Tensor,  # [..., J, D, D]
     pose_ts: torch.Tensor,  # [..., J, D]
 ) -> tuple[
+    torch.Tensor,  # vertices[..., V, D]
+
     torch.Tensor,  # binding_joint_rs[..., J, D, D]
     torch.Tensor,  # binding_joint_ts[..., J, D]
 
     torch.Tensor,  # joint_rs[..., J, D, D]
     torch.Tensor,  # joint_ts[..., J, D]
-
-    torch.Tensor,  # vertices[..., V, D]
 ]:
-    assert 2 <= vertices.dim()
-    assert 2 <= lbs_weights.dim()
-
-    assert 3 <= binding_pose_rs.dim()
-    assert 2 <= binding_pose_ts.dim()
-
-    assert 3 <= pose_rs.dim()
-    assert 2 <= pose_ts.dim()
-
     J = kin_tree.joints_cnt
-    V, D = vertices.shape[-2:]
 
-    assert kin_tree.joints_cnt == J
+    V, D = -1, -2
 
-    assert vertices.shape[-2:] == (V, D)
-    assert lbs_weights.shape[-2:] == (V, J)
-
-    assert binding_pose_rs.shape[-3:] == (J, D, D)
-    assert binding_pose_ts.shape[-2:] == (J, D)
-
-    assert pose_rs.shape[-3:] == (J, D, D)
-    assert pose_ts.shape[-2:] == (J, D)
+    V, D = utils.CheckShapes(
+        vertices, (..., V, D),
+        lbs_weights, (..., V, J),
+        binding_pose_rs, (..., J, D, D),
+        binding_pose_ts, (..., J, D),
+        pose_rs, (..., J, D, D),
+        pose_ts, (..., J, D),
+    )
 
     assert binding_pose_rs.dtype == binding_pose_ts.dtype
     assert binding_pose_rs.device == binding_pose_ts.device
@@ -136,4 +124,4 @@ def LBS(
         m_ts,
     )  # [..., V, D]
 
-    return binding_joint_rs, binding_joint_ts, joint_rs, joint_ts, ret_a + ret_b
+    return ret_a + ret_b, binding_joint_rs, binding_joint_ts, joint_rs, joint_ts

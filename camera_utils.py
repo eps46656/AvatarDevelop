@@ -90,15 +90,12 @@ def MakeViewMatWithURF(
 ):
     view_axes = ArrangeAxesStr(view_axes)
 
-    assert 1 <= origin.dim()
-    assert 1 <= u_vec.dim()
-    assert 1 <= r_vec.dim()
-    assert 1 <= f_vec.dim()
-
-    assert origin.shape[-1] == 3
-    assert u_vec.shape[-1] == 3
-    assert r_vec.shape[-1] == 3
-    assert f_vec.shape[-1] == 3
+    utils.CheckShapes(
+        origin, (..., 3),
+        u_vec, (..., 3),
+        r_vec, (..., 3),
+        f_vec, (..., 3),
+    )
 
     def GetVec(axis):
         match axis:
@@ -215,8 +212,8 @@ def MakeViewMat(
     assert aim.shape[-1] == 3
     assert quasi_u_dir.shape[-1] == 3
 
-    f_vec = utils.Normalized(aim - origin)
-    r_vec = utils.Normalized(torch.cross(f_vec, quasi_u_dir, dim=-1))
+    f_vec = utils.Normalized(aim - origin, -1)
+    r_vec = utils.Normalized(torch.cross(f_vec, quasi_u_dir, dim=-1), -1)
     u_vec = torch.cross(r_vec, f_vec, dim=0)
 
     return MakeViewMatWithURF(

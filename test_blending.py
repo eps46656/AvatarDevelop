@@ -111,8 +111,24 @@ def main1():
 def main3():
     model_path = DIR / "smplx/models/smplx/SMPLX_NEUTRAL.pkl"
 
+    body_shapes_cnt = 10
+    expr_shapes_cnt = 10
+    body_joints_cnt = 22
+    jaw_joints_cnt = 1
+    eye_joints_cnt = 1
+    hand_joints_cnt = 15
+
     with utils.Timer():
-        my_smplx_builder = smplx_utils.SMPLXBuilder(model_path, DEVICE)
+        my_smplx_builder = smplx_utils.SMPLXBuilder(
+            model_data_path=model_path,
+            body_shapes_cnt=body_shapes_cnt,
+            expr_shapes_cnt=expr_shapes_cnt,
+            body_joints_cnt=body_joints_cnt,
+            jaw_joints_cnt=jaw_joints_cnt,
+            eye_joints_cnt=eye_joints_cnt,
+            hand_joints_cnt=hand_joints_cnt,
+            device=DEVICE,
+        )
 
     with utils.Timer():
         smplx_builder = smplx.smplx.SMPLX(
@@ -123,77 +139,73 @@ def main3():
             dtype=utils.FLOAT
         )
 
-    J = my_smplx_builder.GetJointsCnt()
-    B = my_smplx_builder.GetShapesCnt()
-
-    print(f"{J=}")
-    print(f"{B=}")
-
     with utils.Timer():
         if True:
-            body_shapes = torch.rand((1, smplx_utils.BODY_SHAPES_CNT),
+            body_shapes = torch.rand((body_shapes_cnt,),
                                      dtype=utils.FLOAT, device=DEVICE) * 10
-            expr_shapes = torch.rand((1, smplx_utils.EXPR_SHAPES_CNT),
+            expr_shapes = torch.rand((expr_shapes_cnt,),
                                      dtype=utils.FLOAT, device=DEVICE) * 10
         else:
-            body_shapes = torch.zeros((1, smplx_utils.BODY_SHAPES_CNT),
+            body_shapes = torch.zeros((body_shapes_cnt,),
                                       dtype=utils.FLOAT, device=DEVICE)
-            expr_shapes = torch.zeros((1, smplx_utils.EXPR_SHAPES_CNT),
+            expr_shapes = torch.zeros((expr_shapes_cnt,),
                                       dtype=utils.FLOAT, device=DEVICE)
 
     with utils.Timer():
-        root_ts = torch.rand(
+        global_transl = torch.rand(
             (1, 3), dtype=utils.FLOAT, device=DEVICE) * 10 - 5
 
-        root_rs = utils.RandRotVec(
+        global_rot = utils.RandRotVec(
             (1, 3), dtype=utils.FLOAT, device=DEVICE)
 
-        print(f"{root_rs=}")
+        print(f"{global_rot=}")
 
         if True:
-            body_poses = utils.RandRotVec((1, smplx_utils.BODY_POSES_CNT, 3),
+            body_poses = utils.RandRotVec((1, body_joints_cnt - 1, 3),
                                           dtype=utils.FLOAT, device=DEVICE)
 
-            jaw_poses = utils.RandRotVec((1, smplx_utils.JAW_POSES_CNT, 3),
+            jaw_poses = utils.RandRotVec((1, jaw_joints_cnt, 3),
                                          dtype=utils.FLOAT, device=DEVICE)
 
-            leye_poses = utils.RandRotVec((1, smplx_utils.LEYE_POSES_CNT, 3),
+            leye_poses = utils.RandRotVec((1, eye_joints_cnt, 3),
                                           dtype=utils.FLOAT, device=DEVICE)
 
-            reye_poses = utils.RandRotVec((1, smplx_utils.REYE_POSES_CNT, 3),
+            reye_poses = utils.RandRotVec((1, eye_joints_cnt, 3),
                                           dtype=utils.FLOAT, device=DEVICE)
 
-            lhand_poses = utils.RandRotVec((1, smplx_utils.LHAND_POSES_CNT, 3),
+            lhand_poses = utils.RandRotVec((1, hand_joints_cnt, 3),
                                            dtype=utils.FLOAT, device=DEVICE)
 
-            rhand_poses = utils.RandRotVec((1, smplx_utils.RHAND_POSES_CNT, 3),
+            rhand_poses = utils.RandRotVec((1, hand_joints_cnt, 3),
                                            dtype=utils.FLOAT, device=DEVICE)
         else:
-            body_poses = torch.zeros((1, smplx_utils.BODY_POSES_CNT, 3),
+            body_poses = torch.zeros((1, body_joints_cnt - 1, 3),
                                      dtype=utils.FLOAT, device=DEVICE)
 
-            jaw_poses = torch.zeros((1, smplx_utils.JAW_POSES_CNT, 3),
+            jaw_poses = torch.zeros((1, jaw_joints_cnt, 3),
                                     dtype=utils.FLOAT, device=DEVICE)
 
-            leye_poses = torch.zeros((1, smplx_utils.LEYE_POSES_CNT, 3),
+            leye_poses = torch.zeros((1, LEYE_POSES_CNT, 3),
                                      dtype=utils.FLOAT, device=DEVICE)
 
-            reye_poses = torch.zeros((1, smplx_utils.REYE_POSES_CNT, 3),
+            reye_poses = torch.zeros((1, eye_joints_cnt, 3),
                                      dtype=utils.FLOAT, device=DEVICE)
 
-            lhand_poses = torch.zeros((1, smplx_utils.LHAND_POSES_CNT, 3),
+            lhand_poses = torch.zeros((1, hand_joints_cnt, 3),
                                       dtype=utils.FLOAT, device=DEVICE)
 
-            rhand_poses = torch.zeros((1, smplx_utils.RHAND_POSES_CNT, 3),
+            rhand_poses = torch.zeros((1, hand_joints_cnt, 3),
                                       dtype=utils.FLOAT, device=DEVICE)
+
+    print(f"{body_poses.shape=}")
 
     with utils.Timer():
         smplx_model = smplx_builder.forward(
-            betas=body_shapes,
-            expression=expr_shapes,
+            betas=body_shapes.unsqueeze(0),
+            expression=expr_shapes.unsqueeze(0),
 
-            global_orient=root_rs,
-            transl=root_ts,
+            global_orient=global_rot,
+            transl=global_transl,
 
             body_pose=body_poses,
             jaw_pose=jaw_poses,
@@ -209,18 +221,20 @@ def main3():
 
     with utils.Timer():
         my_smplx_model = my_smplx_builder.forward(
-            body_shapes=body_shapes,
-            expr_shapes=expr_shapes,
+            smplx_utils.SMPLXBlendingParam(
+                body_shapes=body_shapes,
+                expr_shapes=expr_shapes,
 
-            root_ts=root_ts,
-            root_rs=root_rs,
+                global_transl=global_transl,
+                global_rot=global_rot,
 
-            body_poses=body_poses,
-            jaw_poses=jaw_poses,
-            leye_poses=leye_poses,
-            reye_poses=reye_poses,
-            lhand_poses=lhand_poses,
-            rhand_poses=rhand_poses,
+                body_poses=body_poses,
+                jaw_poses=jaw_poses,
+                leye_poses=leye_poses,
+                reye_poses=reye_poses,
+                lhand_poses=lhand_poses,
+                rhand_poses=rhand_poses,
+            )
         )
 
     print(f"{my_smplx_model.joints.shape=}")
@@ -230,13 +244,6 @@ def main3():
 
     # print(f"{my_smplx_model.joints=}")
     # print(f"{smplx_model.joints=}")
-
-    v_temp_err = utils.GetL2RMS(
-        my_smplx_builder.GetVertices().reshape((-1, 3)) -
-        smplx_builder.v_template.reshape((-1, 3))
-    )
-
-    print(f"{v_temp_err=}")
 
     joint_err = utils.GetL2RMS(
         my_smplx_model.joints.reshape((-1, 3)) -
