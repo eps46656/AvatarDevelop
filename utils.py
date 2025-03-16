@@ -2,18 +2,17 @@ import itertools
 import math
 import os
 import pathlib
+import random
 import sys
 import time
 import types
 import typing
 
-from beartype import beartype
-
 import cv2 as cv
 import numpy as np
 import torch
 import torchvision
-from typeguard import typechecked
+from beartype import beartype
 
 import config
 
@@ -37,34 +36,32 @@ class Empty:
             setattr(key, value)
 
 
-@typechecked
-def CheckStatusChanged(func: typing.Callable[[], object],
-                       probe: typing.Callable[[], object]):
-    old_status = probe()
-    func()
-    return old_status != probe()
-
-
-@typechecked
+@beartype
 def SetAdd(s: set[object], obj: object):
-    return CheckStatusChanged(lambda: s.add(obj), lambda: len(s))
+    old_size = len(s)
+    s.add(obj)
+    return old_size != len(s)
 
 
-@typechecked
+@beartype
 def SetDiscard(s: set[object], obj: object):
-    return CheckStatusChanged(lambda: s.discard(obj), lambda: len(s))
+    old_size = len(s)
+    s.discard(obj)
+    return old_size != len(s)
 
 
-@typechecked
+@beartype
 def DictInsert(d: dict[object, object], key: object, value: object):
     old_size = len(d)
     value = d.setdefault(key, value)
     return key, value, old_size != len(d)
 
 
-@typechecked
+@beartype
 def DictPop(d: dict[object, object], key: object):
-    return CheckStatusChanged(lambda: d.pop(key), lambda: len(d))
+    old_size = len(d)
+    d.pop(key, None)
+    return old_size != len(d)
 
 
 def Clamp(x, lb, ub):
@@ -72,7 +69,35 @@ def Clamp(x, lb, ub):
     return max(lb, min(x, ub))
 
 
-@typechecked
+class UnorderedTuple:
+    def __init__(self, *args):
+        self.data = tuple(args)
+
+        self.hash_code = hash(sorted(self.data))
+
+    def __hash__(self):
+        return self.hash_code
+
+    def __eq__(self, o):
+        return o is not None and self.hash_code == o.hash_code and sorted(self.data) == sorted(o.data)
+
+    def __ne__(self, o):
+        return not (self == o)
+
+
+@beartype
+def AllocateID(lb: int, rb: int, s=None):
+    if s is None:
+        return random.randint(lb, rb)
+
+    while True:
+        ret = random.randint(lb, rb)
+
+        if ret not in s:
+            return ret
+
+
+@beartype
 def MakeIdxTable(l: typing.Iterable):
     ret: dict[object, int] = dict()
 
@@ -83,28 +108,20 @@ def MakeIdxTable(l: typing.Iterable):
     return ret
 
 
-@typechecked
-def DimPermute(data: np.ndarray | torch.Tensor, src: str, dst: str):
+@beartype
+def DimPermute(data:  torch.Tensor, src: str, dst: str):
     assert data.dim() == len(src)
     assert data.dim() == len(dst)
 
     src_idx_table = MakeIdxTable(src)
-    dst_idx_table = MakeIdxTable(dst)
+    MakeIdxTable(dst)
     # check unique
 
-    if isinstance(data, np.ndarray):
-        return np.transpose(
-            data,
-            [src_idx_table[x] for x in dst])
-
-    if isinstance(data, torch.Tensor):
-        return torch.permute(
-            data,
-            [src_idx_table[x] for x in dst])
+    return torch.permute(data, [src_idx_table[x] for x in dst])
 
 
-@typechecked
-def ReadImage(path: object, order: str):
+@beartype
+def ReadImage(path: os.PathLike, order: str):
     '''
     img = cv.cvtColor(cv.imdecode(np.fromfile(
         path, dtype=np.uint8), -1), cv.COLOR_BGR2RGB)
@@ -117,8 +134,12 @@ def ReadImage(path: object, order: str):
     return DimPermute(img, "chw", order)
 
 
-@typechecked
-def WriteImage(path: object, img: torch.Tensor, order: str):
+@beartype
+def WriteImage(
+    path: os.PathLike,
+    img: torch.Tensor,
+    order: str,
+):
     assert img.dim() == 3
 
     img_ = img.to(dtype=torch.uint8, device=torch.device("cpu"))
@@ -140,18 +161,18 @@ def WriteImage(path: object, img: torch.Tensor, order: str):
     assert False, f"unknown extension: {path.suffix}"
 
 
-@typechecked
+@beartype
 class Timer:
     def __init__(self):
         self.beg: typing.Optional[float] = None
         self.end: typing.Optional[float] = None
 
-        self.filename = None
-        self.line_num = None
-        self.function = None
+        self.filename: typing.Optional[str] = None
+        self.line_num: typing.Optional[int] = None
+        self.function: typing.Optional[str] = None
 
     def duration(self):
-        return None if self.beg is None or self.end is None else \
+        return -1.0 if self.beg is None or self.end is None else \
             self.end - self.beg
 
     def Start(self):
@@ -173,16 +194,16 @@ class Timer:
 
         return self
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, type: object, value: object, traceback: object):
         self.Stop()
 
         print(
             f"{self.filename}:{self.line_num}\t\t{self.function}\t\tduration: {self.duration() * 1000:>18.6f} ms")
 
 
-@typechecked
-def Union(*iters: typing.Iterable):
-    s = set()
+@beartype
+def Union(*iters: typing.Iterable[object]):
+    s: set[object] = set()
 
     for iter in iters:
         for o in iter:
@@ -191,10 +212,10 @@ def Union(*iters: typing.Iterable):
 
 
 @beartype
-def CheckShapes(*args):
+def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
     assert len(args) % 2 == 0
 
-    undet_shapes = dict()
+    undet_shapes: dict[int, int] = dict()
 
     for i in range(0, len(args), 2):
         t = args[i]
@@ -231,7 +252,7 @@ def CheckShapes(*args):
 
         for t_idx, p_idx in zip(t_idx_iter, p_idx_iter):
             t_val = t.shape[t_idx]
-            p_val = p[p_idx]
+            p_val: int = p[p_idx]
 
             if 0 <= p_val:
                 assert t_val == p_val, \
@@ -276,7 +297,11 @@ def GetInvAxis(axis: str):
     assert False
 
 
-def ArrangeXYZ(a, b, c, src_axes: str, dst_axes: str):
+def ArrangeXYZ(a: object,
+               b: object,
+               c: object,
+               src_axes: str,
+               dst_axes: str):
     AssertXYZAxes(src_axes)
     AssertXYZAxes(dst_axes)
 
@@ -295,7 +320,7 @@ def ArrangeXYZ(a, b, c, src_axes: str, dst_axes: str):
         if dst_axes[4:6] in values else -values[GetInvAxis(dst_axes[4:6])]
 
 
-@typechecked
+@beartype
 def Sph2Cart(radius: float, theta: float, phi: float, axes: str):
     AssertXYZAxes(axes)
 
@@ -308,13 +333,13 @@ def Sph2Cart(radius: float, theta: float, phi: float, axes: str):
     return ArrangeXYZ(x, y, z, "+x+y+z", axes)
 
 
-@typechecked
+@beartype
 def Sph2XYZ(radius: float, theta: float, phi: float, x_axis, y_axis, z_axis):
     x, y, z = Sph2Cart(radius, theta, phi, "+x+y+z")
     return x * x_axis + y * y_axis + z * z_axis
 
 
-@typechecked
+@beartype
 def Cart2Sph(x: float, y: float, z: float):
     xy_radius_sq = x**2 + y**2
     xy_radius = math.sqrt(xy_radius_sq)
@@ -326,17 +351,7 @@ def Cart2Sph(x: float, y: float, z: float):
     return radius, theta, phi
 
 
-@typechecked
-def Normalized(
-    x: torch.Tensor,  # [..., D]
-    dim: int,
-    length: float | int | torch.Tensor = None,
-):
-    norm = (EPS + torch.linalg.vector_norm(x, dim=dim, keepdim=True))
-    return x / norm if length is None else x * (length / norm)
-
-
-@typechecked
+@beartype
 def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
     shape_mat = [[int(d) for d in shape] for shape in shapes]
 
@@ -356,52 +371,118 @@ def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
     return ret
 
 
-@typechecked
-def RandUnit(size, dtype: torch.dtype, device: torch.device):
+@beartype
+def RandUnit(size, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
     v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
-    return v / (EPS + torch.linalg.vector_norm(v, dim=-1, keepdim=True))
+    return v / (EPS + VectorNorm(v, keepdim=True))
 
 
-@typechecked
-def RandRotVec(size, dtype: torch.dtype, device: torch.device):
+@beartype
+def RandRotVec(
+    size,
+    dtype: torch.dtype,
+    device: torch.device,
+):
     return RandUnit(size, dtype, device) * \
         torch.rand(size, dtype=dtype, device=device) * math.pi
 
 
-@typechecked
-def GetAngle(
-    x: torch.Tensor,  # [..., D]
-    y: torch.Tensor,  # [..., D]
-) -> torch.Tensor:  # [...]
-    D = x.shape[-1]
-
-    assert x.shape[-1] == D
-    assert y.shape[-1] == D
-
-    x_norm = torch.linalg.vector_norm(x, dim=-1)
-    y_norm = torch.linalg.vector_norm(y, dim=-1)
-
-    return torch.acos(torch.einsum("...d,...d->...", x, y) /
-                      (EPS + x_norm * y_norm))
-
-
-@typechecked
-def FindTransMat(
-    D: int,  # dimention
-    src_points: typing.Iterable,
-    dst_points: typing.Iterable,
+@beartype
+def Dot(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    dim: int = -1,
+    keepdim: bool = False,
 ):
-    pass
+    return torch.sum(x * y, dim=dim, keepdim=keepdim)
 
 
-@typechecked
+@beartype
+def VectorNorm(
+    x: torch.Tensor,
+    *,
+    dim: int = -1,
+    keepdim: bool = False,
+) -> torch.Tensor:
+    return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim)
+
+
+@beartype
+def Normalized(
+    x: torch.Tensor,
+    dim: int = -1,
+    length: typing.Optional[int | float | torch.Tensor] = None,
+):
+    norm = (EPS + VectorNorm(x, dim=dim, keepdim=True))
+    return x / norm if length is None else x * (length / norm)
+
+
+@beartype
+def GetDiff(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    dim: int = -1,
+    keepdim: bool = False,
+):
+    return VectorNorm(x - y, dim=dim, keepdim=keepdim)
+
+
+@beartype
+def GetCosAngle(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    dim: int = -1,
+    keepdim: bool = False,
+):
+    x_norm = VectorNorm(x, dim=dim, keepdim=keepdim)
+    y_norm = VectorNorm(y, dim=dim, keepdim=keepdim)
+
+    return Dot(x, y, dim=dim, keepdim=keepdim) / (EPS + x_norm * y_norm)
+
+
+@beartype
+def GetAngle(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    dim: int = -1,
+    keepdim: bool = False,
+):
+    return torch.acos(GetCosAngle(x, y, dim=dim, keepdim=keepdim))
+
+
+@beartype
+def BoolMatMul(
+    x: torch.Tensor,  # [..., P, Q]
+    y: torch.Tensor,  # [..., Q, R]
+) -> torch.Tensor:  # [..., P, R]
+    P, Q, R = -1, -2, -3
+
+    P, Q, R = CheckShapes(
+        x, (..., P, Q),
+        y, (..., Q, R),
+    )
+
+    x = x.unsqueeze(-2)
+    # [..., P, 1, Q]
+
+    y = y.transpose(-2, -1).unsqueeze(-3)
+    # [..., 1, R, Q]
+
+    return (x & y).max(dim=-1)[0]
+
+
+@beartype
 def GetRotMat(
     axis: torch.Tensor,  # [..., 3]
     angle: typing.Optional[torch.Tensor] = None,  # [...]
-):
+) -> torch.Tensor:  # [..., 3, 3]
     CheckShapes(axis, (..., 3))
 
-    norm = torch.linalg.vector_norm(axis, dim=-1)
+    norm = VectorNorm(axis)
 
     if angle is None:
         angle = norm
@@ -447,10 +528,13 @@ def GetRotMat(
     return ret
 
 
-@typechecked
+@beartype
 def GetAxisAngle(
     rot_mat: torch.Tensor  # [..., 3, 3]
-):
+) -> tuple[
+    torch.Tensor,  # axis[..., 3]
+    torch.Tensor,  # angle[..., 3]
+]:
     CheckShapes(rot_mat, (..., 3, 3))
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
@@ -471,12 +555,12 @@ def GetAxisAngle(
     return axis, angle
 
 
-@typechecked
+@beartype
 def DoRT(
     rs: torch.Tensor,  # [..., P, Q]
     ts: torch.Tensor,  # [..., P]
     vs: torch.Tensor,  # [..., Q]
-):
+) -> torch.Tensor:  # us[..., P]
     P, Q = -1, -2
 
     P, Q = CheckShapes(
@@ -488,7 +572,7 @@ def DoRT(
     return (rs @ vs.unsqueeze(-1)).squeeze(-1) + ts
 
 
-@typechecked
+@beartype
 def MergeRT(
     a_rs: torch.Tensor,  # [..., P, Q]
     a_ts: torch.Tensor,  # [..., P]
@@ -516,7 +600,7 @@ def MergeRT(
     return ret_rs, ret_ts
 
 
-@typechecked
+@beartype
 def GetInvRT(
     rs: torch.Tensor,  # [..., D, D]
     ts: torch.Tensor,  # [..., D]
@@ -538,7 +622,7 @@ def GetInvRT(
     return inv_rs, inv_ts
 
 
-@typechecked
+@beartype
 def GetL2RMS(
     x: torch.Tensor,  # [..., D]
 ):

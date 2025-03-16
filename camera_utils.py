@@ -1,13 +1,13 @@
 import math
 
 import numpy as np
-from typeguard import typechecked
 import torch
+from beartype import beartype
 
 import utils
 
 
-@typechecked
+@beartype
 def ArrangeAxesStr(axes: str):
     assert len(axes) == 3
 
@@ -27,7 +27,7 @@ xyz_to_urf_table = {
 }
 
 
-@typechecked
+@beartype
 def MakeXYZToURFMat(axes: str):
     axes = ArrangeAxesStr(axes)
 
@@ -40,7 +40,7 @@ def MakeXYZToURFMat(axes: str):
     return ret
 
 
-@typechecked
+@beartype
 def MakeProjMatWithURF(
     *,
     img_shape: tuple[int, int],
@@ -77,7 +77,7 @@ def MakeProjMatWithURF(
     ], dtype=torch.float))
 
 
-@typechecked
+@beartype
 def MakeViewMatWithURF(
     *,
     origin: torch.Tensor,  # [..., 3]
@@ -139,7 +139,7 @@ def MakeViewMatWithURF(
     return torch.inverse(ret)
 
 
-@typechecked
+@beartype
 def MakeProjMat(
     *,
     img_shape: tuple[int, int],
@@ -195,7 +195,7 @@ def MakeProjMat(
     )
 
 
-@typechecked
+@beartype
 def MakeViewMat(
     origin: torch.Tensor,  # [..., 3]
     aim: torch.Tensor,  # [..., 3]
@@ -227,7 +227,7 @@ def MakeViewMat(
     )
 
 
-@typechecked
+@beartype
 def MakePersProjMat(
     *,
     view_axes: str,
@@ -277,7 +277,7 @@ def MakePersProjMat(
     return torch.inverse(ndc_to_urf) @ urf_proj_mat @ view_to_urf
 
 
-@typechecked
+@beartype
 def GetFocalLengthByDiagFoV(img_size: tuple[int, int], diag_fov: float):
     assert 0 < diag_fov
     assert diag_fov < 180 * utils.DEG
@@ -285,7 +285,7 @@ def GetFocalLengthByDiagFoV(img_size: tuple[int, int], diag_fov: float):
     return math.sqrt(img_size[0]**2 + img_size[1]**2) / (2 * math.tan(diag_fov / 2))
 
 
-@typechecked
+@beartype
 def MakeImageMat(
     image_shape: tuple[int, int],
 ):

@@ -1,12 +1,14 @@
+import dataclasses
+import typing
+
 import torch
-from typeguard import typechecked
+from beartype import beartype
+
 import utils
-
 from kin_tree import KinTree
-from utils import GetInvRT, MergeRT, DoRT
 
 
-@typechecked
+@beartype
 def GetJointRTs(
     kin_tree: KinTree,
     pose_rs: torch.Tensor,  # [..., J, D, D]
@@ -33,7 +35,7 @@ def GetJointRTs(
     for u in kin_tree.joints_tp[1:]:
         p = kin_tree.parents[u]
 
-        joint_rs[..., u, :, :], joint_ts[..., u, :] = MergeRT(
+        joint_rs[..., u, :, :], joint_ts[..., u, :] = utils.MergeRT(
             joint_rs[..., p, :, :],
             joint_ts[..., p, :],
             pose_rs[..., u, :, :],
@@ -43,85 +45,127 @@ def GetJointRTs(
     return joint_rs, joint_ts
 
 
-@typechecked
+@dataclasses.dataclass
+class LBSResult:
+    blended_vertex_positions: typing.Optional[torch.Tensor]  # [..., V, D]
+    blended_vertex_directions: typing.Optional[torch.Tensor]  # [..., V, D]
+
+    binding_joint_rs: torch.Tensor  # [..., J, D, D]
+    binding_joint_ts: torch.Tensor  # [..., J, D]
+
+    inv_binding_joint_rs: torch.Tensor  # [..., J, D, D]
+    inv_binding_joint_ts: torch.Tensor  # [..., J, D]
+
+    target_joint_rs: torch.Tensor  # [..., J, D, D]
+    target_joint_ts: torch.Tensor  # [..., J, D]
+
+    del_joint_rs: torch.Tensor  # [..., J, D, D]
+    del_joint_ts: torch.Tensor  # [..., J, D]
+
+
+@beartype
 def LBS(
     *,
     kin_tree: KinTree,
 
-    vertices: torch.Tensor,  # [..., V, D]
     lbs_weights: torch.Tensor,  # [..., V, J]
+
+    vertex_positions: typing.Optional[torch.Tensor] = None,  # [..., V, D]
+    vertex_directions: typing.Optional[torch.Tensor] = None,  # [..., V, D]
 
     binding_pose_rs: torch.Tensor,  # [..., J, D, D]
     binding_pose_ts: torch.Tensor,  # [..., J, D]
 
-    pose_rs: torch.Tensor,  # [..., J, D, D]
-    pose_ts: torch.Tensor,  # [..., J, D]
-) -> tuple[
-    torch.Tensor,  # vertices[..., V, D]
-
-    torch.Tensor,  # binding_joint_rs[..., J, D, D]
-    torch.Tensor,  # binding_joint_ts[..., J, D]
-
-    torch.Tensor,  # joint_rs[..., J, D, D]
-    torch.Tensor,  # joint_ts[..., J, D]
-]:
+    target_pose_rs: torch.Tensor,  # [..., J, D, D]
+    target_pose_ts: torch.Tensor,  # [..., J, D]
+) -> LBSResult:
     J = kin_tree.joints_cnt
 
     V, D = -1, -2
 
     V, D = utils.CheckShapes(
-        vertices, (..., V, D),
         lbs_weights, (..., V, J),
         binding_pose_rs, (..., J, D, D),
         binding_pose_ts, (..., J, D),
-        pose_rs, (..., J, D, D),
-        pose_ts, (..., J, D),
+        target_pose_rs, (..., J, D, D),
+        target_pose_ts, (..., J, D),
     )
 
-    assert binding_pose_rs.dtype == binding_pose_ts.dtype
-    assert binding_pose_rs.device == binding_pose_ts.device
+    if vertex_positions is not None:
+        utils.CheckShapes(vertex_positions, (..., V, D))
 
-    assert pose_rs.dtype == pose_ts.dtype
-    assert pose_rs.device == pose_ts.device
+    if vertex_directions is not None:
+        utils.CheckShapes(vertex_directions, (..., V, D))
+
+    device = lbs_weights.device
 
     binding_joint_rs, binding_joint_ts = GetJointRTs(
         kin_tree, binding_pose_rs, binding_pose_ts)
     # binding_joint_rs[..., J, D, D]
     # binding_joint_ts[..., J, D]
 
-    inv_binding_joint_rs, inv_binding_joint_ts = GetInvRT(
+    inv_binding_joint_rs, inv_binding_joint_ts = utils.GetInvRT(
         binding_joint_rs, binding_joint_ts)
     # inv_binding_joint_rs[..., J, D, D]
     # inv_binding_joint_ts[..., J, D]
 
-    joint_rs, joint_ts = GetJointRTs(kin_tree, pose_rs, pose_ts)
-    # joint_rs[..., J, D, D]
-    # joint_ts[..., J, D]
+    target_joint_rs, target_joint_ts = GetJointRTs(
+        kin_tree, target_pose_rs, target_pose_ts)
+    # target_joint_rs[..., J, D, D]
+    # target_joint_ts[..., J, D]
 
-    m_rs, m_ts = MergeRT(
-        joint_rs, joint_ts, inv_binding_joint_rs, inv_binding_joint_ts)
-    # m_rs[..., J, D, D]
-    # m_ts[..., J, D]
+    del_joint_rs, del_joint_ts = utils.MergeRT(
+        target_joint_rs, target_joint_ts,
+        inv_binding_joint_rs, inv_binding_joint_ts)
+    # del_joint_rs[..., J, D, D]
+    # del_joint_ts[..., J, D]
 
-    v_dtype = vertices.dtype
-    v_device = vertices.device
+    del_joint_rs = del_joint_rs.to(device=device)
+    del_joint_ts = del_joint_ts.to(device=device)
 
-    m_rs = m_rs.to(dtype=v_dtype, device=v_device)
-    m_ts = m_ts.to(dtype=v_dtype, device=v_device)
+    lbs_weights = lbs_weights.to(device=device)
 
-    lbs_weights = lbs_weights.to(dtype=v_dtype, device=v_device)
+    if vertex_positions is None:
+        ret_vps = None
+    else:
+        ret_vps_a = torch.einsum(
+            "...vj,...jdk,...vk->...vd",
+            lbs_weights,
+            del_joint_rs,
+            vertex_positions,
+        )  # [..., V, D]
 
-    ret_a = torch.einsum(
-        "...vj,...jdk,...vk->...vd",
-        lbs_weights,
-        m_rs,
-        vertices,
-    )  # [..., V, D]
+        ret_vps_b = torch.einsum(
+            "...vj,...jd->...vd",
+            lbs_weights,
+            del_joint_ts,
+        )  # [..., V, D]
 
-    ret_b = torch.einsum(
-        "...vj,...jd->...vd",
-        lbs_weights,
-        m_ts,
-    )  # [..., V, D]
+        ret_vps = ret_vps_a + ret_vps_b
 
-    return ret_a + ret_b, binding_joint_rs, binding_joint_ts, joint_rs, joint_ts
+    if vertex_directions is None:
+        ret_vds = None
+    else:
+        ret_vds = torch.einsum(
+            "...vj,...jdk,...vk->...vd",
+            lbs_weights,
+            del_joint_rs,
+            vertex_directions,
+        )  # [..., V, D]
+
+    return LBSResult(
+        blended_vertex_positions=ret_vps,
+        blended_vertex_directions=ret_vds,
+
+        binding_joint_rs=binding_joint_rs,
+        binding_joint_ts=binding_joint_ts,
+
+        inv_binding_joint_rs=inv_binding_joint_rs,
+        inv_binding_joint_ts=inv_binding_joint_ts,
+
+        target_joint_rs=target_joint_rs,
+        target_joint_ts=target_joint_ts,
+
+        del_joint_rs=del_joint_rs,
+        del_joint_ts=del_joint_ts,
+    )

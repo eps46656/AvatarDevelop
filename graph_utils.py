@@ -1,20 +1,20 @@
 import collections
-import itertools
 import typing
 
-from typeguard import typechecked
+import torch
+from beartype import beartype
 
 import utils
 
 
-@typechecked
+@beartype
 def CheckGraph(adj_lists: dict[object, set[object]]):
     for adj_list in adj_lists.values():
         for u in adj_list:
             assert u in adj_lists
 
 
-@typechecked
+@beartype
 def FindRoots_(adj_lists: dict[object, set[object]]):
     CheckGraph(adj_lists)
 
@@ -30,13 +30,13 @@ def FindRoots_(adj_lists: dict[object, set[object]]):
     yield from (v for v, indeg in indegs.items() if indeg == 0)
 
 
-@typechecked
+@beartype
 def FindRoots(adj_lists: dict[object, set[object]]):
     CheckGraph(adj_lists)
     return FindRoots_(adj_lists)
 
 
-@typechecked
+@beartype
 def BFS_(adj_lists: dict[object, set[object]],
          sources: typing.Iterable[object]):
     passed = set()
@@ -61,14 +61,14 @@ def BFS_(adj_lists: dict[object, set[object]],
                     q.append(u)
 
 
-@typechecked
+@beartype
 def BFS(adj_lists: dict[object, set[object]],
         sources: typing.Iterable[object]):
     CheckGraph(adj_lists)
     return BFS_(adj_lists, sources)
 
 
-@typechecked
+@beartype
 def TPS_(adj_lists: dict[object, set[object]],
          sources: typing.Iterable[object]):
     indegs = {v: 0 for v in BFS_(adj_lists, sources)}
@@ -99,25 +99,18 @@ def TPS_(adj_lists: dict[object, set[object]],
                 q.append(u)
 
 
-@typechecked
+@beartype
 def TPS(adj_lists: dict[object, set[object]],
         sources: typing.Iterable[object]):
     CheckGraph(adj_lists)
     return TPS_(adj_lists, sources)
 
 
-@typechecked
+@beartype
 class Graph:
-    def __init__(self,
-                 adj_lists: typing.Optional[dict[object, set[object]]] = None):
+    def __init__(self):
         self.__adj_lists: dict[object, set[object]] = dict()
         self.__inv_adj_lists: dict[object, set[object]] = dict()
-
-        self.__idegs: dict[object, int] = dict()
-        self.__odegs: dict[object, int] = dict()
-
-        if adj_lists is not None:
-            self.Import(adj_lists)
 
     def GetVertices(self):
         return self.__adj_lists.keys()
@@ -127,11 +120,11 @@ class Graph:
             for u in adj_list:
                 yield (v, u)
 
-    def GetAdjacents(self, src: object):
+    def GetAdjs(self, src: object):
         assert src in self.__adj_lists
         return iter(self.__adj_lists[src])
 
-    def GetInvAdjacents(self, src: object):
+    def GetInvAdjs(self, src: object):
         assert src in self.__inv_adj_lists
         return iter(self.__inv_adj_lists[src])
 
@@ -140,22 +133,22 @@ class Graph:
 
     def GetDegrees(self, v: object):
         assert v in self.__adj_lists
-        return self.__idegs[v], self.__odegs[v]
+        return len(self.__adj_lists[v]), len(self.__inv_adj_lists[v])
 
-    def ContainVertex(self, vertex: object):
-        return vertex in self.__adj_lists
+    def ContainVertex(self, v: object):
+        return v in self.__adj_lists
 
     def ContainEdge(self, src: object, dst: object, bidirectional: bool):
-        return (dst in self.__adj_lists.get(src, set()) or (bidirectional and src in self.__adj_lists.get(dst)))
+        assert src in self.__adj_lists
+        assert dst in self.__adj_lists
 
-    def AddVertex(self, vertex: object):
-        if not utils.DictInsert(self.__adj_lists, vertex, set())[2]:
+        return dst in self.__adj_lists[src] or (bidirectional and src in self.__adj_lists[dst])
+
+    def AddVertex(self, v: object):
+        if not utils.DictInsert(self.__adj_lists, v, set())[2]:
             return False
 
-        utils.DictInsert(self.__inv_adj_lists, vertex, set())
-
-        self.__idegs[vertex] = 0
-        self.__odegs[vertex] = 0
+        utils.DictInsert(self.__inv_adj_lists, v, set())
 
         return True
 
@@ -172,31 +165,28 @@ class Graph:
         assert src in self.__adj_lists
         assert dst in self.__adj_lists
 
+        ret = 0
+
         if utils.SetAdd(self.__adj_lists[src], dst):
-            self.__idegs[dst] += 1
-            self.__odegs[src] += 1
+            ret += 1
 
         if bidirectional and utils.SetAdd(self.__adj_lists[dst], src):
-            self.__idegs[src] += 1
-            self.__odegs[dst] += 1
+            ret += 1
+
+        return ret
 
     def RemoveVertex(self, src: object):
-        if src not in self.__adj_lists:
-            return False
+        assert src in self.__adj_lists
 
-        us = [v for v in itertools.chain(
-            self.__adj_lists[src], self.__inv_adj_lists[src])]
+        ret = 0
 
-        for u in us:
-            self.RemoveEdge(src, u, bidirectional=True)
-
-        assert len(self.__adj_lists[src]) == 0
-        assert len(self.__inv_adj_lists[src]) == 0
+        for u in set(self.__adj_lists[src] | self.__inv_adj_lists[src]):
+            ret += self.RemoveEdge(src, u, bidirectional=True)
 
         self.__adj_lists.pop(src)
         self.__inv_adj_lists.pop(src)
 
-        return True
+        return ret
 
     def RemoveEdge(self,
                    src: object,
@@ -206,29 +196,30 @@ class Graph:
         assert src in self.__adj_lists
         assert dst in self.__adj_lists
 
+        ret = 0
+
         if utils.SetDiscard(self.__adj_lists[src], dst):
             utils.SetDiscard(self.__inv_adj_lists[dst], src)
-
-            self.__idegs[dst] -= 1
-            self.__odegs[src] -= 1
+            ret += 1
 
         if bidirectional and utils.SetDiscard(self.__adj_lists[dst], src):
             utils.SetDiscard(self.__inv_adj_lists[src], dst)
+            ret += 1
 
-            self.__idegs[src] -= 1
-            self.__odegs[dst] -= 1
+        return ret
 
-    def Import(self, imported_adj_lists: dict[object, set[object]]):
-        for imported_adj_list in imported_adj_lists.values():
-            for u in imported_adj_list:
-                assert u in self.__adj_lists or u in imported_adj_lists
+    def ImportFromAdjList(self, imported_adj_lists: dict[object, set[object]]):
+        for imported_v, imported_adj_list in imported_adj_lists.items():
+            for imported_u in imported_adj_list:
+                self.AddEdge(imported_v, imported_u, auto_add_vertex=True)
 
-        for imported_v in imported_adj_lists.keys():
+    def ImportFromAdjRelList(self, imported_adj_rel_lists: typing.Iterable[typing.Iterable[object]], bidirectional: bool = False):
+        for imported_v, imported_u in imported_adj_rel_lists:
             self.AddVertex(imported_v)
+            self.AddVertex(imported_u)
 
-        for imported_v, imported_adj_list in imported_adj_lists.keys():
-            for u in imported_adj_list:
-                self.AddEdge(imported_v, u)
+            self.AddEdge(imported_v, imported_u,
+                         auto_add_vertex=True, bidirectional=bidirectional)
 
     def BFS(self, srcs: typing.Iterable[object]):
         global BFS
@@ -239,8 +230,68 @@ class Graph:
         return TPS(self.__adj_lists, srcs)
 
     def Inverse(self):
-        self.__adj_list, self.__inv_adj_list = \
-            self.__inv_adj_list, self.__adj_list
+        self.__adj_lists, self.__inv_adj_lists = \
+            self.__inv_adj_lists, self.__adj_lists
 
-        self.__idegs, self.__odegs = \
-            self.__odegs, self.__idegs
+
+class RelationBuffer:
+    BASIC_CAPACITY = 16
+
+    @staticmethod
+    def Allocate_(capacity: int, device: torch.device):
+        return torch.empty((2, max(RelationBuffer.BASIC_CAPACITY, capacity)),
+                           dtype=torch.long, device=device)
+
+    def __init__(self, device: torch.device):
+        self.data = RelationBuffer.Allocate_(
+            RelationBuffer.BASIC_CAPACITY, device)
+
+        self.cur_size: int = 0
+
+        self.rel_to_idx: dict[tuple[int, int], int] = dict()
+
+    def __len__(self):
+        return self.cur_size
+
+    def __contains__(self, rel: tuple[int, int]) -> bool:
+        return rel in self.rel_to_idx
+
+    def reserve(self, capacity: int):
+        if capacity <= self.data.shape[1]:
+            return False
+
+        nxt_capacity = max(self.data.shape[1] * 3 // 2, capacity)
+
+        new_data = RelationBuffer.Allocate_(nxt_capacity, self.data.device)
+        new_data[:, :self.cur_size] = self.data
+        self.data = new_data
+
+        return True
+
+    def add(self, rel: tuple[int, int]) -> bool:
+        if self.rel_to_idx.setdefault(rel, self.cur_size) != self.cur_size:
+            return False
+
+        self.reserve(self.cur_size + 1)
+        self.data[:, self.cur_size] = rel
+        self.cur_size += 1
+
+        return True
+
+    def erase(self, rel: tuple[int, int]) -> bool:
+        idx = self.rel_to_idx.pop(rel, -1)
+
+        if idx == -1:
+            return False
+
+        self.cur_size -= 1
+
+        if idx != self.cur_size:
+            r = tuple(int(v) for v in self.data[:, self.cur_size])
+            self.data[:, idx] = r
+            self.rel_to_idx[r] = idx
+
+        return True
+
+    def view(self):
+        return self.data[:, :self.cur_size]

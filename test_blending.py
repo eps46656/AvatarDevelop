@@ -5,6 +5,7 @@ import typing
 import pathlib
 import torch
 import pickle
+import mesh_utils
 
 import utils
 import blending_utils
@@ -234,11 +235,13 @@ def main3():
                 reye_poses=reye_poses,
                 lhand_poses=lhand_poses,
                 rhand_poses=rhand_poses,
+
+                blending_vertex_normal=False,
             )
         )
 
-    print(f"{my_smplx_model.joints.shape=}")
-    print(f"{my_smplx_model.vertices.shape=}")
+    print(f"{my_smplx_model.joint_ts.shape=}")
+    print(f"{my_smplx_model.vertex_positions.shape=}")
 
     print(f"{smplx_model.vertices.shape=}")
 
@@ -246,18 +249,38 @@ def main3():
     # print(f"{smplx_model.joints=}")
 
     joint_err = utils.GetL2RMS(
-        my_smplx_model.joints.reshape((-1, 3)) -
+        my_smplx_model.joint_ts.reshape((-1, 3)) -
         smplx_model.joints.flatten()[:165].reshape((-1, 3))
     )
 
     print(f"{joint_err=}")
 
     vertices_err = utils.GetL2RMS(
-        my_smplx_model.vertices.reshape((-1, 3)) -
+        my_smplx_model.vertex_positions.reshape((-1, 3)) -
         smplx_model.vertices.reshape((-1, 3))
     )
 
     print(f"{vertices_err=}")
+
+    vertex_normals = my_smplx_model.vertex_normals
+
+    with utils.Timer():
+        re_vertex_normals = mesh_utils.GetAreaWeightedVertexNormals(
+            faces=my_smplx_builder.GetFaces(),
+            vertex_positions=my_smplx_model.vertex_positions
+        )
+
+    """
+    norms = utils.VectorNorm(vertex_normals)
+
+    print(norms)
+    print(utils.VectorNorm(re_vertex_normals))
+
+    normal_err = utils.GetAngle(vertex_normals, re_vertex_normals).mean()
+
+    print(f"{normal_err=}")
+    print(f"{normal_err * utils.RAD / utils.DEG=}")
+    """
 
 
 if __name__ == "__main__":
