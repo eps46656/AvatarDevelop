@@ -1,4 +1,5 @@
 import collections
+import types
 import typing
 
 import torch
@@ -7,15 +8,18 @@ from beartype import beartype
 import utils
 
 
+Vertex = typing.TypeVar("Vertex")
+
+
 @beartype
-def CheckGraph(adj_lists: dict[object, set[object]]):
+def CheckGraph(adj_lists: dict[Vertex, set[Vertex]]):
     for adj_list in adj_lists.values():
         for u in adj_list:
             assert u in adj_lists
 
 
 @beartype
-def FindRoots_(adj_lists: dict[object, set[object]]):
+def FindRoots_(adj_lists: dict[Vertex, set[Vertex]]):
     CheckGraph(adj_lists)
 
     indegs = {v: 0 for v in adj_lists.keys()}
@@ -31,14 +35,14 @@ def FindRoots_(adj_lists: dict[object, set[object]]):
 
 
 @beartype
-def FindRoots(adj_lists: dict[object, set[object]]):
+def FindRoots(adj_lists: dict[Vertex, set[Vertex]]):
     CheckGraph(adj_lists)
     return FindRoots_(adj_lists)
 
 
 @beartype
-def BFS_(adj_lists: dict[object, set[object]],
-         sources: typing.Iterable[object]):
+def BFS_(adj_lists: dict[Vertex, set[Vertex]],
+         sources: typing.Iterable[Vertex]):
     passed = set()
 
     q = collections.deque()
@@ -62,15 +66,15 @@ def BFS_(adj_lists: dict[object, set[object]],
 
 
 @beartype
-def BFS(adj_lists: dict[object, set[object]],
-        sources: typing.Iterable[object]):
+def BFS(adj_lists: dict[Vertex, set[Vertex]],
+        sources: typing.Iterable[Vertex]):
     CheckGraph(adj_lists)
     return BFS_(adj_lists, sources)
 
 
 @beartype
-def TPS_(adj_lists: dict[object, set[object]],
-         sources: typing.Iterable[object]):
+def TPS_(adj_lists: dict[Vertex, set[Vertex]],
+         sources: typing.Iterable[Vertex]):
     indegs = {v: 0 for v in BFS_(adj_lists, sources)}
 
     for v in indegs.keys():
@@ -100,17 +104,17 @@ def TPS_(adj_lists: dict[object, set[object]],
 
 
 @beartype
-def TPS(adj_lists: dict[object, set[object]],
-        sources: typing.Iterable[object]):
+def TPS(adj_lists: dict[Vertex, set[Vertex]],
+        sources: typing.Iterable[Vertex]):
     CheckGraph(adj_lists)
     return TPS_(adj_lists, sources)
 
 
 @beartype
-class Graph:
+class Graph(typing.Generic[Vertex]):
     def __init__(self):
-        self.__adj_lists: dict[object, set[object]] = dict()
-        self.__inv_adj_lists: dict[object, set[object]] = dict()
+        self.__adj_lists: dict[Vertex, set[Vertex]] = dict()
+        self.__inv_adj_lists: dict[Vertex, set[Vertex]] = dict()
 
     def GetVertices(self):
         return self.__adj_lists.keys()
@@ -120,31 +124,31 @@ class Graph:
             for u in adj_list:
                 yield (v, u)
 
-    def GetAdjs(self, src: object):
+    def GetAdjs(self, src: Vertex):
         assert src in self.__adj_lists
         return iter(self.__adj_lists[src])
 
-    def GetInvAdjs(self, src: object):
+    def GetInvAdjs(self, src: Vertex):
         assert src in self.__inv_adj_lists
         return iter(self.__inv_adj_lists[src])
 
     def GetEdgesCount(self):
         return sum(len(adj_list) for adj_list in self.__adj_lists.values())
 
-    def GetDegrees(self, v: object):
+    def GetDegrees(self, v: Vertex):
         assert v in self.__adj_lists
         return len(self.__adj_lists[v]), len(self.__inv_adj_lists[v])
 
-    def ContainVertex(self, v: object):
+    def ContainVertex(self, v: Vertex):
         return v in self.__adj_lists
 
-    def ContainEdge(self, src: object, dst: object, bidirectional: bool):
+    def ContainEdge(self, src: Vertex, dst: Vertex, bidirectional: bool):
         assert src in self.__adj_lists
         assert dst in self.__adj_lists
 
         return dst in self.__adj_lists[src] or (bidirectional and src in self.__adj_lists[dst])
 
-    def AddVertex(self, v: object):
+    def AddVertex(self, v: Vertex):
         if not utils.DictInsert(self.__adj_lists, v, set())[2]:
             return False
 
@@ -153,8 +157,8 @@ class Graph:
         return True
 
     def AddEdge(self,
-                src: object,
-                dst: object,
+                src: Vertex,
+                dst: Vertex,
                 *,
                 auto_add_vertex: bool = False,
                 bidirectional: bool = False):
@@ -175,7 +179,7 @@ class Graph:
 
         return ret
 
-    def RemoveVertex(self, src: object):
+    def RemoveVertex(self, src: Vertex):
         assert src in self.__adj_lists
 
         ret = 0
@@ -189,8 +193,8 @@ class Graph:
         return ret
 
     def RemoveEdge(self,
-                   src: object,
-                   dst: object,
+                   src: Vertex,
+                   dst: Vertex,
                    *,
                    bidirectional: bool = False):
         assert src in self.__adj_lists
@@ -208,12 +212,12 @@ class Graph:
 
         return ret
 
-    def ImportFromAdjList(self, imported_adj_lists: dict[object, set[object]]):
+    def ImportFromAdjList(self, imported_adj_lists: dict[Vertex, set[Vertex]]):
         for imported_v, imported_adj_list in imported_adj_lists.items():
             for imported_u in imported_adj_list:
                 self.AddEdge(imported_v, imported_u, auto_add_vertex=True)
 
-    def ImportFromAdjRelList(self, imported_adj_rel_lists: typing.Iterable[typing.Iterable[object]], bidirectional: bool = False):
+    def ImportFromAdjRelList(self, imported_adj_rel_lists: typing.Iterable[typing.Iterable[Vertex]], bidirectional: bool = False):
         for imported_v, imported_u in imported_adj_rel_lists:
             self.AddVertex(imported_v)
             self.AddVertex(imported_u)
@@ -221,11 +225,11 @@ class Graph:
             self.AddEdge(imported_v, imported_u,
                          auto_add_vertex=True, bidirectional=bidirectional)
 
-    def BFS(self, srcs: typing.Iterable[object]):
+    def BFS(self, srcs: typing.Iterable[Vertex]):
         global BFS
         return BFS(self.__adj_lists, srcs)
 
-    def TPS(self, srcs: typing.Iterable[object]):
+    def TPS(self, srcs: typing.Iterable[Vertex]):
         global TPS
         return TPS(self.__adj_lists, srcs)
 

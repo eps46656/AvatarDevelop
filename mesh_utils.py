@@ -1,11 +1,11 @@
 import collections
 import dataclasses
 import typing
-import random
 
 import torch
 from beartype import beartype
 
+import graph_utils
 import utils
 
 
@@ -240,6 +240,7 @@ class MeshData:
     vertex_degrees: torch.Tensor  # [V]
 
 
+"""
 class MeshManager:
     IDX_MIN = 0
     IDX_MAX = 2**24 - 1
@@ -267,14 +268,10 @@ class MeshManager:
         return (va, vb, vc)
 
     def __init__(self):
-        self.v_to_vs: collections.defaultdict[
-            int,
-            collections.defaultdict[int, int]] = collections.defaultdict(collections.defaultdict(lambda: 0))
+        self.v_e_graph: graph_utils.Graph = graph_utils.Graph()
+        self.e_f_graph: graph_utils.Graph = graph_utils.Graph()
 
-        self.f_to_vs: dict[int, tuple[int, int, int]] = dict()
-
-        self.vs_to_f: dict[tuple[int, int, int],
-                           tuple[int, tuple[int, int, int]]] = dict()
+        self.f_vs: dict[int, tuple[int, int, int]] = dict()
 
     def IsVertex(self, idx) -> bool:
         return idx in self.v_to_vs
@@ -351,3 +348,5 @@ class MeshManager:
 
     def GetMeshData(self) -> MeshData:
         pass
+
+"""

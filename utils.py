@@ -176,11 +176,16 @@ class Timer:
             self.end - self.beg
 
     def Start(self):
+        torch.cuda.synchronize()
+
         self.beg = time.time()
         self.end = None
 
     def Stop(self):
         assert self.beg is not None
+
+        torch.cuda.synchronize()
+
         self.end = time.time()
 
     def __enter__(self):
@@ -352,6 +357,14 @@ def Cart2Sph(x: float, y: float, z: float):
 
 
 @beartype
+def NormalizedIdx(idx, length):
+    assert -length <= idx
+    assert idx < length
+
+    return idx % length
+
+
+@beartype
 def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
     shape_mat = [[int(d) for d in shape] for shape in shapes]
 
@@ -368,6 +381,17 @@ def GetCommonShape(shapes: typing.Iterable[typing.Iterable[int]]):
         for i in range(-1, -1 - len(shape), -1))
         for shape in shape_mat)
 
+    return ret
+
+
+@beartype
+def BatchEye(batch_shape,
+             n: int,
+             *,
+             dtype: torch.dtype = None,
+             device: torch.device = None):
+    ret = torch.empty(list(batch_shape) + [n, n], dtype=dtype, device=device)
+    ret[..., :, :] = torch.eye(n, dtype=dtype)
     return ret
 
 
@@ -556,6 +580,44 @@ def GetAxisAngle(
 
 
 @beartype
+def MakeHomo(
+    x: torch.Tensor,  # [...]
+    *,
+    dim: int = -1
+) -> torch.Tensor:  # [...]
+    dim = NormalizedIdx(dim, x.dim())
+
+    shape = list(x.shape)
+    shape[dim] += 1
+
+    ret = torch.empty(shape, dtype=x.dtype, device=x.device)
+
+    idxes = [slice(None)] * x.dim()
+
+    idxes[dim] = slice(None, -1)
+    ret[tuple(idxes)] = x
+
+    idxes[dim] = -1
+    ret[tuple(idxes)] = 1
+
+    return ret
+
+
+@beartype
+def HomoNormalize(
+    x: torch.Tensor,  # [...]
+    *,
+    dim: int = -1
+):
+    dim = NormalizedIdx(dim, x.dim())
+
+    idxes = [slice(None)] * x.dim()
+    idxes[dim] = slice(-1, None)
+
+    return x / x[tuple(idxes)]
+
+
+@beartype
 def DoRT(
     rs: torch.Tensor,  # [..., P, Q]
     ts: torch.Tensor,  # [..., P]
@@ -623,9 +685,101 @@ def GetInvRT(
 
 
 @beartype
+def DoHomo(
+    hs: torch.Tensor,  # [..., P, Q]
+    vs: torch.Tensor,  # [..., Q]
+) -> torch.Tensor:  # [..., P]
+    P, Q = CheckShapes(
+        hs, (..., -1, -2),
+        vs, (..., -2),
+    )
+
+    return HomoNormalize((hs @ vs.unsqueeze(-1)).squeeze(-1))
+
+
+@beartype
 def GetL2RMS(
-    x: torch.Tensor,  # [..., D]
+    x: torch.Tensor,  # [...]
+    dim: int = -1,
 ):
-    assert 1 <= x.dim()
-    n = x.numel() // x.shape[-1]
+    n = x.numel() // x.shape[dim]
     return (x.square().sum() / n).sqrt()
+
+
+def GetNormalizeH(
+    points: torch.Tensor,  # [N, D]
+    dist: float,
+) -> torch.Tensor:  # [D, D]
+    N, D = CheckShapes(points, (-1, -2))
+
+    mean = points.mean(dim=0, keepdim=True)
+    # [1, D]
+
+    odist = VectorNorm(points - mean).mean()
+
+    k = dist / odist
+
+    h = torch.eye(D, dtype=points.dtype, device=points.device) * k
+    h[:, -1] = -k * mean.squeeze(-1)
+    h[-1, -1] = 1
+
+    return h
+
+
+def DLT(
+    src: torch.Tensor,  # [N, P]
+    dst: torch.Tensor,  # [N, Q]
+    normalize: bool = False,
+    calc_err: bool = False,
+) -> tuple[
+    torch.Tensor,  # H[Q, P]
+    float,  # err
+]:
+    N, P, Q = -1, -2, -3
+
+    N, P, Q = CheckShapes(
+        src, (N, P),
+        dst, (N, Q),
+    )
+
+    assert 2 <= P
+    assert 2 <= Q
+
+    if normalize:
+        src_h = GetNormalizeH(src, math.sqrt(P-1))
+        # src_h[P, P]
+
+        dst_h = GetNormalizeH(dst, math.sqrt(Q-1))
+        # dst_h[Q, Q]
+
+        rep_src = (src_h @ src.unsqueeze(-1)).squeeze(-1)
+        rep_dst = (dst_h @ dst.unsqueeze(-1)).squeeze(-1)
+    else:
+        rep_src = src
+        rep_dst = dst
+
+    A = torch.empty([N*(Q-1), Q*P],
+                    dtype=torch.promote_types(rep_src.dtype, rep_dst.dtype))
+
+    A[:, :-P] = 0
+
+    for q in range(Q-1):
+        A[q::Q-1, P*q:P*q+P] = rep_src
+
+    A[:, -P:] = (rep_src.unsqueeze(-2) * -rep_dst[:, :-1, None]
+                 ).reshape((N*(Q-1), P))
+    # [N*(Q-1), P] = (N, 1, P) * (N, Q-1, 1) = (N, Q-1, P) = (N*(Q-1), P)
+
+    Vh: torch.Tensor = torch.linalg.svd(A)[2]
+
+    H = Vh[-1, :].reshape((Q, P))
+
+    if normalize:
+        H = torch.inverse(dst_h) @ H @ src_h
+
+    if not calc_err:
+        err = -1.0
+    else:
+        err = math.sqrt((DoHomo(H, src) - dst).square().sum() / N)
+
+    return H, err
