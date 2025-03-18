@@ -12,5 +12,5 @@ class DType(enum.Enum):
 
 
 class DType(enum.Enum):
-    cpu = torch.device("cpu")
+    cpu = utils.CPU
     cuda = torch.device("cuda")

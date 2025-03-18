@@ -18,7 +18,7 @@ import smplx_utils
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
-DEVICE = torch.device("cpu")
+DEVICE = utils.CPU
 
 
 def main1():
@@ -88,8 +88,8 @@ def main1():
     binding_pose_ts = torch.zeros(
         (J, 3), dtype=utils.FLOAT, device=DEVICE)
 
-    pose_rs = utils.GetRotMat(utils.RandUnit((J, 3)),
-                              torch.rand((J,)))
+    pose_rs = utils.AxisAngleToRotMat(utils.RandUnit((J, 3)),
+                                      torch.rand((J,)))
     # [J, 3, 3]
 
     pose_ts = torch.rand((J, 3))

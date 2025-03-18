@@ -331,7 +331,7 @@ def SMPLXBlending(
 
             binding_pose_rs=binding_pose_rs,
             binding_pose_ts=binding_pose_ts,
-            target_pose_rs=utils.GetRotMat(
+            target_pose_rs=utils.AxisAngleToRotMat(
                 blending_param.GetPoses(model_data)),
             target_pose_ts=binding_pose_ts,
         )

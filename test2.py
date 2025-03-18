@@ -37,7 +37,7 @@ def main2():
         diag_fov=45*utils.DEG,
         far=100.0,
         dtype=torch.float,
-        device=torch.device("cpu")
+        device=utils.CPU
     )
 
     print(proj_mat)

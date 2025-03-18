@@ -57,7 +57,7 @@ def main1():
     # model_mat[]
 
     model_mat: torch.Tensor = \
-        utils.GetRotMat(torch.tensor([0, 0, 1], dtype=FLOAT), 135*utils.DEG) @ \
+        utils.AxisAngleToRotMat(torch.tensor([0, 0, 1], dtype=FLOAT), 135*utils.DEG) @ \
         torch.linalg.lstsq(
             # model coordinate
             torch.tensor([

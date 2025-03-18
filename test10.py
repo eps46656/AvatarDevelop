@@ -24,7 +24,7 @@ DIR = FILE.parents[0]
 
 INT = torch.int32
 FLOAT = torch.float32
-DEVICE = torch.device("cpu")
+DEVICE = utils.CPU
 
 
 def main1():

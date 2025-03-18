@@ -113,8 +113,7 @@ class MeshData:
     ):
         faces_cnt, = utils.CheckShapes(face_vertex_adj_list, (-1, 3))
 
-        face_vertex_adj_list = face_vertex_adj_list.to(
-            device=torch.device("cpu"))
+        face_vertex_adj_list = face_vertex_adj_list.to(device=utils.CPU)
 
         edge_to_face_d: collections.defaultdict[tuple[int, int],
                                                 list[int]] = \
