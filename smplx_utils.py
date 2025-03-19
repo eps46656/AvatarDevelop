@@ -2,14 +2,11 @@ import dataclasses
 import os
 import pickle
 import typing
-import mesh_utils
 
 import torch
 from beartype import beartype
 
-import blending_utils
-import utils
-from kin_tree import KinTree
+from . import blending_utils, kin_utils, mesh_utils, utils
 
 SMPLX_FT = +utils.Z_AXIS
 SMPLX_BK = -utils.Z_AXIS
@@ -44,7 +41,7 @@ BODY_SHAPES_SPACE_DIM = 300
 @beartype
 @dataclasses.dataclass
 class SMPLXModelData:
-    kin_tree: KinTree
+    kin_tree: kin_utils.KinTree
 
     vertex_positions: torch.Tensor  # [..., V, 3]
     vertex_normals: torch.Tensor  # [..., V, 3]
@@ -225,7 +222,7 @@ class SMPLXBlendingParam:
         lhand_poses = self.lhand_poses + model_data.lhand_poses_mean
         rhand_poses = self.rhand_poses + model_data.rhand_poses_mean
 
-        poses_batch_dims = list(utils.GetCommonShape([
+        poses_batch_dims = list(utils.BroadcastShapes([
             self.global_rot.shape[:-1],
             self.body_poses.shape[:-2],
             self.jaw_poses.shape[:-2],
@@ -372,7 +369,7 @@ def ReadModelData(
         (int(kin_tree_table[0, j]), int(kin_tree_table[1, j]))
         for j in range(kin_tree_table.shape[1])]
 
-    kin_tree = KinTree.FromLinks(kin_tree_links, 2**32-1)
+    kin_tree = kin_tree.KinTree.FromLinks(kin_tree_links, 2**32-1)
     # joints_cnt = J
 
     J = kin_tree.joints_cnt

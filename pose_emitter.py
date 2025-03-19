@@ -1,17 +1,13 @@
-import pickle
-
-import pathlib
-
-import json
 import asyncio
-
 import datetime
-
+import glob
+import json
+import os
+import pathlib
+import pickle
 import time
 
 import aiohttp
-
-import glob
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -60,7 +56,7 @@ async def LoopEmitSMPLXParams(smplx_params, duration):
 def main1():
     smplx_params = list()
 
-    smplx_params_dir = DIR / "sample2/smplx_params"
+    smplx_params_dir = DIR / "ROMP_result_v7/smplx_params"
 
     for frame_idx in range(len(glob.glob(f"{smplx_params_dir}/*.json"))):
         filename = smplx_params_dir / f"smplx_param_{frame_idx}.json"
@@ -73,13 +69,15 @@ def main1():
 
 
 def main2():
-    dir = DIR / "sample3"
+    dir = DIR / "ROMP_result_v3"
 
     frame_idx = 0
 
-    for filename in sorted(glob.glob(f"{dir}/poses original/*.json")):
+    for filename in sorted(glob.glob(f"{dir}/smplx_params_/*.json")):
         with open(filename) as f:
             data = json.load(f)["pose"]
+
+        os.makedirs(f"{dir}/smplx_params", exist_ok=True)
 
         with open(f"{dir}/smplx_params/smplx_param_{frame_idx}.json", "w") as f:
             json.dump(data, f)

@@ -13,7 +13,7 @@ import smplx.smplx
 import utils
 import camera_utils
 import blending_utils
-from kin_tree import KinTree
+from kin_utils import KinTree
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -153,7 +153,7 @@ def main1():
     cameras = pytorch3d.renderer.PerspectiveCameras(
         R=view_mat[:3, :3].transpose(0, 1).unsqueeze(0),
         T=view_mat[:3, 3].unsqueeze(0),
-        focal_length=[camera_utils.GetFocalLengthByDiagFoV(
+        focal_length=[camera_utils.MakeFocalLengthByDiagFoV(
             img_shape, 45 * utils.DEG)],
         principal_point=[(img_shape[1] / 2, img_shape[0] / 2)],
         in_ndc=False,

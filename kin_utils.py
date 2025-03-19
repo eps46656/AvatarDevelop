@@ -1,9 +1,8 @@
-from dataclasses import dataclass
-
+import dataclasses
 import heapq
 
 
-@dataclass
+@dataclasses.dataclass
 class KinTree:
     joints_cnt: int
     root: int

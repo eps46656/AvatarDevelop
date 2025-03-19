@@ -4,13 +4,12 @@ import typing
 import torch
 from beartype import beartype
 
-import utils
-from kin_tree import KinTree
+from . import kin_utils, utils
 
 
 @beartype
 def GetJointRTs(
-    kin_tree: KinTree,
+    kin_tree: kin_utils.KinTree,
     pose_rs: torch.Tensor,  # [..., J, D, D]
     pose_ts: torch.Tensor,  # [..., J, D]
 ) -> tuple[
@@ -66,7 +65,7 @@ class LBSResult:
 @beartype
 def LBS(
     *,
-    kin_tree: KinTree,
+    kin_tree: kin_utils.KinTree,
 
     lbs_weights: torch.Tensor,  # [..., V, J]
 

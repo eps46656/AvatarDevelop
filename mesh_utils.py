@@ -21,7 +21,7 @@ def GetAreaVector(
         vertex_positions_c, (..., 3),
     )
 
-    batch_shapes = list(utils.GetCommonShape([
+    batch_shapes = list(utils.BroadcastShapes([
         vertex_positions_a.shape[:-1],
         vertex_positions_b.shape[:-1],
         vertex_positions_c.shape[:-1],

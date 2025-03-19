@@ -34,7 +34,7 @@ SMPLX_DW = -Y_AXIS
 def CheckIsZero(
     zero: torch.Tensor,  # [...]
 ):
-    err = zero.square().max().sqrt()
+    err = zero.square().mean().sqrt()
     assert err <= 1e-3, f"{err=}"
 
 
@@ -77,7 +77,7 @@ def main1():
         angle = torch.abs(torch.rand(B)) * (math.pi -
                                             utils.EPS * 10) + utils.EPS * 5
 
-        rot_mat = utils.AxisAngleToRotMat(axis, angle, homo=False)
+        rot_mat = utils.AxisAngleToRotMat(axis, angle, out_shape=(3, 3))
 
         CheckIsRotMat(rot_mat)
 
@@ -86,7 +86,8 @@ def main1():
         assert re_axis.isfinite().all()
         assert re_angle.isfinite().all()
 
-        re_rot_mat = utils.AxisAngleToRotMat(re_axis, re_angle, homo=False)
+        re_rot_mat = utils.AxisAngleToRotMat(
+            re_axis, re_angle, out_shape=(3, 3))
 
         CheckIsRotMat(re_rot_mat)
 
@@ -99,7 +100,7 @@ def main2():
     for _ in range(1):
         q = utils.RandUnit((B, 4), dtype=FLOAT, device=DEVICE)
 
-        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", homo=False)
+        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", out_shape=(3, 3))
 
         assert rot_mat.isfinite().all()
 
@@ -109,7 +110,8 @@ def main2():
 
         assert re_q.isfinite().all()
 
-        re_rot_mat = utils.QuaternionToRotMat(re_q, order="xyzw", homo=False)
+        re_rot_mat = utils.QuaternionToRotMat(
+            re_q, order="xyzw", out_shape=(3, 3))
 
         assert re_rot_mat.isfinite().all()
 
@@ -139,13 +141,14 @@ def main3():
 
         assert re_q.isfinite().all()
 
-        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", homo=False)
+        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", out_shape=(3, 3))
 
         assert rot_mat.isfinite().all()
 
         CheckIsRotMat(rot_mat)
 
-        re_rot_mat = utils.QuaternionToRotMat(re_q, order="xyzw", homo=False)
+        re_rot_mat = utils.QuaternionToRotMat(
+            re_q, order="xyzw", out_shape=(3, 3))
 
         CheckIsRotMat(rot_mat)
 

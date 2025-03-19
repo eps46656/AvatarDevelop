@@ -14,7 +14,7 @@ import camera_utils
 import config
 from smplx import smplx
 import utils
-from kin_tree import KinTree
+from kin_utils import KinTree
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
