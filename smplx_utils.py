@@ -1,12 +1,21 @@
 import dataclasses
 import os
-import pickle
 import typing
 
 import torch
 from beartype import beartype
 
 from . import blending_utils, kin_utils, mesh_utils, utils
+
+BODY_SHAPES_CNT = 10
+EXPR_SHAPES_CNT = 10
+
+BODY_JOINTS_CNT = 22
+JAW_JOINTS_CNT = 1
+EYE_JOINTS_CNT = 1
+HAND_JOINTS_CNT = 15
+
+BODY_SHAPES_SPACE_DIM = 300
 
 SMPLX_FT = +utils.Z_AXIS
 SMPLX_BK = -utils.Z_AXIS
@@ -18,26 +27,6 @@ SMPLX_UP = +utils.Y_AXIS
 SMPLX_DW = -utils.Y_AXIS
 
 
-@dataclasses.dataclass
-class SMPLXModel:
-    joint_rs: torch.Tensor  # [..., J, 3, 3]
-    joint_ts: torch.Tensor  # [..., J, 3]
-
-    vertex_positions: torch.Tensor  # [..., V, 3]
-    vertex_normals: torch.Tensor  # [..., V, 3]
-
-
-BODY_SHAPES_CNT = 10
-EXPR_SHAPES_CNT = 10
-
-BODY_POSES_CNT = 21
-JAW_POSES_CNT = 1
-EYE_POSES_CNT = 1
-HAND_POSES_CNT = 15
-
-BODY_SHAPES_SPACE_DIM = 300
-
-
 @beartype
 @dataclasses.dataclass
 class SMPLXModelData:
@@ -46,7 +35,7 @@ class SMPLXModelData:
     vertex_positions: torch.Tensor  # [..., V, 3]
     vertex_normals: torch.Tensor  # [..., V, 3]
 
-    texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., VT, 2]
+    texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
 
     faces: typing.Optional[torch.Tensor]  # [..., F, 3]
     texture_faces: typing.Optional[torch.Tensor]  # [..., F, 3]
@@ -64,21 +53,25 @@ class SMPLXModelData:
     joint_ts_mean: torch.Tensor  # [..., J, 3]
 
     body_shape_joint_regressor: torch.Tensor  # [..., J, 3, BS]
-    expr_shape_joint_regressor: torch.Tensor  # [..., J, 3, BS]
+
+    expr_shape_joint_regressor: typing.Optional[torch.Tensor]
+    # [..., J, 3, BS]
 
     lhand_poses_mean: typing.Optional[torch.Tensor]  # [..., HANDJ, 3]
     rhand_poses_mean: typing.Optional[torch.Tensor]  # [..., HANDJ, 3]
 
+    mesh_data: mesh_utils.MeshData
+
     def Check(self):
         V, = utils.CheckShapes(self.vertex_positions, (..., -1, 3))
 
-        VT, = (0,) if self.texture_vertex_positions is None else\
+        TV, = (0,) if self.texture_vertex_positions is None else\
             utils.CheckShapes(self.texture_vertex_positions, (..., -1, 2))
 
         F, = (0,) if self.faces is None else\
             utils.CheckShapes(self.texture_faces, (..., -1, 3))
 
-        FT, = (0,) if self.texture_faces is None else\
+        TF, = (0,) if self.texture_faces is None else\
             utils.CheckShapes(self.texture_faces, (..., -1, 3))
 
         BS, = (0, ) if self.body_shape_dirs is None else \
@@ -113,18 +106,65 @@ class SMPLXModelData:
             utils.CheckShapes(self.lhand_poses_mean, (..., HANDJ, 3))
             utils.CheckShapes(self.rhand_poses_mean, (..., HANDJ, 3))
 
-    def GetJointsCnt(self):
-        return self.kin_tree.joints_cnt
-
-    def GetVerticesCnt(self):
-        return self.vertex_positions.shape[-2]
-
     def GetBodyShapesCnt(self):
         return self.body_shape_dirs.shape[-1]
 
     def GetExprShapesCnt(self):
         return 0 if self.expr_shape_dirs is None \
             else self.expr_shape_dirs.shape[-1]
+
+
+@dataclasses.dataclass
+class SMPLXModel:
+    kin_tree: kin_utils.KinTree
+
+    joint_Ts: torch.Tensor  # [..., J, 4, 4]
+
+    vertex_positions: torch.Tensor  # [..., V, 3]
+    vertex_normals: torch.Tensor  # [..., V, 3]
+
+    texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
+
+    faces: typing.Optional[torch.Tensor]  # [..., F, 3]
+    texture_faces: typing.Optional[torch.Tensor]  # [..., F, 3]
+
+    mesh_data: mesh_utils.MeshData
+
+    def GetKinTree(self) -> kin_utils.KinTree:
+        return self.kin_tree
+
+    def GetVerticesCnt(self) -> int:  # V
+        return self.vertex_positions.shape[-2]
+
+    def GetTextureVerticesCnt(self) -> int:  # TV
+        return self.texture_vertex_positions.shape[-2]
+
+    def GetFacesCnt(self) -> int:  # F
+        return self.faces.shape[-2]
+
+    def GetJointsCnt(self) -> int:
+        return self.kin_tree.joints_cnt
+
+    def GetVertexPositions(self) -> torch.Tensor:  # [..., V, 3]
+        return self.vertex_positions
+
+    def GetVertexNormals(self) -> torch.Tensor:  # [..., V, 3]
+        return self.vertex_normals
+
+    def GetTextureVertexPositions(self) -> torch.Tensor:  # [..., TV, 2]
+        return self.texture_vertex_positions
+
+    def GetFaces(self) -> torch.Tensor:  # [..., F, 3]
+        return self.faces
+
+    def GetTextureFaces(self) -> torch.Tensor:  # [..., TF, 3]
+        return self.texture_faces
+
+    def GetJointsTs(self) -> torch.Tensor:  # [..., J, 4, 4]
+        return self.joint_Ts
+
+    def GetMeshData(self) -> mesh_utils.MeshData:
+        return self.mesh_data
 
 
 @beartype
@@ -188,6 +228,8 @@ class SMPLXBlendingParam:
             "rhand_poses": (HANDJ, 3),
         }
 
+        print(f"{tensor_shape_constraints=}")
+
         for field in dataclasses.fields(SMPLXBlendingParam):
             field_name = field.name
 
@@ -222,7 +264,7 @@ class SMPLXBlendingParam:
         lhand_poses = self.lhand_poses + model_data.lhand_poses_mean
         rhand_poses = self.rhand_poses + model_data.rhand_poses_mean
 
-        poses_batch_dims = list(utils.BroadcastShapes([
+        poses_batch_dims = utils.BroadcastShapes(
             self.global_rot.shape[:-1],
             self.body_poses.shape[:-2],
             self.jaw_poses.shape[:-2],
@@ -230,21 +272,22 @@ class SMPLXBlendingParam:
             self.reye_poses.shape[:-2],
             lhand_poses.shape[:-2],
             rhand_poses.shape[:-2],
-        ]))
+        )
 
         ret = torch.cat((
-            self.global_rot.expand(poses_batch_dims + [-1, 3]),
-            self.body_poses.expand(poses_batch_dims + [-1, 3]),
-            self.jaw_poses.expand(poses_batch_dims + [-1, 3]),
-            self.leye_poses.expand(poses_batch_dims + [-1, 3]),
-            self.reye_poses.expand(poses_batch_dims + [-1, 3]),
-            lhand_poses.expand(poses_batch_dims + [-1, 3]),
-            rhand_poses.expand(poses_batch_dims + [-1, 3]),
+            self.global_rot.expand(poses_batch_dims + (-1, 3)),
+            self.body_poses.expand(poses_batch_dims + (-1, 3)),
+            self.jaw_poses.expand(poses_batch_dims + (-1, 3)),
+            self.leye_poses.expand(poses_batch_dims + (-1, 3)),
+            self.reye_poses.expand(poses_batch_dims + (-1, 3)),
+            lhand_poses.expand(poses_batch_dims + (-1, 3)),
+            rhand_poses.expand(poses_batch_dims + (-1, 3)),
         ), dim=-2)
 
         return ret
 
 
+@beartype
 def MergeBlendingParam(
     blending_param: SMPLXBlendingParam,
     defualt_blending_param: SMPLXBlendingParam,
@@ -263,6 +306,7 @@ def MergeBlendingParam(
     return ret
 
 
+@beartype
 def SMPLXBlending(
     model_data: SMPLXModelData,
     blending_param: SMPLXBlendingParam,
@@ -329,27 +373,36 @@ def SMPLXBlending(
             binding_pose_rs=binding_pose_rs,
             binding_pose_ts=binding_pose_ts,
             target_pose_rs=utils.AxisAngleToRotMat(
-                blending_param.GetPoses(model_data)),
+                blending_param.GetPoses(model_data), out_shape=(3, 3)),
             target_pose_ts=binding_pose_ts,
         )
 
-    joint_ts = lbs_result.target_joint_ts
+    joint_ts = lbs_result.target_joint_Ts[..., :3, 3]
 
     if blending_param.global_transl is not None:
-        joint_ts = blending_param.global_transl + joint_ts
+        joint_ts += blending_param.global_transl
         vps = blending_param.global_transl + lbs_result.blended_vertex_positions
 
     return SMPLXModel(
-        joint_rs=lbs_result.target_joint_rs,
-        joint_ts=joint_ts,
+        kin_tree=model_data.kin_tree,
+
+        joint_Ts=lbs_result.target_joint_Ts,
 
         vertex_positions=vps,
         vertex_normals=None if lbs_result.blended_vertex_directions is None else utils.Normalized(
             lbs_result.blended_vertex_directions),
+
+        texture_vertex_positions=model_data.texture_vertex_positions,
+
+        faces=model_data.faces,
+        texture_faces=model_data.texture_faces,
+
+        mesh_data=model_data.mesh_data,
     )
 
 
-def ReadModelData(
+@beartype
+def ReadSMPLXModelData(
     *,
     model_data_path: os.PathLike,
     body_shapes_cnt: int,
@@ -360,8 +413,7 @@ def ReadModelData(
     hand_joints_cnt: int,
     device: torch.device,
 ):
-    with open(model_data_path, "rb") as f:
-        model_data = pickle.load(f, encoding="latin1")
+    model_data = utils.ReadPickle(model_data_path)
 
     kin_tree_table = model_data["kintree_table"]
 
@@ -369,7 +421,7 @@ def ReadModelData(
         (int(kin_tree_table[0, j]), int(kin_tree_table[1, j]))
         for j in range(kin_tree_table.shape[1])]
 
-    kin_tree = kin_tree.KinTree.FromLinks(kin_tree_links, 2**32-1)
+    kin_tree = kin_utils.KinTree.FromLinks(kin_tree_links, 2**32-1)
     # joints_cnt = J
 
     J = kin_tree.joints_cnt
@@ -440,18 +492,25 @@ def ReadModelData(
         body_shape_dirs,
     )
 
-    expr_shape_joint_regressor = torch.einsum(
-        "...jv,...vxb->...jxb",
-        joint_regressor,
-        expr_shape_dirs,
-    )
+    if expr_shape_dirs is None:
+        expr_shape_joint_regressor = None
+    else:
+        expr_shape_joint_regressor = torch.einsum(
+            "...jv,...vxb->...jxb",
+            joint_regressor,
+            expr_shape_dirs,
+        )
 
     # ---
 
-    texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
-        .to(dtype=utils.FLOAT, device=device)
+    if "vt" in model_data:
+        texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
+            .to(dtype=utils.FLOAT, device=device)
 
-    VT, = utils.CheckShapes(texture_vertex_positions, (..., -1, 2))
+        TV, = utils.CheckShapes(texture_vertex_positions, (..., -1, 2))
+    else:
+        texture_vertex_positions = None
+        TV = 0
 
     # ---
 
@@ -462,22 +521,38 @@ def ReadModelData(
 
     # ---
 
-    texture_faces = torch.from_numpy(model_data["ft"]) \
-        .to(dtype=torch.long, device=device)
+    if "ft" in model_data:
+        texture_faces = torch.from_numpy(model_data["ft"]) \
+            .to(dtype=torch.long, device=device)
 
-    FT, = utils.CheckShapes(faces, (..., -1, 3))
+        TF, = utils.CheckShapes(texture_faces, (..., -1, 3))
+    else:
+        texture_faces = None
+
+        TF = 0
 
     # ---
 
-    lhand_poses_mean = torch.from_numpy(
-        model_data["hands_meanl"]) \
-        .reshape((-1, 3))[-hand_joints_cnt:, :] \
-        .to(dtype=utils.FLOAT, device=device)
+    if "hands_meanl" in model_data:
+        lhand_poses_mean = torch.from_numpy(
+            model_data["hands_meanl"]) \
+            .reshape((-1, 3))[-hand_joints_cnt:, :] \
+            .to(dtype=utils.FLOAT, device=device)
+    else:
+        lhand_poses_mean = None
 
-    rhand_poses_mean = torch.from_numpy(
-        model_data["hands_meanr"]) \
-        .reshape((-1, 3))[-hand_joints_cnt:, :] \
-        .to(dtype=utils.FLOAT, device=device)
+    if "hands_meanr" in model_data:
+        rhand_poses_mean = torch.from_numpy(
+            model_data["hands_meanr"]) \
+            .reshape((-1, 3))[-hand_joints_cnt:, :] \
+            .to(dtype=utils.FLOAT, device=device)
+    else:
+        rhand_poses_mean = None
+
+    # ---
+
+    mesh_data = mesh_utils.MeshData.FromFaceVertexAdjList(
+        V, faces, device)
 
     # ---
 
@@ -511,41 +586,30 @@ def ReadModelData(
 
         lhand_poses_mean=lhand_poses_mean,
         rhand_poses_mean=rhand_poses_mean,
+
+        mesh_data=mesh_data,
     )
 
 
-class SMPLXBuilder:
-    def __init__(self,
-                 model_data_path: os.PathLike,
-                 body_shapes_cnt: int,
-                 expr_shapes_cnt: int,
-                 body_joints_cnt: int,
-                 jaw_joints_cnt: int,
-                 eye_joints_cnt: int,
-                 hand_joints_cnt: int,
-                 device: torch.device,
-                 ):
-        self.device = device
+@beartype
+class SMPLXModelBuilder:
+    def __init__(
+        self,
+        model_data: SMPLXModelData,
+        device: torch.device,
+    ):
+        self.model_data = model_data
 
-        self.model_data = ReadModelData(
-            model_data_path=model_data_path,
-            body_shapes_cnt=body_shapes_cnt,
-            expr_shapes_cnt=expr_shapes_cnt,
-            body_joints_cnt=body_joints_cnt,
-            jaw_joints_cnt=jaw_joints_cnt,
-            eye_joints_cnt=eye_joints_cnt,
-            hand_joints_cnt=hand_joints_cnt,
-            device=device,
-        )
+        self.device = device
 
         # ---
 
         self.default_blending_param = SMPLXBlendingParam(
             body_shapes=torch.zeros(
-                (body_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
 
             expr_shapes=torch.zeros(
-                (expr_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.expr_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
 
             global_transl=torch.zeros(
                 (3,), dtype=utils.FLOAT, device=self.device),
@@ -554,49 +618,66 @@ class SMPLXBuilder:
                 (3,), dtype=utils.FLOAT, device=self.device),
 
             body_poses=torch.zeros(
-                (body_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.body_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             jaw_poses=torch.zeros(
-                (jaw_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             leye_poses=torch.zeros(
-                (eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             reye_poses=torch.zeros(
-                (eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             lhand_poses=torch.zeros(
-                (hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             rhand_poses=torch.zeros(
-                (hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             blending_vertex_normal=False,
         )
 
-    def GetVerticesCnt(self):
+    def GetKinTree(self) -> kin_utils.KinTree:
+        return self.kin_tree
+
+    def GetVerticesCnt(self) -> int:  # V
         return self.model_data.vertex_positions.shape[-2]
 
-    def GetTextureVertexCnt(self):
+    def GetTextureVerticesCnt(self) -> int:  # TV
         return 0 if self.model_data.texture_vertex_positions is None else self.model_data.texture_vertex_positions.shape[-2]
 
-    def GetFacesCnt(self):
+    def GetFacesCnt(self) -> int:  # F
         return 0 if self.model_data.faces is None else self.model_data.faces.shape[-2]
 
-    def GetTextureFacesCnt(self):
+    def GetjointsCnt(self) -> int:  # J
         return 0 if self.model_data.texture_faces is None else self.model_data.texture_faces.shape[-2]
 
-    def GetJointsCnt(self):
+    def GetVertexPositions(self) -> typing.Optional[torch.Tensor]:
+        # [..., V, 3]
         return self.model_data.kin_tree.joints_cnt
 
-    def GetBodyShapesCnt(self):
+    def GetVertexNormals(self) -> typing.Optional[torch.Tensor]:  # [..., V, 3]
         return self.model_data.body_shape_dirs.shape[-1]
+
+    def GetTextureVertexPositions(self) -> typing.Optional[torch.Tensor]:
+        # [..., TV, 2]
+        return self.model_data.texture_vertex_positions
+
+    def GetFaces(self) -> typing.Optional[torch.Tensor]:  # [..., F, 3]
+        return self.model_data.faces
+
+    def GetTextureFaces(self) -> typing.Optional[torch.Tensor]:  # [..., TF, 3]
+        return self.model_data.texture_faces
+
+    def GetMeshData(self) -> typing.Optional[mesh_utils.MeshData]:
+        raise utils.UnimplementationError()
+
+    def GetBodyShapesCnt(self):
+        return 0 if self.model_data.body_shape_dirs is None else self.model_data.body_shape_dirs.shape[-1]
 
     def GetExprShapesCnt(self):
         return 0 if self.model_data.expr_shape_dirs is None else self.model_data.expr_shape_dirs.shape[-1]
-
-    def GetFaces(self):
-        return self.model_data.faces
 
     def SetDefaultBlendingParam(self, blending_param: SMPLXBlendingParam):
         blending_param.Check(self.model_data, True)

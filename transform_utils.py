@@ -19,10 +19,10 @@ class ObjectTransform:
             inv_trans, (..., 4, 4),
         )
 
-        s = utils.BroadcastShapes([
+        s = utils.BroadcastShapes(
             trans.shape[:-2],
             inv_trans.shape[:-2],
-        ]) + (4, 4)
+        ) + (4, 4)
 
         self.trans = trans.expand(s)
         self.inv_trans = inv_trans.expand(s)
@@ -40,12 +40,12 @@ class ObjectTransform:
             vecs[2], (..., 3),
         )
 
-        batch_shape = utils.BroadcastShapes([
+        batch_shape = utils.BroadcastShapes(
             pos.shape[:-1],
             vecs[0].shape[:-1],
             vecs[1].shape[:-1],
             vecs[2].shape[:-1],
-        ])
+        )
 
         s = batch_shape + (3,)
 

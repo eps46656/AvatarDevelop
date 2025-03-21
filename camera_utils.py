@@ -228,7 +228,14 @@ class CameraConfig:
         assert self.proj_type == ProjType.PERS
         return math.atan(self.foc_l) + math.atan(self.foc_r)
 
+    def GetPixelH(self):
+        return (self.foc_u + self.foc_d) / self.img_h
 
+    def GetPixelW(self):
+        return (self.foc_l + self.foc_r) / self.img_w
+
+
+@beartype
 @dataclasses.dataclass
 class ProjConfig:
     dirs: utils.Dir3
@@ -244,12 +251,14 @@ class ProjConfig:
 
 class Convention(enum.StrEnum):
     OpenGL = "OpenGL"
+    OpenCV = "OpenCV"
     PyTorch3D = "Pytorch3D"
     Unity = "Unity"
+    Blender = "Blender"
 
 
 @beartype
-def MakeOpenGLProjConfig(
+def MakeProjConfig_OpenGL(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -291,7 +300,49 @@ def MakeOpenGLProjConfig(
 
 
 @beartype
-def MakePytorch3DProjConfig(
+def MakeProjConfig_OpenCV(
+    *,
+    camera_config: CameraConfig,
+    target_coord: Coord,
+) -> ProjConfig:
+    match target_coord:
+        case Coord.NDC:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RDF"),
+
+                delta_u=1.0,
+                delta_d=1.0,
+
+                delta_l=1.0,
+                delta_r=1.0,
+
+                delta_f=+1.0 / camera_config.depth_far,
+                delta_b=-1.0 / camera_config.depth_near,
+            )
+
+            return proj_config
+
+        case Coord.Screen:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RDF"),
+
+                delta_u=0.0,
+                delta_d=camera_config.img_h * 1.0,
+
+                delta_l=0.0,
+                delta_r=camera_config.img_w * 1.0,
+
+                delta_f=+1.0 / camera_config.depth_far,
+                delta_b=-1.0 / camera_config.depth_near,
+            )
+
+            return proj_config
+
+    assert False, f"Unknown target coord {target_coord}."
+
+
+@beartype
+def MakeProjConfig_Pytorch3D(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -323,10 +374,10 @@ def MakePytorch3DProjConfig(
                 dirs=utils.Dir3.FromStr("RDF"),
 
                 delta_u=0.0,
-                delta_d=camera_config.img_h,
+                delta_d=camera_config.img_h * 1.0,
 
                 delta_l=0.0,
-                delta_r=camera_config.img_w,
+                delta_r=camera_config.img_w * 1.0,
 
                 delta_f=+1.0 / camera_config.depth_far,
                 delta_b=-1.0 / camera_config.depth_near,
@@ -338,6 +389,92 @@ def MakePytorch3DProjConfig(
 
 
 @beartype
+def MakeProjConfig_Unity(
+    *,
+    camera_config: CameraConfig,
+    target_coord: Coord,
+) -> ProjConfig:
+    match target_coord:
+        case Coord.NDC:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RUF"),
+
+                delta_u=1.0,
+                delta_d=1.0,
+
+                delta_l=1.0,
+                delta_r=1.0,
+
+                delta_f=+1.0 / camera_config.depth_far,
+                delta_b=-1.0 / camera_config.depth_near,
+            )
+
+            return proj_config
+
+        case Coord.Screen:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RUF"),
+
+                delta_u=0.0,
+                delta_d=camera_config.img_h * 1.0,
+
+                delta_l=0.0,
+                delta_r=camera_config.img_w * 1.0,
+
+                delta_f=+1.0 / camera_config.depth_far,
+                delta_b=-1.0 / camera_config.depth_near,
+            )
+
+            return proj_config
+
+    assert False, f"Unknown target coord {target_coord}."
+
+
+"""
+@beartype
+def MakeProjConfig_Blender(
+    *,
+    camera_config: CameraConfig,
+    target_coord: Coord,
+) -> ProjConfig:
+    match target_coord:
+        case Coord.NDC:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RUB"),
+
+                delta_u=1.0,
+                delta_d=1.0,
+
+                delta_l=1.0,
+                delta_r=1.0
+
+                delta_f=1.0,
+                delta_b=1.0,
+            )
+
+            return proj_config
+
+        case Coord.Screen:
+            proj_config = ProjConfig(
+                dirs=utils.Dir3.FromStr("RUB"),
+
+                delta_u=0.0,
+                delta_d=camera_config.img_h * 1.0,
+
+                delta_l=0.0,
+                delta_r=camera_config.img_w * 1.0,
+
+                delta_f=1.0,
+                delta_b=1.0,
+            )
+
+            return proj_config
+
+    assert False, f"Unknown target coord {target_coord}."
+"""
+
+
+@beartype
 def MakeProjConfig(
     *,
     camera_config: CameraConfig,
@@ -346,13 +483,13 @@ def MakeProjConfig(
 ) -> ProjConfig:
     match convention:
         case Convention.OpenGL:
-            return MakeOpenGLProjConfig(
+            return MakeProjConfig_OpenGL(
                 camera_config=camera_config,
                 target_coord=target_coord,
             )
 
         case Convention.PyTorch3D:
-            return MakePytorch3DProjConfig(
+            return MakeProjConfig_Pytorch3D(
                 camera_config=camera_config,
                 target_coord=target_coord,
             )

@@ -1,19 +1,14 @@
 
 import enum
-
-import typing
 import pathlib
-import torch
 import pickle
-import mesh_utils
+import typing
 
-import utils
-import blending_utils
+import torch
 
-import smplx.smplx
+import smplx
 
-from kin_tree import KinTree
-import smplx_utils
+from . import blending_utils, kin_utils, mesh_utils, smplx_utils, utils
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -22,7 +17,7 @@ DEVICE = utils.CPU
 
 
 def main1():
-    model_path = DIR / "smplx/models/smplx/SMPLX_NEUTRAL.pkl"
+    model_path = DIR / "models_smplx_v1_1/models/smplx/SMPLX_NEUTRAL.pkl"
 
     with open(model_path, "rb") as f:
         model_data = pickle.load(f, encoding="latin1")
@@ -110,7 +105,7 @@ def main1():
 
 
 def main3():
-    model_path = DIR / "smplx/models/smplx/SMPLX_NEUTRAL.pkl"
+    model_path = DIR / "models_smplx_v1_1/models/smplx/SMPLX_NEUTRAL.pkl"
 
     body_shapes_cnt = 10
     expr_shapes_cnt = 10
@@ -120,20 +115,23 @@ def main3():
     hand_joints_cnt = 15
 
     with utils.Timer():
-        my_smplx_builder = smplx_utils.SMPLXBuilder(
-            model_data_path=model_path,
-            body_shapes_cnt=body_shapes_cnt,
-            expr_shapes_cnt=expr_shapes_cnt,
-            body_joints_cnt=body_joints_cnt,
-            jaw_joints_cnt=jaw_joints_cnt,
-            eye_joints_cnt=eye_joints_cnt,
-            hand_joints_cnt=hand_joints_cnt,
+        my_smplx_builder = smplx_utils.SMPLXModelBuilder(
+            smplx_utils.ReadSMPLXModelData(
+                model_data_path=model_path,
+                body_shapes_cnt=body_shapes_cnt,
+                expr_shapes_cnt=expr_shapes_cnt,
+                body_joints_cnt=body_joints_cnt,
+                jaw_joints_cnt=jaw_joints_cnt,
+                eye_joints_cnt=eye_joints_cnt,
+                hand_joints_cnt=hand_joints_cnt,
+                device=DEVICE,
+            ),
             device=DEVICE,
         )
 
     with utils.Timer():
-        smplx_builder = smplx.smplx.SMPLX(
-            model_path=DIR / "smplx/models/smplx",
+        smplx_builder = smplx.SMPLX(
+            model_path=DIR / "models_smplx_v1_1/models/smplx",
             use_pca=False,
             num_betas=10,
             num_expression_coeffs=10,
@@ -240,7 +238,7 @@ def main3():
             )
         )
 
-    print(f"{my_smplx_model.joint_ts.shape=}")
+    print(f"{my_smplx_model.joint_Ts.shape=}")
     print(f"{my_smplx_model.vertex_positions.shape=}")
 
     print(f"{smplx_model.vertices.shape=}")
@@ -249,7 +247,7 @@ def main3():
     # print(f"{smplx_model.joints=}")
 
     joint_err = utils.GetL2RMS(
-        my_smplx_model.joint_ts.reshape((-1, 3)) -
+        my_smplx_model.joint_Ts[..., :3, 3].reshape((-1, 3)) -
         smplx_model.joints.flatten()[:165].reshape((-1, 3))
     )
 

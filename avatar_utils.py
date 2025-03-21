@@ -1,58 +1,87 @@
 
-import dataclasses
+import typing
 
 import torch
+from beartype import beartype
 
-import mesh_utils
+from . import kin_utils, mesh_utils, utils
 
 
-@dataclasses.dataclass
+@beartype
 class AvatarModel:
-    vertices_cnt: int  # V
-    texture_vertices_cnt: int  # VT
+    def GetKinTree(self) -> kin_utils.KinTree:
+        raise utils.UnimplementationError()
 
-    faces_cnt: int  # F
-
-    joints_cnt: int  # J
-
-    vertex_positions: torch.Tensor  # [..., V, 3]
-    vertex_normals: torch.Tensor  # [..., V, 3]
-
-    texture_vertex_positions: torch.Tensor  # [..., VT, 2]
-
-    faces: torch.Tensor  # [..., F, 3]
-    texture_faces: torch.Tensor  # [..., F, 3]
-
-    joints_rs: torch.Tensor  # [..., J, 3, 3]
-    joints_ts: torch.Tensor  # [..., J, 3, 3]
-
-    mesh_data: mesh_utils.MeshData
-
-
-class AvatarBuilder(torch.nn.Model):
     def GetVerticesCnt(self) -> int:  # V
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()
 
-    def GetTextureVerticesCnt(self) -> torch.Tensor:  # VT
-        assert False, "Unoverridden abstract method."
+    def GetTextureVerticesCnt(self) -> int:  # TV
+        raise utils.UnimplementationError()
 
     def GetFacesCnt(self) -> int:  # F
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()
 
     def GetJointsCnt(self) -> int:  # J
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()
 
-    def GetTextureVertexPositions(self) -> torch.Tensor:  # [VT, 2]
-        assert False, "Unoverridden abstract method."
+    def GetVertexPositions(self) -> torch.Tensor:  # [..., V, 3]
+        raise utils.UnimplementationError()
+
+    def GetVertexNormals(self) -> torch.Tensor:  # [..., V, 3]
+        raise utils.UnimplementationError()
+
+    def GetTextureVertexPositions(self) -> torch.Tensor:  # [..., TV, 2]
+        raise utils.UnimplementationError()
 
     def GetFaces(self) -> torch.Tensor:  # [..., F, 3]
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()
 
-    def GetTextureFaces(self) -> torch.Tensor:  # [..., F, 3]
-        assert False, "Unoverridden abstract method."
+    def GetTextureFaces(self) -> torch.Tensor:  # [..., TF, 3]
+        raise utils.UnimplementationError()
+
+    def GetJointsTs(self) -> torch.Tensor:  # [..., J, 4, 4]
+        raise utils.UnimplementationError()
 
     def GetMeshData(self) -> mesh_utils.MeshData:
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()
+
+
+@beartype
+class AvatarBlendingLayer(torch.nn.Model):
+    def GetKinTree(self) -> kin_utils.KinTree:
+        raise utils.UnimplementationError()
+
+    def GetVerticesCnt(self) -> int:  # V
+        raise utils.UnimplementationError()
+
+    def GetTextureVerticesCnt(self) -> int:  # TV
+        raise utils.UnimplementationError()
+
+    def GetFacesCnt(self) -> int:  # F
+        raise utils.UnimplementationError()
+
+    def GetjointsCnt(self) -> int:  # J
+        raise utils.UnimplementationError()
+
+    def GetVertexPositions(self) -> typing.Optional[torch.Tensor]:
+        # [..., V, 3]
+        raise utils.UnimplementationError()
+
+    def GetVertexNormals(self) -> typing.Optional[torch.Tensor]:  # [..., V, 3]
+        raise utils.UnimplementationError()
+
+    def GetTextureVertexPositions(self) -> typing.Optional[torch.Tensor]:
+        # [..., TV, 2]
+        raise utils.UnimplementationError()
+
+    def GetFaces(self) -> typing.Optional[torch.Tensor]:  # [..., F, 3]
+        raise utils.UnimplementationError()
+
+    def GetTextureFaces(self) -> typing.Optional[torch.Tensor]:  # [..., TF, 3]
+        raise utils.UnimplementationError()
+
+    def GetMeshData(self) -> typing.Optional[mesh_utils.MeshData]:
+        raise utils.UnimplementationError()
 
     def forward(self, blending_param) -> AvatarModel:
         assert False, "Unoverridden abstract method."

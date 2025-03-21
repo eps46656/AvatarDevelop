@@ -1,9 +1,11 @@
 import dataclasses
 import enum
+import functools
 import itertools
 import math
 import os
 import pathlib
+import pickle
 import random
 import sys
 import time
@@ -21,7 +23,7 @@ RAD = 1.0
 DEG = math.pi / 180.0
 
 INT = torch.int32
-FLOAT = torch.float64
+FLOAT = torch.float32
 
 CPU = torch.device("cpu")
 
@@ -29,6 +31,10 @@ ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
 X_AXIS = torch.tensor([1, 0, 0], dtype=FLOAT)
 Y_AXIS = torch.tensor([0, 1, 0], dtype=FLOAT)
 Z_AXIS = torch.tensor([0, 0, 1], dtype=FLOAT)
+
+
+DEPTH_NEAR = 0.01
+DEPTH_FAR = 100
 
 
 class Empty:
@@ -65,9 +71,17 @@ def DictPop(d: dict[object, object], key: object):
     return old_size != len(d)
 
 
+def MinMax(x, y):
+    return (x, y) if x <= y else (y, x)
+
+
 def Clamp(x, lb, ub):
     assert lb <= ub
     return max(lb, min(x, ub))
+
+
+class UnimplementationError(Exception):
+    pass
 
 
 @beartype
@@ -127,8 +141,57 @@ def AllocateID(lb: int, rb: int, s=None):
 
 
 @beartype
+def ReadFile(
+    path: os.PathLike,
+    mode: str,
+):
+    with open(path, mode) as f:
+        return f.read()
+
+
+@beartype
+def WriteFile(
+    path: os.PathLike,
+    mode: str,
+    data,
+):
+    path = pathlib.Path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    with open(path, mode) as f:
+        f.write(data)
+
+
+@beartype
+def ReadPickle(
+    path: os.PathLike,
+    *,
+    mode: str = "rb",
+    encoding: str = "latin1",
+):
+    with open(path, mode=mode) as f:
+        return pickle.load(f, encoding=encoding)
+
+
+@beartype
+def WritePickle(
+    path: os.PathLike,
+    data,
+    *,
+    mode: str = "wb+",
+):
+    path = pathlib.Path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    with open(path, mode=mode) as f:
+        pickle.dump(data, f)
+
+
+@beartype
 def ReadImage(path: os.PathLike, order: str):
-    img = torchvision.io.read_image(
+    img = torchvision.io.decode_image(
         path, torchvision.io.ImageReadMode.RGB)
     # [c, h, w]
 
@@ -161,6 +224,35 @@ def WriteImage(
     assert False, f"unknown extension: {path.suffix}"
 
 
+@beartype
+def ReadVideo(
+    path: os.PathLike,
+    order: str,  # permutation of t, c, h, w
+):
+    video = torchvision.io.read_video(
+        path, output_format="TCHW")
+    # [T, C, H, W]
+
+    return einops.rearrange(video, f"t c h w -> {order.lower()}")
+
+
+@beartype
+def WriteVideo(
+    path: os.PathLike,
+    order: str,  # permutation of t, c, h, w
+    fps: int,
+    codec: str = "h264",
+):
+    video = einops.rearrange(video, f"{order.lower()} -> t c h w")
+
+    torchvision.io.write_video(
+        filename=path,
+        video_array=video,
+        fps=fps,
+        video_codec=codec,
+    )
+
+
 class Dir(enum.StrEnum):
     F = "F"  # front
     B = "B"  # back
@@ -171,7 +263,7 @@ class Dir(enum.StrEnum):
     L = "L"  # left
     R = "R"  # right
 
-    def GetInverse(self):
+    def GetInversed(self):
         match self:
             case Dir.F: return Dir.B
             case Dir.B: return Dir.F
@@ -185,7 +277,6 @@ class Dir(enum.StrEnum):
         assert False, f"Unknown value {self}."
 
 
-@dataclasses.dataclass
 class Dir3:
     vecs = {
         Dir.F: torch.tensor([0, 0, +1, 0], dtype=FLOAT),
@@ -231,7 +322,7 @@ class Dir3:
         return self.dirs == obj.dirs
 
     def __ne__(self, obj: object):
-        return not self.__eq__(obj)
+        return not (self == obj)
 
     def __hash__(self):
         return hash(self.dirs)
@@ -306,58 +397,46 @@ def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
 def CheckQuaternionOrder(order: str):
     assert len(order) == 4
     order = order.lower()
-    assert all(d in order for d in "xyzw")
+    assert all(d in order for d in "wxyz")
     return order
 
 
-def AssertXYZAxes(axes: str):
-    s = {
-        "-x", "+x",
-        "-y", "+y",
-        "-z", "+z",
-    }
+@beartype
+def GetQuaternionWXYZ(
+    q: torch.Tensor,  # [..., 4]
+    order: str,  # wxyz
+):
+    CheckShapes(q, (..., 4))
 
-    assert len(axes) == 6
-    assert axes[0:2] in s
-    assert axes[2:4] in s
-    assert axes[4:6] in s
+    w, x, y, z = None, None, None, None
 
-    assert axes.count("x") == 1
-    assert axes.count("y") == 1
-    assert axes.count("z") == 1
+    for i, k in enumerate(CheckQuaternionOrder(order)):
+        match k:
+            case "w": w = q[..., i]
+            case "x": x = q[..., i]
+            case "y": y = q[..., i]
+            case "z": z = q[..., i]
 
-
-def GetInvAxis(axis: str):
-    if axis[0] == "+":
-        return f"-{axis[1:]}"
-
-    if axis[0] == "-":
-        return f"+{axis[1:]}"
-
-    assert False
+    return w, x, y, z
 
 
-def ArrangeXYZ(a: object,
-               b: object,
-               c: object,
-               src_axes: str,
-               dst_axes: str):
-    AssertXYZAxes(src_axes)
-    AssertXYZAxes(dst_axes)
+@beartype
+def SetQuaternionWXYZ(
+    w: torch.Tensor,  # [...]
+    x: torch.Tensor,  # [...]
+    y: torch.Tensor,  # [...]
+    z: torch.Tensor,  # [...]
+    order: str,  # wxyz
+    dst: torch.Tensor,  # [..., 4]
+):
+    CheckShapes(dst, (..., 4))
 
-    values = {
-        src_axes[0:2]: a,
-        src_axes[2:4]: b,
-        src_axes[4:6]: c,
-    }
-
-    return \
-        values[dst_axes[0:2]] \
-        if dst_axes[0:2] in values else -values[GetInvAxis(dst_axes[0:2])], \
-        values[dst_axes[2:4]] \
-        if dst_axes[2:4] in values else -values[GetInvAxis(dst_axes[2:4])], \
-        values[dst_axes[4:6]]\
-        if dst_axes[4:6] in values else -values[GetInvAxis(dst_axes[4:6])]
+    for i, k in enumerate(CheckQuaternionOrder(order)):
+        match k:
+            case "w": dst[..., i] = w
+            case "x": dst[..., i] = x
+            case "y": dst[..., i] = y
+            case "z": dst[..., i] = z
 
 
 @beartype
@@ -392,21 +471,45 @@ def NormalizedIdx(idx: int, length: int):
 
 
 @beartype
-def BroadcastShapes(shapes: typing.Iterable[typing.Iterable[int]]):
-    shape_mat = [[int(d) for d in shape] for shape in shapes]
+def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]):
+    shapes = [
+        [int(d) for d in (arg.shape if isinstance(arg, torch.Tensor) else arg)]
+        for arg in args
+    ]
 
-    k = max(len(shape) for shape in shape_mat)
+    k = max(len(shape) for shape in shapes)
 
     ret = tuple(
         max((shape[i] if i < len(shape) else 1)
-            for shape in shape_mat)
+            for shape in shapes)
         for i in range(k)
     )
 
     assert all(all(
         shape[i] == 1 or shape[i] == ret[i]
         for i in range(-1, -1 - len(shape), -1))
-        for shape in shape_mat)
+        for shape in shapes)
+
+    return ret
+
+
+@beartype
+def PromoteTypes(*args: torch.Tensor | torch.dtype):
+    return functools.reduce(
+        torch.promote_types,
+        (arg if isinstance(arg, torch.dtype) else arg.dtype for arg in args),
+        torch.bool,
+    )
+
+
+@beartype
+def CheckDevice(*args: torch.Tensor | torch.device):
+    def GetDevice(x):
+        return x if isinstance(x, torch.device) else x.device
+
+    ret = GetDevice(args[0])
+
+    assert all(GetDevice(arg) == ret for arg in args)
 
     return ret
 
@@ -549,7 +652,7 @@ def AxisAngleToQuaternion(
     axis: torch.Tensor,  # [..., 3]
     angle: typing.Optional[torch.Tensor] = None,  # [...]
     *,
-    order: str,  # permutation of "xyzw"
+    order: str,  # permutation of "wxyz"
 ) -> torch.Tensor:  # [..., 4]
     CheckShapes(axis, (..., 3))
 
@@ -567,20 +670,15 @@ def AxisAngleToQuaternion(
     c = half_angle.cos()
     s = half_angle.sin()
 
+    w = c
     x = unit_axis[..., 0] * s
     y = unit_axis[..., 1] * s
     z = unit_axis[..., 2] * s
-    w = c
 
     ret = torch.empty(x.shape + (4,),
                       dtype=unit_axis.dtype, device=unit_axis.device)
 
-    for i, d in enumerate(order):
-        match d:
-            case "x": ret[..., i] = x
-            case "y": ret[..., i] = y
-            case "z": ret[..., i] = z
-            case "w": ret[..., i] = w
+    SetQuaternionWXYZ(w, x, y, z, order, ret)
 
     return ret
 
@@ -589,7 +687,7 @@ def AxisAngleToQuaternion(
 def QuaternionToAxisAngle(
     quaternion: torch.Tensor,  # [..., 4]
     *,
-    order: str,  # permutation of "xyzw"
+    order: str,  # permutation of "wxyz"
 ) -> tuple[
     torch.Tensor,  # [..., 3]
     torch.Tensor,  # [...]
@@ -598,19 +696,14 @@ def QuaternionToAxisAngle(
 
     order = CheckQuaternionOrder(order)
 
+    w, x, y, z = GetQuaternionWXYZ(quaternion, order)
+
     k = 1 / VectorNorm(quaternion)
 
-    x: torch.Tensor = None
-    y: torch.Tensor = None
-    z: torch.Tensor = None
-    w: torch.Tensor = None
-
-    for i, d in enumerate(order):
-        match d:
-            case "x": x = quaternion[..., i] * k
-            case "y": y = quaternion[..., i] * k
-            case "z": z = quaternion[..., i] * k
-            case "w": w = quaternion[..., i] * k
+    w = w * k
+    x = x * k
+    y = y * k
+    z = z * k
 
     p = ((1 + EPS) - w.square()).rsqrt()
 
@@ -686,15 +779,16 @@ def AxisAngleToRotMat(
     CheckShapes(axis, (..., 3))
 
     if out_shape is None:
+        assert out is not None
         out_shape = CheckShapes(out, (..., -1, -2))
 
     assert 3 <= out_shape[0] <= 4
     assert 3 <= out_shape[1] <= 4
 
-    batch_shape = axis.shape[:-1]
+    batch_shape = tuple(axis.shape[:-1])
 
     if angle is not None:
-        batch_shape = BroadcastShapes([batch_shape, angle.shape])
+        batch_shape = BroadcastShapes(batch_shape, angle)
 
     if out is None:
         out = torch.empty(
@@ -749,26 +843,21 @@ def RotMatToAxisAngle(
 def QuaternionToRotMat_(
     *,
     quaternion: torch.Tensor,  # [..., 4]
-    order: str,  # permutation of "xyzw"
+    order: str,  # permutation of "wxyz"
     out: torch.Tensor,  # [..., 3, 3]
 ):
     CheckShapes(quaternion, (..., 4))
 
     order = CheckQuaternionOrder(order)
 
+    w, x, y, z = GetQuaternionWXYZ(quaternion, order)
+
     k = math.sqrt(2) / VectorNorm(quaternion)
 
-    x: torch.Tensor = None
-    y: torch.Tensor = None
-    z: torch.Tensor = None
-    w: torch.Tensor = None
-
-    for i, d in enumerate(order):
-        match d:
-            case "x": x = quaternion[..., i] * k
-            case "y": y = quaternion[..., i] * k
-            case "z": z = quaternion[..., i] * k
-            case "w": w = quaternion[..., i] * k
+    w = w * k
+    x = x * k
+    y = y * k
+    z = z * k
 
     xx = x.square()
     yy = y.square()
@@ -778,20 +867,20 @@ def QuaternionToRotMat_(
     yz = zy = y * z
     zx = xz = z * x
 
-    xw = x * w
-    yw = y * w
-    zw = z * w
+    wx = w * x
+    wy = w * y
+    wz = w * z
 
     out[..., 0, 0] = 1 - yy - zz
-    out[..., 0, 1] = xy - zw
-    out[..., 0, 2] = xz + yw
+    out[..., 0, 1] = xy - wz
+    out[..., 0, 2] = xz + wy
 
-    out[..., 1, 0] = yx + zw
+    out[..., 1, 0] = yx + wz
     out[..., 1, 1] = 1 - zz - xx
-    out[..., 1, 2] = yz - xw
+    out[..., 1, 2] = yz - wx
 
-    out[..., 2, 0] = zx - yw
-    out[..., 2, 1] = zy + xw
+    out[..., 2, 0] = zx - wy
+    out[..., 2, 1] = zy + wx
     out[..., 2, 2] = 1 - xx - yy
 
 
@@ -799,7 +888,7 @@ def QuaternionToRotMat_(
 def QuaternionToRotMat(
     quaternion: torch.Tensor,  # [..., 4]
     *,
-    order: str,  # permutation of "xyzw"
+    order: str,  # permutation of "wxyz"
     out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
     out: typing.Optional[torch.Tensor] = None,  # [..., 3/4, 3/4]
 ):
@@ -841,7 +930,8 @@ def QuaternionToRotMat(
 def RotMatToQuaternion(
     rot_mat: torch.Tensor,  # [..., 3, 3]
     *,
-    order: str  # permutation of "xyzw"
+    order: str,  # permutation of "wxyz"
+    out: typing.Optional[torch.Tensor],  # [..., 4]
 ) -> torch.Tensor:  # [..., 4]
     CheckShapes(rot_mat, (..., 3, 3))
 
@@ -849,31 +939,65 @@ def RotMatToQuaternion(
 
     order = order.lower()
 
-    assert all(d in order for d in "xyzw")
+    assert all(d in order for d in "wxyz")
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
     k = (1 + tr).clamp(min=EPS).sqrt()
     l = 0.5 / k
 
+    w = k / 2
     x = (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) * l
     y = (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) * l
     z = (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) * l
-    w = k / 2
 
-    quaternion = torch.empty(
-        rot_mat.shape[:-2] + (4,),
-        dtype=rot_mat.dtype, device=rot_mat.device
-    )
+    if out is None:
+        out = torch.empty(
+            rot_mat.shape[:-2] + (4,),
+            dtype=rot_mat.dtype, device=rot_mat.device
+        )
 
-    for i, d in enumerate(order):
-        match d:
-            case "x": quaternion[..., i] = x
-            case "y": quaternion[..., i] = y
-            case "z": quaternion[..., i] = z
-            case "w": quaternion[..., i] = w
+    SetQuaternionWXYZ(w, x, y, z, order, out)
 
-    return quaternion
+    return out
+
+
+@beartype
+def QuaternionMul(
+    q1: torch.Tensor,  # [..., 4]
+    q2: torch.Tensor,  # [..., 4]
+    *,
+    order_1: str,  # wxyz
+    order_2: str,  # wxyz
+    order_out: str,  # wxyz
+
+    out: typing.Optional[torch.Tensor] = None,  # [..., 4]
+):
+    batch_shape = BroadcastShapes(q1, q2)
+
+    q1 = q1.expand(batch_shape)
+    q2 = q2.expand(batch_shape)
+
+    if out is None:
+        out = torch.empty(
+            batch_shape, dtype=PromoteTypes(q1, q2), device=CheckDevice(q1, q2))
+
+    q1x, q1y, q1z, q1w = GetQuaternionWXYZ(q1, order_1)
+    q2x, q2y, q2z, q2w = GetQuaternionWXYZ(q1, order_2)
+
+    out_w = q1w * q2w - q1x * q2x - q1y * q2y - q1z * q2z
+    out_x = q1w * q2x + q1x * q2w + q1y * q2z - q1z * q2y
+    out_y = q1w * q2y - q1x * q2z + q1y * q2w + q1z * q2x
+    out_z = q1w * q2z + q1x * q2y - q1y * q2x + q1z * q2w
+
+    if out is None:
+        out = torch.empty(
+            batch_shape,
+            dtype=PromoteTypes(q1, q2), device=CheckDevice(q1, q2))
+
+    SetQuaternionWXYZ(out_w, out_x, out_y, out_z, order_out, out)
+
+    return out
 
 
 @beartype
@@ -919,7 +1043,9 @@ def DoRT(
     rs: torch.Tensor,  # [..., P, Q]
     ts: torch.Tensor,  # [..., P]
     vs: torch.Tensor,  # [..., Q]
-) -> torch.Tensor:  # us[..., P]
+    *,
+    out: typing.Optional[torch.Tensor] = None,  # [..., P]
+) -> torch.Tensor:  # out[..., P]
     P, Q = -1, -2
 
     P, Q = CheckShapes(
@@ -928,7 +1054,14 @@ def DoRT(
         vs, (..., Q),
     )
 
-    return (rs @ vs.unsqueeze(-1)).squeeze(-1) + ts
+    vs = (rs @ vs.unsqueeze(-1)).squeeze(-1) + ts
+
+    if out is None:
+        out = vs
+    else:
+        out.copy_(vs)
+
+    return out
 
 
 @beartype
@@ -937,9 +1070,12 @@ def MergeRT(
     a_ts: torch.Tensor,  # [..., P]
     b_rs: torch.Tensor,  # [..., Q, R]
     b_ts: torch.Tensor,  # [..., Q]
+    *,
+    out_rs: typing.Optional[torch.Tensor] = None,  # [..., P, R]
+    out_ts: typing.Optional[torch.Tensor] = None,  # [..., P]
 ) -> tuple[
-    torch.Tensor,  # rs[..., P, R]
-    torch.Tensor,  # ts[..., P]
+    torch.Tensor,  # out_rs[..., P, R]
+    torch.Tensor,  # out_ts[..., P]
 ]:
     P, Q, R = -1, -2, -3
 
@@ -950,35 +1086,61 @@ def MergeRT(
         b_ts, (..., Q),
     )
 
-    ret_rs = a_rs @ b_rs
+    if out_rs is None:
+        out_rs = a_rs @ b_rs
+    else:
+        torch.matmul(a_rs, b_rs, out=out_rs)
+
     # [..., P, R]
 
-    ret_ts = (a_rs @ b_ts.unsqueeze(-1)).squeeze(-1) + a_ts
+    inv_ts = (a_rs @ b_ts.unsqueeze(-1)).squeeze(-1) + a_ts
     # [..., P]
 
-    return ret_rs, ret_ts
+    if out_ts is None:
+        out_ts = inv_ts
+    else:
+        out_ts.copy_(inv_ts)
+
+    return out_rs, out_ts
 
 
 @beartype
 def GetInvRT(
     rs: torch.Tensor,  # [..., D, D]
     ts: torch.Tensor,  # [..., D]
+    *,
+    out_rs: typing.Optional[torch.Tensor] = None,  # [..., D, D]
+    out_ts: typing.Optional[torch.Tensor] = None,  # [..., D]
 ) -> tuple[
-    torch.Tensor,  # inv_rs[..., D, D]
-    torch.Tensor,  # inv_ts[..., D]
+    torch.Tensor,  # out_rs[..., D, D]
+    torch.Tensor,  # out_ts[..., D]
 ]:
     D = CheckShapes(
         rs, (..., -1, -1),
         ts, (..., -1),
     )
 
-    inv_rs = torch.inverse(rs)
+    if out_rs is None:
+        out_rs = torch.empty_like(rs)
+
+    if out_ts is None:
+        out_ts = torch.empty(
+            ts.shape + (1,),
+            dtype=PromoteTypes(rs, ts),
+            device=CheckDevice(out_rs, ts)
+        )
+
+    torch.inverse(rs, out=out_rs)
     # [..., D, D]
 
-    inv_ts = (inv_rs @ -ts.unsqueeze(-1)).squeeze(-1)
-    # [..., D]
+    torch.matmul(
+        out_rs,
+        -ts.unsqueeze(-1),
+        out=out_ts,
+    )
+    # [..., D, 1]
 
-    return inv_rs, inv_ts
+    return out_rs, out_ts.unsqueeze(-1)
 
 
 @beartype

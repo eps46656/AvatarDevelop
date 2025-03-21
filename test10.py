@@ -4,19 +4,10 @@ import math
 import pathlib
 import pickle
 
-import pytorch3d
-import pytorch3d.renderer
-import pytorch3d.structures
 import torch
 
-import blending_utils
-import camera_utils
-import config
-from smplx import smplx
-import utils
-from kin_utils import KinTree
-import mesh_utils
-import smplx_utils
+from . import smplx_utils, blending_utils, camera_utils, kin_utils, mesh_utils, utils
+from .smplx import smplx
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -37,7 +28,7 @@ def main1():
     eye_joints_cnt = 1
     hand_joints_cnt = 15
 
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadModelData(
+    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=body_shapes_cnt,
         expr_shapes_cnt=expr_shapes_cnt,
@@ -160,7 +151,7 @@ def main4():
     eye_joints_cnt = 1
     hand_joints_cnt = 15
 
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadModelData(
+    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=body_shapes_cnt,
         expr_shapes_cnt=expr_shapes_cnt,
@@ -188,7 +179,7 @@ def main5():
     eye_joints_cnt = 1
     hand_joints_cnt = 15
 
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadModelData(
+    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=body_shapes_cnt,
         expr_shapes_cnt=expr_shapes_cnt,
@@ -204,38 +195,49 @@ def main5():
 
     D = 3
 
-    mesh_data = mesh_utils.MeshData.FromFaceVertexAdjList(
+    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.FromFaceVertexAdjList(
         V,
         model_data.faces,
         DEVICE
     )
 
-    print(mesh_data.vertex_vertex_adj_rel_list)
+    vertices_cnt = mesh_data.vertices_cnt
+    faces_cnt = mesh_data.faces_cnt
 
-    print(mesh_data.vertex_vertex_adj_rel_list.shape)
-
-    """
-    vertices = torch.rand((V, D))
+    vertex_positions = torch.rand((vertices_cnt, 3), dtype=utils.FLOAT)
+    face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
 
     with utils.Timer():
-        result_b = torch.zeros((V, D))
+        lap_diff = mesh_data.GetLapDiff(vertex_positions)
 
-        for i in range(V):
-            degree = 0
-            g = torch.zeros((D,))
+    with utils.Timer():
+        lap_diff_naive = mesh_data.GetLapDiffNaive(vertex_positions)
 
-            for j in range(V):
-                if i != j and vv_adj_mat[i, j]:
-                    degree += 1
-                    g += vertices[j]
+    lap_diff_diff_1 = lap_diff.square().mean()
+    lap_diff_diff_2 = lap_diff_naive.square().mean()
 
-            if 0 < degree:
-                result_b[i] = g / degree - vertices[i]
+    print(f"{lap_diff_diff_1=}")
+    print(f"{lap_diff_diff_2=}")
 
-    err = utils.GetDiff(result_a, result_b).mean()
+    lap_diff_err = (lap_diff - lap_diff_naive).square().mean()
 
-    print(f"{err=}")
-    """
+    print(f"{lap_diff_err=}")
+
+    with utils.Timer():
+        normal_sim = mesh_data.GetNormalSim(face_normals)
+
+    with utils.Timer():
+        normal_sim_naive = mesh_data.GetNormalSimNaive(face_normals)
+
+    normal_sim_1 = normal_sim.square().mean()
+    normal_sim_2 = normal_sim_naive.square().mean()
+
+    print(f"{normal_sim_1=}")
+    print(f"{normal_sim_2=}")
+
+    normal_sim_err = (normal_sim - normal_sim_naive).square().mean()
+
+    print(f"{normal_sim_err=}")
 
 
 if __name__ == "__main__":
