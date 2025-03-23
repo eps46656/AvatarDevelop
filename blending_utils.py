@@ -7,6 +7,7 @@ from beartype import beartype
 from . import kin_utils, utils
 
 
+@beartype
 @dataclasses.dataclass
 class LBSResult:
     blended_vertex_positions: typing.Optional[torch.Tensor]  # [..., V, D]

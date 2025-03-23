@@ -1,17 +1,15 @@
-import itertools
-import math
 import dataclasses
+import math
 
+import einops
 import torch
 from beartype import beartype
 
-import pytorch3d
-import pytorch3d.renderer
+from .. import (avatar_utils, camera_utils, gaussian_utils, transform_utils,
+                utils)
 
 
-from .. import avatar_utils, utils, gaussian_utils
-
-
+@beartype
 @dataclasses.dataclass
 class FaceCoordResult:
     normalized_Ts: torch.Tensor  # [..., 4, 4]
@@ -94,52 +92,76 @@ def GetFaceCoord(
     return ret
 
 
-class Model(torch.nn.Model):
+@beartype
+@dataclasses.dataclass
+class GoMAvatarModelForwardResult:
+    rendered_imgs: torch.Tensor  # [..., (C, H, W)]
+
+    rgb_loss: torch.Tensor
+    lap_loss: torch.Tensor
+    normal_sim_loss: torch.Tensor
+
+
+@beartype
+class GoMAvatarModel(torch.nn.Module):
     def __init__(
         self,
         avatar_blending_layer: avatar_utils.AvatarBlendingLayer,
-        gp_sh_degree: int,
+        color_channels_cnt: int,
     ):
+        super(GoMAvatarModel, self).__init__()
+
         self.avatar_blending_layer: avatar_utils.AvatarBlendingLayer = \
             avatar_blending_layer
 
-        faces_cnt = self.avatar_blending_layer.faces_cnt
+        faces_cnt = self.avatar_blending_layer.GetFacesCnt()
         assert 0 <= faces_cnt
 
-        assert 0 <= gp_sh_degree <= 2
-
-        self.gp_sh_degree = gp_sh_degree
+        assert 1 <= color_channels_cnt
 
         self.gp_rot_qs = torch.nn.Parameter(
             torch.empty((faces_cnt, 4), dtype=utils.FLOAT))
-        # quaternion xyzw
+        # quaternion wxyz
 
-        self.gp_rot_qs[:, 0] = 0
+        self.gp_rot_qs[:, 0] = 1
         self.gp_rot_qs[:, 1] = 0
         self.gp_rot_qs[:, 2] = 0
-        self.gp_rot_qs[:, 3] = 1
+        self.gp_rot_qs[:, 3] = 0
 
         self.gp_scales = torch.nn.Parameter(
             torch.ones((faces_cnt, 3), dtype=utils.FLOAT))
         # [F, 3]
 
-        self.gp_shs = torch.nn.Parameter(torch.ones(
-            (faces_cnt, (self.gp_sh_degree + 1)**2, 3),
+        self.gp_colors = torch.nn.Parameter(torch.ones(
+            (faces_cnt, color_channels_cnt),
+            dtype=utils.FLOAT))
+
+        self.gp_opacities = torch.nn.Parameter(torch.ones(
+            (faces_cnt, 1),
             dtype=utils.FLOAT))
 
     def forward(
         self,
-        cameras: pytorch3d.renderer.cameras.CamerasBase,
-        images: torch.Tensor,  # [C, H, W]
+        camera_transform: transform_utils.ObjectTransform,
+        camera_config: camera_utils.CameraConfig,
+        imgs: torch.Tensor,  # [..., C, H, W]
         blending_param: object,
     ):
+        device = next(self.paremeters()).device
+
+        color_channels_cnt = self.gp_colors.shape[-1]
+
+        H, W = -1, -2
+
+        H, W = utils.CheckShapes(imgs, (..., color_channels_cnt, H, W))
+
         avatar_model: avatar_utils.AvatarModel = \
             self.avatar_blending_layer(blending_param)
 
-        faces = avatar_model.faces
+        faces = avatar_model.GetFaces()
         # [F, 3]
 
-        vertex_positions = avatar_model.vertex_positions
+        vertex_positions = avatar_model.GetVertexPositions()
         # [..., V, 3]
 
         vertex_positions_a = vertex_positions[..., faces[:, 0], :]
@@ -150,15 +172,18 @@ class Model(torch.nn.Model):
         face_coord_result = GetFaceCoord(
             vertex_positions_a, vertex_positions_b, vertex_positions_c)
 
+        face_coord_rot_qs = utils.RotMatToQuaternion(
+            face_coord_result.normalized_Ts[..., :3, :3],
+            order="WXYZ",
+        )
+
         gp_global_means = face_coord_result.Ts[..., :3, 3]
         # [..., F, 3]
 
-        gp_global_rot_mats = face_coord_result.normalized_Ts[..., :3, :3] @ \
-            utils.QuaternionToRotMat(self.gp_rot_qs)
-        # [..., F, 3, 3]
-
-        gp_global_rot_qs = utils.RotMatToQuaternion(
-            gp_global_rot_mats, order="wxyz")
+        gp_global_rot_qs = utils.QuaternionMul(
+            face_coord_rot_qs, self.gp_rot_qs,
+            order_1="WXYZ", order_2="WXYZ", order_out="WXYZ")
+        # [..., F, 3, 3] wxyz
 
         face_area_vec = face_coord_result.Ts[..., :3, 3]
         # [..., F, 3]
@@ -170,25 +195,37 @@ class Model(torch.nn.Model):
         # [..., F, 3]
 
         rendered_img: torch.Tensor = gaussian_utils.RenderGaussian(
-            gp_sh_degree=self.gp_sh_degree,
+            camera_transform=camera_transform,
+            camera_config=camera_config,
+
+            sh_degree=0,
+
+            bg_color=torch.ones((color_channels_cnt,),
+                                dtype=utils.FLOAT, device=device),
 
             gp_means=gp_global_means,
             gp_rots=gp_global_rot_qs,
             gp_scales=gp_global_scales,
-            gp_shs=self.gp_shs,
+
+            gp_shs=torch.Tensor([]),
+            gp_colors=self.gp_colors,
+
+            gp_opacities=self.gp_opacities,
+
+            device=device,
         )  # [..., C, H, W]
 
-        mesh_data = avatar_model.mesh_data
+        mesh_data = avatar_model.GetMeshData()
 
         if not self.training:
             rgb_loss = None
         else:
-            rgb_loss = (rendered_img - images).square()
+            rgb_loss = (rendered_img - imgs).square()
 
         if not self.training:
             lap_loss = None
         else:
-            lap_diff = avatar_model.mesh_data.GetLapDiff(
+            lap_diff = mesh_data.GetLapDiff(
                 avatar_model.vertex_positions)
             # [..., V, 3]
 
@@ -197,10 +234,16 @@ class Model(torch.nn.Model):
         if not self.training:
             normal_sim_loss = None
         else:
-            normal_sim = avatar_model.mesh_data.GetNormalSim(
-                avatar_model.vertex_positions)
+            normal_sim = mesh_data.GetNormalSim(
+                face_coord_result.normalized_Ts[..., :3, 2]
+                # the z axis of each face
+            )
             # [..., FP]
 
             normal_sim_loss = normal_sim.mean()
 
-        pass
+        GoMAvatarModelForwardResult(
+            rgb_loss=rgb_loss,
+            lap_loss=lap_loss,
+            normal_sim_loss=normal_sim_loss,
+        )

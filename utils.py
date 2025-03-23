@@ -34,7 +34,7 @@ Z_AXIS = torch.tensor([0, 0, 1], dtype=FLOAT)
 
 
 DEPTH_NEAR = 0.01
-DEPTH_FAR = 100
+DEPTH_FAR = 100.0
 
 
 class Empty:
@@ -78,6 +78,18 @@ def MinMax(x, y):
 def Clamp(x, lb, ub):
     assert lb <= ub
     return max(lb, min(x, ub))
+
+
+@beartype
+def RandInt(lb: int, rb: int):
+    assert lb <= rb
+    return random.randint(lb, rb)
+
+
+@beartype
+def RandFloat(lb: float, rb: float):
+    assert lb <= rb
+    return random.random() * (rb - lb) + lb
 
 
 class UnimplementationError(Exception):
@@ -131,10 +143,10 @@ class Timer:
 @beartype
 def AllocateID(lb: int, rb: int, s=None):
     if s is None:
-        return random.randint(lb, rb)
+        return RandInt(lb, rb)
 
     while True:
-        ret = random.randint(lb, rb)
+        ret = RandInt(lb, rb)
 
         if ret not in s:
             return ret
@@ -193,9 +205,9 @@ def WritePickle(
 def ReadImage(path: os.PathLike, order: str):
     img = torchvision.io.decode_image(
         path, torchvision.io.ImageReadMode.RGB)
-    # [c, h, w]
+    # [C, H, W]
 
-    return einops.rearrange(img, f"c h w -> {order.lower()}")
+    return einops.rearrange(img, f"C H W -> {ToEinopsOrder(order)}")
 
 
 @beartype
@@ -207,7 +219,8 @@ def WriteImage(
     assert img.dim() == 3
 
     img = einops.rearrange(
-        img.to(dtype=torch.uint8, device=CPU), f"{order.lower()} -> c h w")
+        img.to(dtype=torch.uint8, device=CPU),
+        f"{ToEinopsOrder(order)} -> C H W")
 
     path = pathlib.Path(path)
 
@@ -225,25 +238,25 @@ def WriteImage(
 
 
 @beartype
-def ReadVideo(
-    path: os.PathLike,
-    order: str,  # permutation of t, c, h, w
-):
+def ReadVideo(path: os.PathLike):
     video = torchvision.io.read_video(
-        path, output_format="TCHW")
+        path,
+        output_format="TCHW",
+        pts_unit="sec",
+    )[0]
     # [T, C, H, W]
 
-    return einops.rearrange(video, f"t c h w -> {order.lower()}")
+    return video
 
 
 @beartype
 def WriteVideo(
     path: os.PathLike,
-    order: str,  # permutation of t, c, h, w
+    video: torch.Tensor,  # [T, C, H, W]
     fps: int,
     codec: str = "h264",
 ):
-    video = einops.rearrange(video, f"{order.lower()} -> t c h w")
+    assert video.dtype == torch.uint8
 
     torchvision.io.write_video(
         filename=path,
@@ -251,6 +264,13 @@ def WriteVideo(
         fps=fps,
         video_codec=codec,
     )
+
+
+@beartype
+def ToEinopsOrder(order: str):
+    order = order.upper()
+    assert order.isalpha()
+    return " ".join(order)
 
 
 class Dir(enum.StrEnum):
@@ -275,63 +295,6 @@ class Dir(enum.StrEnum):
             case Dir.R: return Dir.L
 
         assert False, f"Unknown value {self}."
-
-
-class Dir3:
-    vecs = {
-        Dir.F: torch.tensor([0, 0, +1, 0], dtype=FLOAT),
-        Dir.B: torch.tensor([0, 0, -1, 0], dtype=FLOAT),
-        Dir.U: torch.tensor([0, +1, 0, 0], dtype=FLOAT),
-        Dir.D: torch.tensor([0, -1, 0, 0], dtype=FLOAT),
-        Dir.L: torch.tensor([-1, 0, 0, 0], dtype=FLOAT),
-        Dir.R: torch.tensor([+1, 0, 0, 0], dtype=FLOAT),
-    }
-
-    zero_vec = torch.tensor([0, 0, 0, 1], dtype=FLOAT)
-
-    def __init__(self, dir_x: Dir, dir_y: Dir, dir_z: Dir):
-        self.dirs = (dir_x, dir_y, dir_z)
-
-        assert self.dirs.count(Dir.F) + self.dirs.count(Dir.B) == 1
-        assert self.dirs.count(Dir.U) + self.dirs.count(Dir.D) == 1
-        assert self.dirs.count(Dir.L) + self.dirs.count(Dir.R) == 1
-
-        self.trans = torch.stack([
-            Dir3.vecs[self.dirs[0]],
-            Dir3.vecs[self.dirs[1]],
-            Dir3.vecs[self.dirs[2]],
-            Dir3.zero_vec,
-        ], dim=1)
-
-    @staticmethod
-    def FromStr(dirs: str):
-        assert len(dirs) == 3
-        dirs = dirs.upper()
-        return Dir3(Dir[dirs[0]], Dir[dirs[1]], Dir[dirs[2]])
-
-    def __getitem__(self, idx: int):
-        return self.dirs[idx]
-
-    def __iter__(self):
-        return iter(self.dirs)
-
-    def __eq__(self, obj: object):
-        if not isinstance(obj, Dir3):
-            return False
-
-        return self.dirs == obj.dirs
-
-    def __ne__(self, obj: object):
-        return not (self == obj)
-
-    def __hash__(self):
-        return hash(self.dirs)
-
-    def __str__(self):
-        return f"({self.dirs[0]}, {self.dirs[1]}, {self.dirs[2]})"
-
-    def GetTransTo(self, coord3: typing.Self) -> torch.Tensor:  # [4, 4]
-        return torch.inverse(coord3.trans) @ self.trans
 
 
 @beartype
@@ -396,8 +359,8 @@ def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
 @beartype
 def CheckQuaternionOrder(order: str):
     assert len(order) == 4
-    order = order.lower()
-    assert all(d in order for d in "wxyz")
+    order = order.upper()
+    assert all(d in order for d in "WXYZ")
     return order
 
 
@@ -412,10 +375,10 @@ def GetQuaternionWXYZ(
 
     for i, k in enumerate(CheckQuaternionOrder(order)):
         match k:
-            case "w": w = q[..., i]
-            case "x": x = q[..., i]
-            case "y": y = q[..., i]
-            case "z": z = q[..., i]
+            case "W": w = q[..., i]
+            case "X": x = q[..., i]
+            case "Y": y = q[..., i]
+            case "Z": z = q[..., i]
 
     return w, x, y, z
 
@@ -433,10 +396,10 @@ def SetQuaternionWXYZ(
 
     for i, k in enumerate(CheckQuaternionOrder(order)):
         match k:
-            case "w": dst[..., i] = w
-            case "x": dst[..., i] = x
-            case "y": dst[..., i] = y
-            case "z": dst[..., i] = z
+            case "W": dst[..., i] = w
+            case "X": dst[..., i] = x
+            case "Y": dst[..., i] = y
+            case "Z": dst[..., i] = z
 
 
 @beartype
@@ -719,7 +682,7 @@ def QuaternionToAxisAngle(
 
 
 @beartype
-def AxisAngleToRotMat_(
+def _AxisAngleToRotMat(
     *,
     axis: torch.Tensor,  # [..., 3]
     angle: typing.Optional[torch.Tensor],  # [...]
@@ -798,7 +761,7 @@ def AxisAngleToRotMat(
     else:
         CheckShapes(out, [..., *out_shape])
 
-    AxisAngleToRotMat_(
+    _AxisAngleToRotMat(
         axis=axis,
         angle=angle,
         out=out,
@@ -931,15 +894,11 @@ def RotMatToQuaternion(
     rot_mat: torch.Tensor,  # [..., 3, 3]
     *,
     order: str,  # permutation of "wxyz"
-    out: typing.Optional[torch.Tensor],  # [..., 4]
+    out: typing.Optional[torch.Tensor] = None,  # [..., 4]
 ) -> torch.Tensor:  # [..., 4]
     CheckShapes(rot_mat, (..., 3, 3))
 
-    assert len(order) == 4
-
-    order = order.lower()
-
-    assert all(d in order for d in "wxyz")
+    order = CheckQuaternionOrder(order)
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
@@ -982,8 +941,8 @@ def QuaternionMul(
         out = torch.empty(
             batch_shape, dtype=PromoteTypes(q1, q2), device=CheckDevice(q1, q2))
 
-    q1x, q1y, q1z, q1w = GetQuaternionWXYZ(q1, order_1)
-    q2x, q2y, q2z, q2w = GetQuaternionWXYZ(q1, order_2)
+    q1w, q1x, q1y, q1z = GetQuaternionWXYZ(q1, order_1)
+    q2w, q2x, q2y, q2z = GetQuaternionWXYZ(q2, order_2)
 
     out_w = q1w * q2w - q1x * q2x - q1y * q2y - q1z * q2z
     out_x = q1w * q2x + q1x * q2w + q1y * q2z - q1z * q2y

@@ -6,13 +6,15 @@ import h5py
 import torch
 from beartype import beartype
 
-from . import camera_utils, smplx_utils, utils
+from . import camera_utils, smplx_utils, transform_utils, utils
 
 
+@beartype
 @dataclasses.dataclass
 class SubjectData:
     video: torch.Tensor  # [T, C, H, W]
 
+    camera_transform: transform_utils.ObjectTransform
     camera_config: camera_utils.CameraConfig
 
     model_data: smplx_utils.SMPLXModelData
@@ -25,7 +27,10 @@ def _ReadCamera(
     subject_dir: pathlib.Path,
     img_h: int,
     img_w: int,
-) -> camera_utils.CameraConfig:
+) -> tuple[
+    transform_utils.ObjectTransform,  # camera <-> world
+    camera_utils.CameraConfig,
+]:
     camera = utils.ReadPickle(subject_dir / "camera.pkl")
 
     fx = float(camera['camera_f'][0])
@@ -42,6 +47,8 @@ def _ReadCamera(
 
     """
 
+    camera_transform = transform_utils.ObjectTransform.FromMatching("RDF")
+
     camera_config = camera_utils.CameraConfig.FromSlopeUDLR(
         slope_u=cy / fy,
         slope_d=(img_h - cy) / fy,
@@ -53,16 +60,17 @@ def _ReadCamera(
         img_w=img_w,
     )
 
-    return camera_config
+    return camera_transform, camera_config
 
 
 @beartype
 def _ReadSMPLBlendingParam(
     subject_dir: pathlib.Path,
     smplx_model_data: smplx_utils.SMPLXModelData,
+    device: torch.device,
 ) -> smplx_utils.SMPLXBlendingParam:
     body_shapes_cnt = smplx_model_data.body_shape_dirs.shape[-1]
-    poses_cnt = smplx_model_data.body_joints_cnt * 3
+    poses_cnt = smplx_model_data.body_joints_cnt
     # global_rot + smplx_utils.BODY_POSES_CNT
 
     d = h5py.File(subject_dir / "reconstructed_poses.hdf5")
@@ -123,10 +131,10 @@ def _ReadSMPLBlendingParam(
     # ---
 
     return smplx_utils.SMPLXBlendingParam(
-        body_shapes=body_shapes,
-        global_transl=global_transl,
-        global_rot=global_rot,
-        body_poses=body_poses,
+        body_shapes=body_shapes.to(dtype=utils.FLOAT, device=device),
+        global_transl=global_transl.to(dtype=utils.FLOAT, device=device),
+        global_rot=global_rot.to(dtype=utils.FLOAT, device=device),
+        body_poses=body_poses.to(dtype=utils.FLOAT, device=device),
     )
 
 
@@ -134,6 +142,7 @@ def _ReadSMPLBlendingParam(
 def ReadSubject(
     subject_dir: os.PathLike,
     model_data_dict: dict[str, smplx_utils.SMPLXModelData],
+    device: torch.device,
 ):
     subject_dir = pathlib.Path(subject_dir)
 
@@ -156,13 +165,14 @@ def ReadSubject(
 
     img_h, img_w = video.shape[2:]
 
-    camera_config = _ReadCamera(subject_dir, img_h, img_w)
+    camera_transform, camera_config = \
+        _ReadCamera(subject_dir, img_h, img_w)
 
-    blending_param = _ReadSMPLBlendingParam(
-        subject_dir, model_data)
+    blending_param = _ReadSMPLBlendingParam(subject_dir, model_data, device)
 
     ret = SubjectData(
         video=video,
+        camera_transform=camera_transform,
         camera_config=camera_config,
         model_data=model_data,
         blending_param=blending_param,

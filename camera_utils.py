@@ -37,8 +37,8 @@ def MakeView(
     u_vec = torch.cross(r_vec, f_vec, dim=0)
 
     return transform_utils.ObjectTransform.FromMatching(
+        dirs="FRU",
         pos=origin,
-        dirs=utils.Dir3.FromStr("FRU"),
         vecs=(f_vec, r_vec, u_vec),
     )
 
@@ -238,7 +238,8 @@ class CameraConfig:
 @beartype
 @dataclasses.dataclass
 class ProjConfig:
-    dirs: utils.Dir3
+    camera_proj_transform: transform_utils.ObjectTransform
+    # Describe the transform relation between camera and proj coord
 
     delta_u: float
     delta_d: float
@@ -266,7 +267,8 @@ def MakeProjConfig_OpenGL(
     match target_coord:
         case Coord.NDC:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUB"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUB"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -282,7 +284,8 @@ def MakeProjConfig_OpenGL(
 
         case Coord.Screen:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUB"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUB"),
 
                 delta_u=camera_config.img_h / 2,
                 delta_d=camera_config.img_h / 2,
@@ -308,7 +311,8 @@ def MakeProjConfig_OpenCV(
     match target_coord:
         case Coord.NDC:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RDF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RDF"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -324,7 +328,8 @@ def MakeProjConfig_OpenCV(
 
         case Coord.Screen:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RDF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RDF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -355,7 +360,8 @@ def MakeProjConfig_Pytorch3D(
             w_ratio = camera_config.img_w / img_s
 
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("LUF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("LUF"),
 
                 delta_u=h_ratio,
                 delta_d=h_ratio,
@@ -371,7 +377,8 @@ def MakeProjConfig_Pytorch3D(
 
         case Coord.Screen:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RDF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RDF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -397,7 +404,8 @@ def MakeProjConfig_Unity(
     match target_coord:
         case Coord.NDC:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUF"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -413,7 +421,8 @@ def MakeProjConfig_Unity(
 
         case Coord.Screen:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUF"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -440,7 +449,8 @@ def MakeProjConfig_Blender(
     match target_coord:
         case Coord.NDC:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUB"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUB"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -456,7 +466,8 @@ def MakeProjConfig_Blender(
 
         case Coord.Screen:
             proj_config = ProjConfig(
-                dirs=utils.Dir3.FromStr("RUB"),
+                camera_proj_transform=transform_utils.ObjectTransform.
+                FromMatching("RUB"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -501,14 +512,27 @@ def MakeProjConfig(
 def MakeProjMatWithConfig(
     *,
     camera_config: CameraConfig,
-    view_coord: utils.Dir3,
+    camera_view_transform: transform_utils.ObjectTransform,
     proj_config: ProjConfig,
     dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
-    std_dirs = utils.Dir3.FromStr("LUF")
+    camera_std_transform = transform_utils.ObjectTransform.FromMatching("LUF")
+    # camera <-> std
 
-    src_to_std = view_coord.GetTransTo(std_dirs)
-    std_to_dst = std_dirs.GetTransTo(proj_config.dirs)
+    # camera_view_transform
+    # camera <-> view
+
+    # proj_config.camera_proj_transform
+    # camera <-> proj
+
+    src_to_std = camera_view_transform.GetTransTo(camera_std_transform)
+    # view -> std
+    # [..., 4, 4]
+
+    std_to_dst = camera_std_transform.GetTransTo(
+        proj_config.camera_proj_transform)
+    # std -> proj
+    # [4, 4]
 
     src_u = +camera_config.foc_u
     src_d = -camera_config.foc_d
@@ -528,16 +552,19 @@ def MakeProjMatWithConfig(
     src_lr = src_l - src_r
     src_fn = src_f - src_n
 
-    std_dst_points = torch.tensor([
-        [dst_l,     0, dst_b, 1],
-        [dst_r,     0, dst_b, 1],
-        [0, dst_u, dst_b, 1],
-        [0, dst_d, dst_b, 1],
+    dst_ud_mid = (src_u * dst_d - src_d * dst_u) / src_ud
+    dst_lr_mid = (src_l * dst_r - src_r * dst_l) / src_lr
 
-        [dst_l,     0, dst_f, 1],
-        [dst_r,     0, dst_f, 1],
-        [0, dst_u, dst_f, 1],
-        [0, dst_d, dst_f, 1],
+    std_dst_points = torch.tensor([
+        [dst_l, dst_ud_mid, dst_b, 1],
+        [dst_r, dst_ud_mid, dst_b, 1],
+        [dst_lr_mid, dst_u, dst_b, 1],
+        [dst_lr_mid, dst_d, dst_b, 1],
+
+        [dst_l, dst_ud_mid, dst_f, 1],
+        [dst_r, dst_ud_mid, dst_f, 1],
+        [dst_lr_mid, dst_u, dst_f, 1],
+        [dst_lr_mid, dst_d, dst_f, 1],
     ], dtype=dtype)
 
     match camera_config.proj_type:
@@ -571,7 +598,7 @@ def MakeProjMatWithConfig(
 
             err = utils.GetL2RMS(re_std_dst_points - std_dst_points)
 
-            assert err <= 1e-4
+            assert err <= 1e-4, f"{err=}"
 
         case ProjType.PERS:
             std_src_points = torch.tensor([
@@ -603,26 +630,26 @@ def MakeProjMatWithConfig(
 
             err = utils.GetL2RMS(re_std_dst_points - std_dst_points)
 
-            assert err <= 1e-4
+            assert err <= 1e-4, f"{err=}"
 
         case _:
             assert False, f"Unknown proj type {camera_config.proj_type}."
 
-    return std_to_dst @ M @ src_to_std
+    return (std_to_dst @ M) @ src_to_std
 
 
 @beartype
 def MakeProjMat(
     *,
     camera_config: CameraConfig,
-    view_dirs: utils.Dir3,
+    camera_view_transform: transform_utils.ObjectTransform,
     convention: Convention,
     target_coord: Coord,
     dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
     return MakeProjMatWithConfig(
         camera_config=camera_config,
-        view_coord=view_dirs,
+        camera_view_transform=camera_view_transform,
         proj_config=MakeProjConfig(
             camera_config=camera_config,
             convention=convention,

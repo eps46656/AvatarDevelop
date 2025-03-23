@@ -7,6 +7,7 @@ from beartype import beartype
 from . import utils
 
 
+@beartype
 @dataclasses.dataclass
 class KinTree:
     joints_cnt: int

@@ -614,6 +614,7 @@ def main1():
         gp_scales=gp_scales,
         gp_rots=gp_rots,
         gp_shs=gp_shs,
+        order="c h w",
     )
 
     img = result["color"]
@@ -626,7 +627,7 @@ def main1():
     utils.WriteImage(
         DIR / "out.png",
         img * 255,
-        "h w c",
+        "c h w",
     )
 
 

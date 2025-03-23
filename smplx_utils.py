@@ -5,7 +5,7 @@ import typing
 import torch
 from beartype import beartype
 
-from . import blending_utils, kin_utils, mesh_utils, utils
+from . import avatar_utils, blending_utils, kin_utils, mesh_utils, utils
 
 BODY_SHAPES_CNT = 10
 EXPR_SHAPES_CNT = 10
@@ -37,8 +37,8 @@ class SMPLXModelData:
 
     texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
 
-    faces: typing.Optional[torch.Tensor]  # [..., F, 3]
-    texture_faces: typing.Optional[torch.Tensor]  # [..., F, 3]
+    faces: typing.Optional[torch.Tensor]  # [F, 3]
+    texture_faces: typing.Optional[torch.Tensor]  # [F, 3]
 
     lbs_weights: torch.Tensor  # [..., V, J]
 
@@ -69,10 +69,10 @@ class SMPLXModelData:
             utils.CheckShapes(self.texture_vertex_positions, (..., -1, 2))
 
         F, = (0,) if self.faces is None else\
-            utils.CheckShapes(self.texture_faces, (..., -1, 3))
+            utils.CheckShapes(self.faces, (-1, 3))
 
         TF, = (0,) if self.texture_faces is None else\
-            utils.CheckShapes(self.texture_faces, (..., -1, 3))
+            utils.CheckShapes(self.texture_faces, (-1, 3))
 
         BS, = (0, ) if self.body_shape_dirs is None else \
             utils.CheckShapes(self.body_shape_dirs, (..., V, 3, -1))
@@ -97,7 +97,9 @@ class SMPLXModelData:
         utils.CheckShapes(self.lbs_weights, (..., V, J))
 
         utils.CheckShapes(self.body_shape_joint_regressor, (..., J, 3, BS))
-        utils.CheckShapes(self.expr_shape_joint_regressor, (..., J, 3, ES))
+
+        if self.expr_shape_joint_regressor is not None:
+            utils.CheckShapes(self.expr_shape_joint_regressor, (..., J, 3, ES))
 
         if 0 < HANDJ:
             assert self.lhand_poses_mean is not None
@@ -125,8 +127,8 @@ class SMPLXModel:
 
     texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
 
-    faces: typing.Optional[torch.Tensor]  # [..., F, 3]
-    texture_faces: typing.Optional[torch.Tensor]  # [..., F, 3]
+    faces: typing.Optional[torch.Tensor]  # [F, 3]
+    texture_faces: typing.Optional[torch.Tensor]  # [F, 3]
 
     mesh_data: mesh_utils.MeshData
 
@@ -202,9 +204,11 @@ class SMPLXBlendingParam:
 
     blending_vertex_normal: bool = False
 
-    def Check(self,
-              model_data: SMPLXModelData,
-              single_batch: bool):
+    def Check(
+        self,
+        model_data: SMPLXModelData,
+        single_batch: bool,
+    ):
         model_data.Check()
 
         BS = model_data.GetBodyShapesCnt()
@@ -227,8 +231,6 @@ class SMPLXBlendingParam:
             "lhand_poses": (HANDJ, 3),
             "rhand_poses": (HANDJ, 3),
         }
-
-        print(f"{tensor_shape_constraints=}")
 
         for field in dataclasses.fields(SMPLXBlendingParam):
             field_name = field.name
@@ -261,28 +263,53 @@ class SMPLXBlendingParam:
         assert self.lhand_poses is not None
         assert self.rhand_poses is not None
 
-        lhand_poses = self.lhand_poses + model_data.lhand_poses_mean
-        rhand_poses = self.rhand_poses + model_data.rhand_poses_mean
+        lhand_en = \
+            self.lhand_poses is not None and \
+            model_data.lhand_poses_mean is not None
+
+        rhand_en = \
+            self.rhand_poses is not None and \
+            model_data.rhand_poses_mean is not None
+
+        if lhand_en:
+            lhand_poses = self.lhand_poses + model_data.lhand_poses_mean
+
+        if rhand_en:
+            rhand_poses = self.rhand_poses + model_data.rhand_poses_mean
 
         poses_batch_dims = utils.BroadcastShapes(
             self.global_rot.shape[:-1],
             self.body_poses.shape[:-2],
-            self.jaw_poses.shape[:-2],
-            self.leye_poses.shape[:-2],
-            self.reye_poses.shape[:-2],
-            lhand_poses.shape[:-2],
-            rhand_poses.shape[:-2],
+
+            tuple() if self.jaw_poses is None else self.jaw_poses.shape[:-2],
+            tuple() if self.leye_poses is None else self.leye_poses.shape[:-2],
+            tuple() if self.reye_poses is None else self.reye_poses.shape[:-2],
+            tuple() if not lhand_en else lhand_poses.shape[:-2],
+            tuple() if not rhand_en else rhand_poses.shape[:-2],
         )
 
-        ret = torch.cat((
-            self.global_rot.expand(poses_batch_dims + (-1, 3)),
+        poses = [
+            self.global_rot.unsqueeze(-2).expand(poses_batch_dims + (-1, 3)),
             self.body_poses.expand(poses_batch_dims + (-1, 3)),
-            self.jaw_poses.expand(poses_batch_dims + (-1, 3)),
-            self.leye_poses.expand(poses_batch_dims + (-1, 3)),
-            self.reye_poses.expand(poses_batch_dims + (-1, 3)),
-            lhand_poses.expand(poses_batch_dims + (-1, 3)),
-            rhand_poses.expand(poses_batch_dims + (-1, 3)),
-        ), dim=-2)
+        ]
+
+        if self.jaw_poses is not None:
+            poses.append(self.jaw_poses.expand(poses_batch_dims + (-1, 3)))
+
+        if self.leye_poses is not None:
+            poses.append(self.leye_poses.expand(poses_batch_dims + (-1, 3)))
+
+        if self.reye_poses is not None:
+            poses.append(self.reye_poses.expand(poses_batch_dims + (-1, 3)))
+
+        if lhand_en:
+            poses.append(lhand_poses.expand(poses_batch_dims + (-1, 3)))
+
+        if rhand_en:
+            poses.append(rhand_poses.expand(poses_batch_dims + (-1, 3)))
+
+        ret = torch.cat(poses, dim=-2)
+        # [..., ?, 3]
 
         return ret
 
@@ -321,7 +348,8 @@ def SMPLXBlending(
                             model_data.body_shape_dirs,
                             blending_param.body_shapes)
 
-    if blending_param.expr_shapes is not None:
+    if model_data.expr_shape_dirs is not None and \
+       blending_param.expr_shapes is not None:
         vps += torch.einsum("...vxb,...b->...vx",
                             model_data.expr_shape_dirs,
                             blending_param.expr_shapes)
@@ -337,7 +365,8 @@ def SMPLXBlending(
             blending_param.body_shapes,
         )
 
-    if blending_param.expr_shapes is not None:
+    if model_data.expr_shape_joint_regressor is not None and \
+       blending_param.expr_shapes is not None:
         binding_joint_ts += torch.einsum(
             "...jxb,...b->...jx",
             model_data.expr_shape_joint_regressor,
@@ -377,11 +406,12 @@ def SMPLXBlending(
             target_pose_ts=binding_pose_ts,
         )
 
-    joint_ts = lbs_result.target_joint_Ts[..., :3, 3]
-
     if blending_param.global_transl is not None:
-        joint_ts += blending_param.global_transl
-        vps = blending_param.global_transl + lbs_result.blended_vertex_positions
+        lbs_result.target_joint_Ts[..., :, :3, 3] += \
+            blending_param.global_transl.unsqueeze(-2)
+
+        vps = blending_param.global_transl.unsqueeze(-2) + \
+            lbs_result.blended_vertex_positions
 
     return SMPLXModel(
         kin_tree=model_data.kin_tree,
@@ -592,13 +622,23 @@ def ReadSMPLXModelData(
 
 
 @beartype
-class SMPLXModelBuilder:
+class SMPLXModelBuilder(avatar_utils.AvatarBlendingLayer):
+    def _TryRegistParameter(self, x: typing.Optional[torch.Tensor]):
+        if x is not None and isinstance(x, torch.nn.Parameter):
+            self.register_parameter("vertex_positions", x)
+
     def __init__(
         self,
         model_data: SMPLXModelData,
         device: torch.device,
     ):
+        super(SMPLXModelBuilder, self).__init__()
+
         self.model_data = model_data
+
+        self._TryRegistParameter(self.model_data.vertex_positions)
+
+        # ---
 
         self.device = device
 
@@ -606,10 +646,10 @@ class SMPLXModelBuilder:
 
         self.default_blending_param = SMPLXBlendingParam(
             body_shapes=torch.zeros(
-                (self.model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.GetBodyShapesCnt(),), dtype=utils.FLOAT, device=self.device),
 
             expr_shapes=torch.zeros(
-                (self.model_data.expr_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (self.model_data.GetExprShapesCnt(),), dtype=utils.FLOAT, device=self.device),
 
             global_transl=torch.zeros(
                 (3,), dtype=utils.FLOAT, device=self.device),
@@ -690,7 +730,8 @@ class SMPLXModelBuilder:
 
     def forward(self, blending_param: SMPLXBlendingParam):
         return SMPLXBlending(
-            self.model_data,
-            MergeBlendingParam(blending_param, self.default_blending_param),
+            model_data=self.model_data,
+            blending_param=MergeBlendingParam(
+                blending_param, self.default_blending_param),
             device=self.device,
         )

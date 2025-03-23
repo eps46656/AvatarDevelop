@@ -3,9 +3,10 @@ import json
 import math
 import pathlib
 import pickle
+
 import torch
 
-import utils
+from . import utils
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -100,18 +101,18 @@ def main2():
     for _ in range(1):
         q = utils.RandUnit((B, 4), dtype=FLOAT, device=DEVICE)
 
-        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", out_shape=(3, 3))
+        rot_mat = utils.QuaternionToRotMat(q, order="XYZW", out_shape=(3, 3))
 
         assert rot_mat.isfinite().all()
 
         CheckIsRotMat(rot_mat)
 
-        re_q = utils.RotMatToQuaternion(rot_mat, order="xyzw")
+        re_q = utils.RotMatToQuaternion(rot_mat, order="XYZW")
 
         assert re_q.isfinite().all()
 
         re_rot_mat = utils.QuaternionToRotMat(
-            re_q, order="xyzw", out_shape=(3, 3))
+            re_q, order="XYZW", out_shape=(3, 3))
 
         assert re_rot_mat.isfinite().all()
 
@@ -132,31 +133,56 @@ def main3():
     for _ in range(1):
         q = utils.RandUnit((B, 4), dtype=FLOAT, device=DEVICE)
 
-        axis, angle = utils.QuaternionToAxisAngle(q, order="xyzw")
+        axis, angle = utils.QuaternionToAxisAngle(q, order="XYZW")
 
         assert axis.isfinite().all()
         assert angle.isfinite().all()
 
-        re_q = utils.AxisAngleToQuaternion(axis, angle, order="xyzw")
+        re_q = utils.AxisAngleToQuaternion(axis, angle, order="XYZW")
 
         assert re_q.isfinite().all()
 
-        rot_mat = utils.QuaternionToRotMat(q, order="xyzw", out_shape=(3, 3))
+        rot_mat = utils.QuaternionToRotMat(q, order="XYZW", out_shape=(3, 3))
 
         assert rot_mat.isfinite().all()
 
         CheckIsRotMat(rot_mat)
 
         re_rot_mat = utils.QuaternionToRotMat(
-            re_q, order="xyzw", out_shape=(3, 3))
+            re_q, order="XYZW", out_shape=(3, 3))
 
         CheckIsRotMat(rot_mat)
 
         CheckIsZero(rot_mat - re_rot_mat)
 
 
+def main4():
+    B = 10000
+
+    for _ in range(1):
+        p = utils.RandQuaternion((B, 4), dtype=FLOAT, device=DEVICE)
+        q = utils.RandQuaternion((B, 4), dtype=FLOAT, device=DEVICE)
+
+        mat_p = utils.QuaternionToRotMat(p, order="XYZW", out_shape=(3, 3))
+        mat_q = utils.QuaternionToRotMat(q, order="XYZW", out_shape=(3, 3))
+
+        mat_pq = mat_p @ mat_q
+
+        r = utils.QuaternionMul(
+            p, q,
+            order_1="XYZW", order_2="XYZW", order_out="XYZW")
+
+        mat_r = utils.QuaternionToRotMat(r, order="XYZW", out_shape=(3, 3))
+
+        CheckIsRotMat(mat_pq)
+        CheckIsRotMat(mat_r)
+
+        CheckIsZero(mat_pq - mat_r)
+
+
 if __name__ == "__main__":
     main1()
     main2()
     main3()
+    main4()
     print("Finish")

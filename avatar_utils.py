@@ -47,7 +47,10 @@ class AvatarModel:
 
 
 @beartype
-class AvatarBlendingLayer(torch.nn.Model):
+class AvatarBlendingLayer(torch.nn.Module):
+    def __init__(self):
+        super(AvatarBlendingLayer, self).__init__()
+
     def GetKinTree(self) -> kin_utils.KinTree:
         raise utils.UnimplementationError()
 

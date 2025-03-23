@@ -29,10 +29,22 @@ class ObjectTransform:
 
     @staticmethod
     def FromMatching(
-        pos: torch.Tensor,  # [..., 3]
-        dirs: utils.Dir3,
-        vecs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],  # [..., 3]
+        dirs: str | tuple[utils.Dir, utils.Dir, utils.Dir],
+        pos: torch.Tensor = utils.ORIGIN,  # [..., 3]
+        vecs: tuple[torch.Tensor, torch.Tensor, torch.Tensor] = (
+            utils.X_AXIS,
+            utils.Y_AXIS,
+            utils.Z_AXIS,
+        ),  # [..., 3]
     ):
+        if isinstance(dirs, str):
+            assert len(dirs) == 3
+            dirs = (utils.Dir[dirs[0]], utils.Dir[dirs[1]], utils.Dir[dirs[2]])
+
+        assert dirs.count(utils.Dir.F) + dirs.count(utils.Dir.B) == 1
+        assert dirs.count(utils.Dir.U) + dirs.count(utils.Dir.D) == 1
+        assert dirs.count(utils.Dir.L) + dirs.count(utils.Dir.R) == 1
+
         utils.CheckShapes(
             pos, (..., 3),
             vecs[0], (..., 3),
@@ -67,38 +79,6 @@ class ObjectTransform:
         trans[..., :3, 1] = u_vec.expand(s)
         trans[..., :3, 2] = l_vec.expand(s)
         trans[..., :3, 3] = pos.expand(s)
-        trans[..., 3, :3] = 0
-        trans[..., 3, 3] = 1
-
-        inv_trans = trans.inverse()
-
-        return ObjectTransform(trans, inv_trans)
-
-    @staticmethod
-    def FromDir3(dirs: utils.Dir3):
-        vecs = (
-            utils.X_AXIS,
-            utils.Y_AXIS,
-            utils.Z_AXIS,
-        )
-
-        f_vec, u_vec, l_vec = None, None, None
-
-        for dir, vec in zip(dirs, vecs):
-            match dir:
-                case utils.Dir.F: f_vec = +vec
-                case utils.Dir.B: f_vec = -vec
-                case utils.Dir.U: u_vec = +vec
-                case utils.Dir.D: u_vec = -vec
-                case utils.Dir.L: l_vec = +vec
-                case utils.Dir.R: l_vec = -vec
-
-        trans = torch.empty((4, 4),  dtype=utils.FLOAT)
-
-        trans[..., :3, 0] = f_vec
-        trans[..., :3, 1] = u_vec
-        trans[..., :3, 2] = l_vec
-        trans[..., :3, 3] = 0
         trans[..., 3, :3] = 0
         trans[..., 3, 3] = 1
 
@@ -158,31 +138,3 @@ class ObjectTransform:
         return ObjectTransform(
             self.trans @ trans,
             trans.inverse() @ self.inv_trans)
-
-
-def main1():
-    smplx_model_trans = ObjectTransform(
-        torch.zeros((3,), dtype=utils.FLOAT, device=utils.DEVICE),
-        (utils.Dir.F, utils.Dir.L, utils.Dir.U),
-
-        (
-            +utils.Z_AXIS,
-            +utils.X_AXIS,
-            +utils.Y_AXIS,
-        ),
-    )  # smplx <-> model coord
-
-    smplx_placement_trans = ObjectTransform(
-        torch.zeros((3,), dtype=utils.FLOAT, device=utils.DEVICE),
-
-        (utils.Dir.F, utils.Dir.R, utils.Dir.U),
-
-        (
-            +utils.Y_AXIS,
-            +utils.X_AXIS,
-            +utils.Z_AXIS,
-        ),
-    )  # smplx <-> world
-
-    trans_mat = smplx_model_trans.GetTransTo(smplx_placement_trans)
-    # model -> world
