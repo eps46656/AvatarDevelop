@@ -3,7 +3,9 @@ import os
 import pathlib
 
 import h5py
+import numpy as np
 import torch
+import tqdm
 from beartype import beartype
 
 from . import camera_utils, smplx_utils, transform_utils, utils
@@ -13,6 +15,7 @@ from . import camera_utils, smplx_utils, transform_utils, utils
 @dataclasses.dataclass
 class SubjectData:
     video: torch.Tensor  # [T, C, H, W]
+    mask: torch.Tensor  # [T, H, W]
 
     camera_transform: transform_utils.ObjectTransform
     camera_config: camera_utils.CameraConfig
@@ -20,6 +23,35 @@ class SubjectData:
     model_data: smplx_utils.SMPLXModelData
 
     blending_param: smplx_utils.SMPLXBlendingParam
+
+
+@beartype
+def _ReadMask(
+    subject_dir: pathlib.Path,
+    fps: int,
+    device: torch.device,
+):
+    mask_video_path = subject_dir / "masks.mp4"
+
+    if mask_video_path.exists():
+        return utils.ImageNormalize(
+            utils.ReadVideo(mask_video_path)[0].to(dtype=utils.FLOAT, device=device).mean(1))
+
+    f = h5py.File(subject_dir / "masks.hdf5")
+
+    masks = f["masks"]
+
+    T, H, W = masks.shape
+
+    ret = torch.empty((T, 1, H, W), dtype=torch.uint8)
+
+    for i in tqdm.tqdm(range(T)):
+        ret[i, 0] = torch.from_numpy(masks[i].astype(np.uint8) * 255)
+
+    utils.WriteVideo(mask_video_path, ret.expand((T, 3, H, W)), fps)
+
+    return utils.ImageNormalize(ret.to(dtype=utils.FLOAT, device=device)) \
+        .squeeze(1)
 
 
 @beartype
@@ -160,8 +192,12 @@ def ReadSubject(
     else:
         model_data = model_data_dict["male"]
 
-    video: torch.Tensor = utils.ReadVideo(subject_video_path, "t c h w")
+    video, audio, d = utils.ReadVideo(subject_video_path)
     # [T, C, H, W]
+
+    print(f"{d=}")
+
+    fps = int(d["video_fps"])
 
     img_h, img_w = video.shape[2:]
 
@@ -170,12 +206,15 @@ def ReadSubject(
 
     blending_param = _ReadSMPLBlendingParam(subject_dir, model_data, device)
 
+    mask = _ReadMask(subject_dir, fps, device)
+
     ret = SubjectData(
         video=video,
         camera_transform=camera_transform,
         camera_config=camera_config,
         model_data=model_data,
         blending_param=blending_param,
+        mask=mask,
     )
 
     return ret

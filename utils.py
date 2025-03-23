@@ -26,6 +26,7 @@ INT = torch.int32
 FLOAT = torch.float32
 
 CPU = torch.device("cpu")
+CUDA_DEVICE = torch.device("cuda")
 
 ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
 X_AXIS = torch.tensor([1, 0, 0], dtype=FLOAT)
@@ -41,6 +42,11 @@ class Empty:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(key, value)
+
+
+@beartype
+def Exit(code: int = 0):
+    sys.exit(code)
 
 
 @beartype
@@ -202,25 +208,20 @@ def WritePickle(
 
 
 @beartype
-def ReadImage(path: os.PathLike, order: str):
+def ReadImage(path: os.PathLike):
     img = torchvision.io.decode_image(
         path, torchvision.io.ImageReadMode.RGB)
     # [C, H, W]
 
-    return einops.rearrange(img, f"C H W -> {ToEinopsOrder(order)}")
+    return img
 
 
 @beartype
 def WriteImage(
     path: os.PathLike,
-    img: torch.Tensor,
-    order: str,
+    img: torch.Tensor,  # [C, H, W]
 ):
     assert img.dim() == 3
-
-    img = einops.rearrange(
-        img.to(dtype=torch.uint8, device=CPU),
-        f"{ToEinopsOrder(order)} -> C H W")
 
     path = pathlib.Path(path)
 
@@ -239,14 +240,14 @@ def WriteImage(
 
 @beartype
 def ReadVideo(path: os.PathLike):
-    video = torchvision.io.read_video(
+    video, audio, d = torchvision.io.read_video(
         path,
         output_format="TCHW",
         pts_unit="sec",
-    )[0]
+    )
     # [T, C, H, W]
 
-    return video
+    return video, audio, d
 
 
 @beartype
@@ -260,10 +261,25 @@ def WriteVideo(
 
     torchvision.io.write_video(
         filename=path,
-        video_array=video,
+        video_array=einops.rearrange(video, "t c h w -> t h w c"),
         fps=fps,
         video_codec=codec,
     )
+
+
+@beartype
+def ImageNormalize(img: torch.Tensor):
+    return torch.div(img, 255, out=torch.empty_like(img, dtype=FLOAT))
+
+
+@beartype
+def ImageDenormalize(img: torch.Tensor):
+    return (img * 255).round().clamp(0, 255).to(dtype=torch.uint8)
+
+
+@beartype
+def IsZeros(x: torch.Tensor):
+    return x.abs().max() <= 5e-4
 
 
 @beartype
@@ -357,6 +373,32 @@ def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
 
 
 @beartype
+def GetIdxes(shape):
+    return itertools.product(*(range(s) for s in shape))
+
+
+@beartype
+def PrintCudaMemUsage(device=None):
+    mem = torch.cuda.memory_allocated(device) * 1.0
+
+    unit = "Bytes"
+
+    if 1024 <= mem:
+        unit = "KiB"
+        mem /= 1024
+
+    if 1024 <= mem:
+        unit = "MiB"
+        mem /= 1024
+
+    if 1024 <= mem:
+        unit = "GiB"
+        mem /= 1024
+
+    print(f"Cuda Mem Usage ({device}): {mem} {unit}")
+
+
+@beartype
 def CheckQuaternionOrder(order: str):
     assert len(order) == 4
     order = order.upper()
@@ -443,17 +485,21 @@ def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]):
     k = max(len(shape) for shape in shapes)
 
     ret = tuple(
-        max((shape[i] if i < len(shape) else 1)
+        max((shape[i - k + len(shape)] if 0 <= i - k + len(shape) else 1)
             for shape in shapes)
         for i in range(k)
     )
 
-    assert all(all(
-        shape[i] == 1 or shape[i] == ret[i]
-        for i in range(-1, -1 - len(shape), -1))
-        for shape in shapes)
+    if all(all(
+            shape[i] == 1 or shape[i] == ret[i]
+            for i in range(-1, -1 - len(shape), -1))
+            for shape in shapes):
+        return ret
 
-    return ret
+    print(f"{shapes=}")
+    print(f"{ret=}")
+
+    assert False
 
 
 @beartype
@@ -607,7 +653,7 @@ def BoolMatMul(
     y = y.transpose(-2, -1).unsqueeze(-3)
     # [..., 1, R, Q]
 
-    return (x & y).max(dim=-1)[0]
+    return (x & y).max(-1)[0]
 
 
 @beartype
@@ -902,6 +948,32 @@ def RotMatToQuaternion(
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
+    """
+    max_map = rot_mat[..., 0, 0].maximum(rot_mat[..., 1, 1]).maximum(
+        rot_mat[..., 2, 2])
+
+    s = (1 + rot_mat[..., 0, 0] - rot_mat[..., 1, 1] - rot_mat[..., 2, 2]) \
+        .sqrt() * 2
+    w_0 = (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) / s
+    x_0 = s / 4
+    y_0 = (rot_mat[..., 0, 1] + rot_mat[..., 1, 0]) / s
+    z_0 = (rot_mat[..., 0, 2] + rot_mat[..., 2, 0]) / s
+
+    s = (1 - rot_mat[..., 0, 0] + rot_mat[..., 1, 1] - rot_mat[..., 2, 2]) \
+        .sqrt() * 2
+    w_1 = (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) / s
+    x_1 = (rot_mat[..., 0, 1] + rot_mat[..., 1, 0]) / s
+    y_1 = s / 4
+    z_1 = (rot_mat[..., 1, 2] + rot_mat[..., 2, 1]) / s
+
+    s = (1 - rot_mat[..., 0, 0] - rot_mat[..., 1, 1] + rot_mat[..., 2, 2]) \
+        .sqrt() * 2
+    w_2 = (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) / s
+    x_2 = (rot_mat[..., 0, 2] + rot_mat[..., 2, 0]) / s
+    y_2 = (rot_mat[..., 1, 2] + rot_mat[..., 2, 1]) / s
+    z_2 = s / 4
+    """
+
     k = (1 + tr).clamp(min=EPS).sqrt()
     l = 0.5 / k
 
@@ -1130,7 +1202,7 @@ def GetNormalizeH(
 ) -> torch.Tensor:  # [D+1, D+1]
     N, D = CheckShapes(points, (-1, -2))
 
-    mean = points.mean(dim=0, keepdim=True)
+    mean = points.mean(0, True)
     # [1, D]
 
     odist = VectorNorm(points - mean).mean()

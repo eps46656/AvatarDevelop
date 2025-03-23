@@ -627,7 +627,6 @@ def main1():
     utils.WriteImage(
         DIR / "out.png",
         img * 255,
-        "c h w",
     )
 
 

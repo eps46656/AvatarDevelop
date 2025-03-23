@@ -86,6 +86,23 @@ class ObjectTransform:
 
         return ObjectTransform(trans, inv_trans)
 
+    @property
+    def shape(self):
+        return self.trans.shape[:-2]
+
+    def __str__(self):
+        return "\n".join([
+            f"F: <{self.GetFVec()}>",
+            f"B: <{self.GetBVec()}>",
+            f"U: <{self.GetUVec()}>",
+            f"D: <{self.GetDVec()}>",
+            f"L: <{self.GetLVec()}>",
+            f"R: <{self.GetRVec()}>",
+        ])
+
+    def __repr__(self):
+        return str(self)
+
     def GetPos(self) -> torch.Tensor:
         return self.trans[..., :3, 3]
 

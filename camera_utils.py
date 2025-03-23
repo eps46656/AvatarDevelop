@@ -33,7 +33,7 @@ def MakeView(
     )
 
     f_vec = utils.Normalized(aim - origin, -1)
-    r_vec = utils.Normalized(torch.cross(f_vec, quasi_u_dir, dim=-1), -1)
+    r_vec = utils.Normalized(torch.cross(f_vec, quasi_u_dir, -1), -1)
     u_vec = torch.cross(r_vec, f_vec, dim=0)
 
     return transform_utils.ObjectTransform.FromMatching(

@@ -237,8 +237,7 @@ def main1():
 
     utils.WriteVideo(
         path=DIR / "output.mp4",
-        video=(out_frames * 255).round().to(dtype=torch.uint8).clamp(0, 255),
-        order="t c h w",
+        video=utils.ImageDenormalize(out_frames),
         fps=30,
     )
 

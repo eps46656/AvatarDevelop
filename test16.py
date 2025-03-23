@@ -5,7 +5,7 @@ import h5py
 import pickle
 import dataclasses
 
-from . import people_snapshot_utils
+from . import people_snapshot_utils, utils, smplx_utils, config
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -13,39 +13,58 @@ DIR = FILE.parents[0]
 DEVICE = torch.device("cpu")
 
 
-@beartype
-@dataclasses.dataclass
-class PeopleSnapshotData:
-    pass
-
-
-def main1():
-    people_snapshot_dir = DIR / "people_snapshot_public"
-
-    subject_name = "female-1-casual"
-
-    subject_dir = people_snapshot_dir / subject_name
-
-    print(f"{subject_dir / "camera.pkl"=}")
-
-    camera_f = read_pickle(subject_dir / "camera.pkl")
-
-    K, R, T, D = get_KRTD(camera_f)
-
-    print(f"{K=}")
-    print(f"{R=}")
-    print(f"{T=}")
-    print(f"{D=}")
-
-
 def main2():
+    smpl_model_data_path_dict = {
+        "male": config.SMPL_MALE_MODEL,
+        "female": config.SMPL_FEMALE_MODEL,
+        "neutral": config.SMPL_NEUTRAL_MODEL,
+    }
+
+    smplx_model_data_path_dict = {
+        "male": config.SMPLX_MALE_MODEL,
+        "female": config.SMPLX_FEMALE_MODEL,
+        "neutral": config.SMPLX_NEUTRAL_MODEL,
+    }
+
+    body_shapes_cnt = 10
+    expr_shapes_cnt = 0
+    body_joints_cnt = 24
+    jaw_joints_cnt = 0
+    eye_joints_cnt = 0
+    hand_joints_cnt = 0
+
+    model_data_dict = {
+        key: smplx_utils.ReadSMPLXModelData(
+            model_data_path=value,
+            body_shapes_cnt=body_shapes_cnt,
+            expr_shapes_cnt=expr_shapes_cnt,
+            body_joints_cnt=body_joints_cnt,
+            jaw_joints_cnt=jaw_joints_cnt,
+            eye_joints_cnt=eye_joints_cnt,
+            hand_joints_cnt=hand_joints_cnt,
+            device=DEVICE,
+        )
+        for key, value in smpl_model_data_path_dict.items()
+    }
+
     people_snapshot_dir = DIR / "people_snapshot_public"
 
     subject_name = "female-1-casual"
 
     subject_dir = people_snapshot_dir / subject_name
 
-    people_snapshot_utils.ReadSubject(subject_dir)
+    subject_data = people_snapshot_utils.ReadSubject(
+        subject_dir=subject_dir,
+        model_data_dict=model_data_dict,
+        device=DEVICE,
+    )
+
+    print(f"{subject_data.mask.shape}")
+
+    utils.WriteImage(
+        DIR / "mask.jpg",
+        subject_data.mask[0],
+    )
 
 
 if __name__ == "__main__":

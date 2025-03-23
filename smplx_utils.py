@@ -344,19 +344,19 @@ def SMPLXBlending(
     vps = model_data.vertex_positions
 
     if blending_param.body_shapes is not None:
-        vps += torch.einsum("...vxb,...b->...vx",
-                            model_data.body_shape_dirs,
-                            blending_param.body_shapes)
+        vps = vps + torch.einsum("...vxb,...b->...vx",
+                                 model_data.body_shape_dirs,
+                                 blending_param.body_shapes)
 
     if model_data.expr_shape_dirs is not None and \
        blending_param.expr_shapes is not None:
-        vps += torch.einsum("...vxb,...b->...vx",
-                            model_data.expr_shape_dirs,
-                            blending_param.expr_shapes)
+        vps = vps + torch.einsum("...vxb,...b->...vx",
+                                 model_data.expr_shape_dirs,
+                                 blending_param.expr_shapes)
 
     # [..., V, 3]
 
-    binding_joint_ts = model_data.joint_ts_mean
+    binding_joint_ts = model_data.joint_ts_mean.clone()
 
     if blending_param.body_shapes is not None:
         binding_joint_ts += torch.einsum(

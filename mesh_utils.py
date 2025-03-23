@@ -270,36 +270,65 @@ class MeshData:
 
         return buffer - vertex_positions
 
-    def GetNormalSim(
+    def GetFaceCosSim(
         self,
-        face_normals: torch.Tensor,  # [..., F, D]
+        face_vecs: torch.Tensor,  # [..., F, D]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_normals, (..., self.faces_cnt, -1))
+        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
 
-        normals_0 = face_normals[
+        vecs_0 = face_vecs[
             ..., self.face_face_adj_rel_list[0, :], :]
 
-        normals_1 = face_normals[
+        vecs_1 = face_vecs[
             ..., self.face_face_adj_rel_list[1, :], :]
         # [..., ?, D]
 
-        return utils.Dot(normals_0, normals_1)
+        return utils.Dot(vecs_0, vecs_1)
 
-    def GetNormalSimNaive(
+    def GetFaceCosSimNaive(
         self,
-        face_normals: torch.Tensor,  # [..., F]
+        face_vecs: torch.Tensor,  # [..., F]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_normals, (..., self.faces_cnt, -1))
+        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
 
         FP = self.face_face_adj_rel_list.shape[1]
 
-        ret = torch.empty(face_normals.shape[:-2] + (FP,), dtype=utils.FLOAT)
+        ret = torch.empty(face_vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
 
         for fp in range(FP):
 
             fa, fb = self.face_face_adj_rel_list[:, fp]
 
             ret[..., fp] = utils.Dot(
-                face_normals[..., fa, :], (face_normals[..., fb, :]))
+                face_vecs[..., fa, :], (face_vecs[..., fb, :]))
+
+        return ret
+
+    def GetFaceDiff(
+        self,
+        face_vecs: torch.Tensor,  # [..., F, D]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+
+        a = face_vecs[..., self.face_face_adj_rel_list[0, :], :]
+        b = face_vecs[..., self.face_face_adj_rel_list[1, :], :]
+
+        return a - b
+
+    def GetFaceDiffNaive(
+        self,
+        face_vecs: torch.Tensor,  # [..., F]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+
+        FP = self.face_face_adj_rel_list.shape[1]
+
+        ret = torch.empty(face_vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
+
+        for fp in range(FP):
+
+            fa, fb = self.face_face_adj_rel_list[:, fp]
+
+            ret[..., fp] = face_vecs[..., fa, :] - (face_vecs[..., fb, :])
 
         return ret
