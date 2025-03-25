@@ -100,31 +100,26 @@ def main2():
 
     for _ in range(1):
         q = utils.RandUnit((B, 4), dtype=FLOAT, device=DEVICE)
+        # q = torch.zeros((B, 4), dtype=FLOAT, device=DEVICE)
+        # q[..., 0] = 1
+        # q[..., 3] = 0
 
-        rot_mat = utils.QuaternionToRotMat(q, order="XYZW", out_shape=(3, 3))
+        rot_mat = utils.QuaternionToRotMat(q, order="XZYW", out_shape=(3, 3))
 
         assert rot_mat.isfinite().all()
 
         CheckIsRotMat(rot_mat)
 
-        re_q = utils.RotMatToQuaternion(rot_mat, order="XYZW")
+        re_q = utils.RotMatToQuaternion(rot_mat, order="XZYW")
 
         assert re_q.isfinite().all()
 
         re_rot_mat = utils.QuaternionToRotMat(
-            re_q, order="XYZW", out_shape=(3, 3))
+            re_q, order="XZYW", out_shape=(3, 3))
 
         assert re_rot_mat.isfinite().all()
 
         CheckIsZero(rot_mat - re_rot_mat)
-
-
-"""
-
-a(q) -> b(aa)
-b(aa) ->
-
-"""
 
 
 def main3():
@@ -181,8 +176,8 @@ def main4():
 
 
 if __name__ == "__main__":
-    main1()
+    # main1()
     main2()
-    main3()
-    main4()
+    # main3()
+    # main4()
     print("Finish")

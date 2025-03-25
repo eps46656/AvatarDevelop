@@ -159,6 +159,15 @@ def AllocateID(lb: int, rb: int, s=None):
 
 
 @beartype
+def CreateFile(path: os.PathLike, mode: str = "w"):
+    path = pathlib.Path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    return open(path, mode)
+
+
+@beartype
 def ReadFile(
     path: os.PathLike,
     mode: str,
@@ -173,11 +182,7 @@ def WriteFile(
     mode: str,
     data,
 ):
-    path = pathlib.Path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    with open(path, mode) as f:
+    with CreateFile(path, mode) as f:
         f.write(data)
 
 
@@ -275,6 +280,24 @@ def ImageNormalize(img: torch.Tensor):
 @beartype
 def ImageDenormalize(img: torch.Tensor):
     return (img * 255).round().clamp(0, 255).to(dtype=torch.uint8)
+
+
+"""
+@beartype
+def DataclassStr(x):
+    field_names: list[str] = list()
+    field_vals = list()
+
+    for field in dataclasses.fields(x):
+        field_names.append(field.name)
+        field_vals.append(getattr(x, field.name))
+
+    k = max(len(field_name) for field_name in field_names)
+
+    return "\n" + "\n".join((
+        f"\t {field_name.rjust(k)} = {field_val}"
+        for field_name, field_val in zip(field_names, field_vals)
+    )) + "\n"""
 
 
 @beartype
@@ -544,7 +567,7 @@ def RandUnit(
     device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:
     v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
-    return v / (EPS + VectorNorm(v, keepdim=True))
+    return v / (EPS + VectorNorm(v, -1, True))
 
 
 @beartype
@@ -572,17 +595,15 @@ def RandRotVec(
 def Dot(
     x: torch.Tensor,
     y: torch.Tensor,
-    *,
     dim: int = -1,
     keepdim: bool = False,
 ):
-    return torch.sum(x * y, dim=dim, keepdim=keepdim)
+    return (x * y).sum(dim, keepdim)
 
 
 @beartype
 def VectorNorm(
     x: torch.Tensor,
-    *,
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:
@@ -595,7 +616,7 @@ def Normalized(
     dim: int = -1,
     length: typing.Optional[int | float | torch.Tensor] = None,
 ):
-    norm = (EPS + VectorNorm(x, dim=dim, keepdim=True))
+    norm = (EPS + VectorNorm(x, dim, True))
     return x / norm if length is None else x * (length / norm)
 
 
@@ -603,36 +624,33 @@ def Normalized(
 def GetDiff(
     x: torch.Tensor,
     y: torch.Tensor,
-    *,
     dim: int = -1,
     keepdim: bool = False,
 ):
-    return VectorNorm(x - y, dim=dim, keepdim=keepdim)
+    return VectorNorm(x - y, dim, keepdim)
 
 
 @beartype
 def GetCosAngle(
     x: torch.Tensor,
     y: torch.Tensor,
-    *,
     dim: int = -1,
     keepdim: bool = False,
 ):
-    x_norm = VectorNorm(x, dim=dim, keepdim=keepdim)
-    y_norm = VectorNorm(y, dim=dim, keepdim=keepdim)
+    x_norm = VectorNorm(x, dim, keepdim)
+    y_norm = VectorNorm(y, dim, keepdim)
 
-    return Dot(x, y, dim=dim, keepdim=keepdim) / (EPS + x_norm * y_norm)
+    return Dot(x, y, dim, keepdim) / (EPS + x_norm * y_norm)
 
 
 @beartype
 def GetAngle(
     x: torch.Tensor,
     y: torch.Tensor,
-    *,
     dim: int = -1,
     keepdim: bool = False,
 ):
-    return GetCosAngle(x, y, dim=dim, keepdim=keepdim).acos()
+    return GetCosAngle(x, y, dim, keepdim).acos()
 
 
 @beartype
@@ -946,41 +964,77 @@ def RotMatToQuaternion(
 
     order = CheckQuaternionOrder(order)
 
-    tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
+    for i, k in enumerate(order):
+        match k:
+            case "W": wi = i
+            case "X": xi = i
+            case "Y": yi = i
+            case "Z": zi = i
 
-    """
-    max_map = rot_mat[..., 0, 0].maximum(rot_mat[..., 1, 1]).maximum(
-        rot_mat[..., 2, 2])
+    m00 = rot_mat[..., 0, 0]
+    m01 = rot_mat[..., 0, 1]
+    m02 = rot_mat[..., 0, 2]
+    m10 = rot_mat[..., 1, 0]
+    m11 = rot_mat[..., 1, 1]
+    m12 = rot_mat[..., 1, 2]
+    m20 = rot_mat[..., 2, 0]
+    m21 = rot_mat[..., 2, 1]
+    m22 = rot_mat[..., 2, 2]
+    # [...]
 
-    s = (1 + rot_mat[..., 0, 0] - rot_mat[..., 1, 1] - rot_mat[..., 2, 2]) \
-        .sqrt() * 2
-    w_0 = (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) / s
-    x_0 = s / 4
-    y_0 = (rot_mat[..., 0, 1] + rot_mat[..., 1, 0]) / s
-    z_0 = (rot_mat[..., 0, 2] + rot_mat[..., 2, 0]) / s
+    m10_add_m01 = m10 + m01
+    m10_sub_m01 = m10 - m01
 
-    s = (1 - rot_mat[..., 0, 0] + rot_mat[..., 1, 1] - rot_mat[..., 2, 2]) \
-        .sqrt() * 2
-    w_1 = (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) / s
-    x_1 = (rot_mat[..., 0, 1] + rot_mat[..., 1, 0]) / s
-    y_1 = s / 4
-    z_1 = (rot_mat[..., 1, 2] + rot_mat[..., 2, 1]) / s
+    m21_add_m12 = m21 + m12
+    m21_sub_m12 = m21 - m12
 
-    s = (1 - rot_mat[..., 0, 0] - rot_mat[..., 1, 1] + rot_mat[..., 2, 2]) \
-        .sqrt() * 2
-    w_2 = (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) / s
-    x_2 = (rot_mat[..., 0, 2] + rot_mat[..., 2, 0]) / s
-    y_2 = (rot_mat[..., 1, 2] + rot_mat[..., 2, 1]) / s
-    z_2 = s / 4
-    """
+    m02_add_m20 = m02 + m20
+    m02_sub_m20 = m02 - m20
 
-    k = (1 + tr).clamp(min=EPS).sqrt()
-    l = 0.5 / k
+    tr = m00 + m11 + m22
+    tr_n = 1 - tr
 
-    w = k / 2
-    x = (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) * l
-    y = (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) * l
-    z = (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) * l
+    a_mat = torch.empty(
+        rot_mat.shape[:-2] + (4,),
+        dtype=rot_mat.dtype, device=rot_mat.device)
+
+    a0 = a_mat[..., 0] = (1 + tr)
+    a1 = a_mat[..., 1] = (tr_n + m00 * 2)
+    a2 = a_mat[..., 2] = (tr_n + m11 * 2)
+    a3 = a_mat[..., 3] = (tr_n + m22 * 2)
+
+    s0 = a0.sqrt() * 2
+    s1 = a1.sqrt() * 2
+    s2 = a2.sqrt() * 2
+    s3 = a3.sqrt() * 2
+
+    q_mat = torch.empty(
+        rot_mat.shape[:-2] + (4, 4),
+        dtype=rot_mat.dtype, device=rot_mat.device)
+
+    q_mat[..., wi, 0] = s0 / 4
+    q_mat[..., xi, 0] = m21_sub_m12 / s0
+    q_mat[..., yi, 0] = m02_sub_m20 / s0
+    q_mat[..., zi, 0] = m10_sub_m01 / s0
+
+    q_mat[..., wi, 1] = m21_sub_m12 / s1
+    q_mat[..., xi, 1] = s1 / 4
+    q_mat[..., yi, 1] = m10_add_m01 / s1
+    q_mat[..., zi, 1] = m02_add_m20 / s1
+
+    q_mat[..., wi, 2] = m02_sub_m20 / s2
+    q_mat[..., xi, 2] = m10_add_m01 / s2
+    q_mat[..., yi, 2] = s2 / 4
+    q_mat[..., zi, 2] = m21_add_m12 / s2
+
+    q_mat[..., wi, 3] = m10_sub_m01 / s3
+    q_mat[..., xi, 3] = m02_add_m20 / s3
+    q_mat[..., yi, 3] = m21_add_m12 / s3
+    q_mat[..., zi, 3] = s3 / 4
+
+    a_idxes = a_mat.argmax(-1, True).unsqueeze(-1)
+    a_idxes = a_idxes.expand(a_idxes.shape[:-2] + (4, 1))
+    # [..., 4, 1]
 
     if out is None:
         out = torch.empty(
@@ -988,7 +1042,29 @@ def RotMatToQuaternion(
             dtype=rot_mat.dtype, device=rot_mat.device
         )
 
-    SetQuaternionWXYZ(w, x, y, z, order, out)
+    out = out.unsqueeze(-1)
+    # [..., 4] -> [..., 4, 1]
+
+    torch.gather(q_mat, -1, a_idxes, out=out)
+
+    """
+
+    q_mat[..., q channel 4, choices 4]
+
+    a_idxes[..., dummy 4, dummy 1]
+
+    out[..., q channel 4, dummy 1]
+
+    q_mat[
+        ...,
+        q channel 4,
+        a_idxes[..., dummy 4, dummy 1],
+    ]
+
+    """
+
+    out = out.squeeze(-1)
+    # [4, ..., 1] -> [..., 4]
 
     return out
 
@@ -1034,8 +1110,7 @@ def QuaternionMul(
 @beartype
 def MakeHomo(
     x: torch.Tensor,  # [...]
-    *,
-    dim: int = -1
+    dim: int = -1,
 ) -> torch.Tensor:  # [...]
     dim = NormalizedIdx(dim, x.dim())
 
@@ -1058,8 +1133,7 @@ def MakeHomo(
 @beartype
 def HomoNormalize(
     x: torch.Tensor,  # [...]
-    *,
-    dim: int = -1
+    dim: int = -1,
 ):
     dim = NormalizedIdx(dim, x.dim())
 

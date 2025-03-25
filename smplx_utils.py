@@ -308,7 +308,7 @@ class SMPLXBlendingParam:
         if rhand_en:
             poses.append(rhand_poses.expand(poses_batch_dims + (-1, 3)))
 
-        ret = torch.cat(poses, dim=-2)
+        ret = torch.cat(poses, -2)
         # [..., ?, 3]
 
         return ret

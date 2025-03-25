@@ -8,7 +8,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import camera_utils, smplx_utils, transform_utils, utils
+from . import camera_utils, dataset_utils, smplx_utils, transform_utils, utils
 
 
 @beartype
@@ -195,8 +195,6 @@ def ReadSubject(
     video, audio, d = utils.ReadVideo(subject_video_path)
     # [T, C, H, W]
 
-    print(f"{d=}")
-
     fps = int(d["video_fps"])
 
     img_h, img_w = video.shape[2:]
@@ -218,3 +216,50 @@ def ReadSubject(
     )
 
     return ret
+
+
+@beartype
+class Dataset(dataset_utils.Dataset):
+    def __init__(
+        self,
+        dataset_dir: os.PathLike,
+        subject_name: str,
+        model_data_dict: dict[str, smplx_utils.SMPLXModelData],
+        device: torch.device,
+    ):
+        dataset_dir = pathlib.Path(dataset_dir)
+
+        self.subject_data = ReadSubject(
+            dataset_dir / subject_name,
+            model_data_dict,
+            device,
+        )
+
+        self.subject_data.video = utils.ImageNormalize(
+            self.subject_data.video)
+
+    def __len__(self):
+        return self.subject_data.video.shape[0]
+
+    def BatchGet(self, idxes: torch.Tensor):
+        return SubjectData(
+            vidoe=self.subject_data.video[idxes],
+            mask=self.subject_data.mask[idxes],
+
+            camera_transform=self.subject_data.camera_transform,
+            camera_config=self.subject_data.camera_config,
+
+            blending_param=smplx_utils.SMPLXBlendingParam(
+                body_shapes=self.subject_data.blending_param.
+                body_shapes,
+
+                global_transl=self.subject_data.blending_param.
+                global_transl[idxes],
+
+                global_rot=self.subject_data.blending_param.
+                global_rot[idxes],
+
+                body_poses=self.subject_data.blending_param.
+                body_poses[idxes],
+            ),
+        )

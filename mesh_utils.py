@@ -76,9 +76,9 @@ def GetAreaWeightedVertexNormals(
     vertex_normals = torch.zeros_like(vertex_positions)
     # [..., V, 3]
 
-    vertex_normals.index_add_(dim=-2, index=faces[:, 0], source=area_vector)
-    vertex_normals.index_add_(dim=-2, index=faces[:, 1], source=area_vector)
-    vertex_normals.index_add_(dim=-2, index=faces[:, 2], source=area_vector)
+    vertex_normals.index_add_(-2, faces[:, 0], area_vector)
+    vertex_normals.index_add_(-2, faces[:, 1], area_vector)
+    vertex_normals.index_add_(-2, faces[:, 2], area_vector)
 
     # vertex_normals[..., faces[:, 0][i], :] += area_vector[..., i, :]
     # vertex_normals[..., faces[:, 1][i], :] += area_vector[..., i, :]
@@ -237,8 +237,8 @@ class MeshData:
         buffer = torch.zeros_like(vertex_positions)
         # [..., V, D]
 
-        buffer.index_add_(dim=-2, index=index_0, source=positions_1)
-        buffer.index_add_(dim=-2, index=index_1, source=positions_0)
+        buffer.index_add_(-2, index_0, positions_1)
+        buffer.index_add_(-2, index_1, positions_0)
 
         # buffer[..., index_0[i], :] += positions_1[..., i, :]
         # buffer[..., index_1[i], :] += positions_0[..., i, :]
