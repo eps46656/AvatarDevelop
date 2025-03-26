@@ -29,33 +29,38 @@ class Module(torch.nn.Module):
     ):
         super().__init__()
 
-        self.avatar_blending_layer: avatar_utils.AvatarBlender = avatar_blender
+        self.avatar_blender: avatar_utils.AvatarBlender = avatar_blender
 
-        faces_cnt = self.avatar_blending_layer.GetFacesCnt()
-        assert 0 <= faces_cnt
+        avatar_model: avatar_utils.AvatarModel = \
+            self.avatar_blender.GetAvatarModel()
+
+        faces_cnt = avatar_model.faces_cnt
+        assert 0 < faces_cnt
 
         assert 1 <= color_channels_cnt
 
         gp_rot_qs = torch.empty((faces_cnt, 4), dtype=utils.FLOAT)
-        # quaternion wxyz
+        # [F, 4] quaternion wxyz
 
         gp_rot_qs[:, 0] = 1
         gp_rot_qs[:, 1:] = 0
 
         self.gp_rot_qs = torch.nn.Parameter(gp_rot_qs)
+        # [F, 4]
 
         self.gp_scales = torch.nn.Parameter(
             torch.ones((faces_cnt, 3), dtype=utils.FLOAT) * 10)
-        # self.gp_scales = torch.ones((faces_cnt, 3), dtype=utils.FLOAT) * 10
         # [F, 3]
 
         self.gp_colors = torch.nn.Parameter(torch.rand(
             (faces_cnt, color_channels_cnt),
             dtype=utils.FLOAT))
+        # [F, C]
 
         self.gp_opacities = torch.nn.Parameter(torch.ones(
             (faces_cnt, 1),
             dtype=utils.FLOAT))
+        # [F, 1]
 
     def forward(
         self,
@@ -74,12 +79,12 @@ class Module(torch.nn.Module):
         H, W = utils.CheckShapes(img, (..., color_channels_cnt, H, W))
 
         avatar_model: avatar_utils.AvatarModel = \
-            self.avatar_blending_layer(blending_param)
+            self.avatar_blender(blending_param)
 
-        faces = avatar_model.GetFaces()
+        faces = avatar_model.faces_cnt
         # [F, 3]
 
-        vertex_positions = avatar_model.GetVertexPositions()
+        vertex_positions = avatar_model.vertex_positions
         # [..., V, 3]
 
         vertex_positions_a = vertex_positions[..., faces[:, 0], :]
@@ -140,7 +145,7 @@ class Module(torch.nn.Module):
         rendered_img = rendered_result.colors
         # [..., C, H, W]
 
-        mesh_data = avatar_model.GetMeshData()
+        mesh_data = avatar_model.mesh_data
 
         if not self.training:
             rgb_loss = None
@@ -156,8 +161,7 @@ class Module(torch.nn.Module):
         if not self.training:
             lap_loss = None
         else:
-            lap_diff = mesh_data.GetLapDiff(
-                avatar_model.GetVertexPositions())
+            lap_diff = mesh_data.GetLapDiff(avatar_model.vertex_positions)
             # [..., V, 3]
 
             lap_loss = lap_diff.square().mean()

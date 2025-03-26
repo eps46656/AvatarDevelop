@@ -98,6 +98,16 @@ class ModelData:
         return 0 if self.expr_shape_dirs is None \
             else self.expr_shape_dirs.shape[-1]
 
+    def GetModelConfig(self) -> ModelConfig:
+        return ModelConfig(
+            body_shapes_cnt=self.GetBodyShapesCnt(),
+            expr_shapes_cnt=self.GetExprShapesCnt(),
+            body_joints_cnt=self.body_joints_cnt,
+            jaw_joints_cnt=self.jaw_joints_cnt,
+            eye_joints_cnt=self.eye_joints_cnt,
+            hand_joints_cnt=self.hand_joints_cnt,
+        )
+
     @staticmethod
     def FromFile(
         *,

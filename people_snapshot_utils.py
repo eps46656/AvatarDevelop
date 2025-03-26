@@ -20,7 +20,7 @@ class SubjectData:
     camera_transform: transform_utils.ObjectTransform
     camera_config: camera_utils.CameraConfig
 
-    model_data: smplx_utils.Model
+    model_data: smplx_utils.ModelData
 
     blending_param: smplx_utils.BlendingParam
 
@@ -98,7 +98,7 @@ def _ReadCamera(
 @beartype
 def _ReadSMPLBlendingParam(
     subject_dir: pathlib.Path,
-    smplx_model_data: smplx_utils.Model,
+    smplx_model_data: smplx_utils.ModelData,
     device: torch.device,
 ) -> smplx_utils.BlendingParam:
     body_shapes_cnt = smplx_model_data.body_shape_dirs.shape[-1]
@@ -173,7 +173,7 @@ def _ReadSMPLBlendingParam(
 @beartype
 def ReadSubject(
     subject_dir: os.PathLike,
-    model_data_dict: dict[str, smplx_utils.Model],
+    model_data_dict: dict[str, smplx_utils.ModelData],
     device: torch.device,
 ):
     subject_dir = pathlib.Path(subject_dir)
@@ -192,10 +192,8 @@ def ReadSubject(
     else:
         model_data = model_data_dict["male"]
 
-    video, audio, d = utils.ReadVideo(subject_video_path)
+    video, fps = utils.ReadVideo(subject_video_path)
     # [T, C, H, W]
-
-    fps = int(d["video_fps"])
 
     img_h, img_w = video.shape[2:]
 
@@ -224,7 +222,7 @@ class Dataset(dataset_utils.Dataset):
         self,
         dataset_dir: os.PathLike,
         subject_name: str,
-        model_data_dict: dict[str, smplx_utils.Model],
+        model_data_dict: dict[str, smplx_utils.ModelData],
         device: torch.device,
     ):
         dataset_dir = pathlib.Path(dataset_dir)

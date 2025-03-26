@@ -151,46 +151,6 @@ class TrainingCore:
 
 
 @beartype
-class AutoSavingConfig:
-    min_diff_time: int
-    max_diff_time: int
-    min_epochs_cnt: int
-    max_epochs_cnt: int
-
-    def Check(self):
-        assert 0 <= self.min_diff_time
-        assert self.min_diff_time <= self.max_diff_time
-
-        assert 0 <= self.min_epochs_cnt
-        assert self.min_epochs_cnt <= self.max_epochs_cnt
-
-    def QuerySave(self, diff_time: int, diff_epochs_cnt: int):
-        if self.max_diff_time <= diff_time or self.max_epochs_cnt <= diff_epochs_cnt:
-            return True
-
-        if diff_time < self.min_diff_time or diff_epochs_cnt < self.min_epochs_cnt:
-            return False
-
-        return True
-
-
-"""
-
-diff_time = cur_time - prv_time
-diff_epochs_cnt = cur_epochs_cnt - prv_epochs_cnt
-
-if max_time <= diff_time or max_epochs_cnt <= diff_epochs_cnt:
-    return save
-
-if diff_time < min_time or diff_epochs_cnt < min_epochs_cnt
-    return not save
-
-return save
-
-"""
-
-
-@beartype
 def MakeCommandParser():
     parser = argparse.ArgumentParser(prog="parser")
 
@@ -262,30 +222,16 @@ def MakeCommandParser():
     )
 
     train_parser.add_argument(
-        "--min_diff_time",
+        "--diff_time_weight",
         type=int,
         default=10 * 60,
         help="",
     )
 
     train_parser.add_argument(
-        "--max_diff_time",
-        type=int,
-        default=30 * 60 * 60,
-        help="",
-    )
-
-    train_parser.add_argument(
-        "--min_diff_epochs_cnt",
+        "--diff_epochs_cnt_weight",
         type=int,
         default=20,
-        help="",
-    )
-
-    train_parser.add_argument(
-        "--max_diff_epochs_cnt",
-        type=int,
-        default=100,
         help="",
     )
 
@@ -380,6 +326,8 @@ class Trainer:
 
         ckpt_meta = self.__log_db.SelectCheckpointMeta({"id": id})
 
+        assert ckpt_meta is not None
+
         ckpt_data_path = Trainer._GetCheckpointDataPath(
             self.__proj_dir, ckpt_meta.id)
 
@@ -451,18 +399,13 @@ class Trainer:
     def Train(
         self,
         epochs_cnt: int,
-        min_diff_time: int,
-        max_diff_time: int,
-        min_diff_epochs_cnt: int,
-        max_diff_epochs_cnt: int,
+        diff_time_weight: float,
+        diff_epochs_cnt_weight: float,
     ):
         assert 0 <= epochs_cnt
 
-        assert 0 <= min_diff_time
-        assert min_diff_time <= max_diff_time
-
-        assert 0 <= min_diff_epochs_cnt
-        assert min_diff_epochs_cnt <= max_diff_epochs_cnt
+        assert 0 <= diff_time_weight
+        assert 0 <= diff_epochs_cnt_weight
 
         cancel_token_path = Trainer._GetCancelTokenPath(self.__proj_dir)
 
@@ -475,23 +418,14 @@ class Trainer:
 
             diff_time = cur_time - self.__prv
 
-            if max_diff_time <= diff_time or max_diff_epochs_cnt <= self.__diff_epochs_cnt:
+            if 1 - 1e-3 <= diff_time_weight * diff_time + diff_epochs_cnt_weight + self.__diff_epochs_cnt:
                 self.Save()
-                continue
-
-            if diff_time < max_diff_time or self.__diff_epochs_cnt < max_diff_epochs_cnt:
-                continue
-
-            self.Save()
 
             if len(utils.ReadFile(cancel_token_path, "r")) != 0:
                 break
 
     def Eval(self):
         self.training_core.Eval()
-
-    def _CmdFileHandler(self, parser):
-        pass
 
     def _CLIHandler(self, parser):
         cmd = shlex.split(input("trainer> "))
@@ -514,10 +448,8 @@ class Trainer:
             case "train":
                 self.Train(
                     epochs_cnt=args.epochs_cnt,
-                    min_diff_time=args.min_diff_time,
-                    max_diff_time=args.max_diff_time,
-                    min_diff_epochs_cnt=args.min_diff_epochs_cnt,
-                    max_diff_epochs_cnt=args.max_diff_epochs_cnt,
+                    diff_time_weight=args.diff_time_weight,
+                    diff_epochs_cnt_weight=args.diff_epochs_cnt_weight,
                 )
 
             case "eval":

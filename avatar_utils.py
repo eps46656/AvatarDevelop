@@ -1,4 +1,5 @@
 
+import dataclasses
 import typing
 
 import torch
@@ -8,42 +9,28 @@ from . import kin_utils, mesh_utils, utils
 
 
 @beartype
+@dataclasses.dataclass
 class AvatarModel:
-    def GetKinTree(self) -> kin_utils.KinTree:
-        raise utils.UnimplementationError()
+    kin_tree: kin_utils.KinTree
 
-    def GetVerticesCnt(self) -> int:  # V
-        raise utils.UnimplementationError()
+    vertices_cnt: int  # V
+    texture_vertices_cnt: int  # TV
 
-    def GetTextureVerticesCnt(self) -> int:  # TV
-        raise utils.UnimplementationError()
+    faces_cnt: int  # F
+    joints_cnt: int  # J
 
-    def GetFacesCnt(self) -> int:  # F
-        raise utils.UnimplementationError()
+    vertex_positions: typing.Optional[torch.Tensor]  # [..., V, 3]
+    vertex_normals: typing.Optional[torch.Tensor]  # [..., V, 3]
 
-    def GetJointsCnt(self) -> int:  # J
-        raise utils.UnimplementationError()
+    texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
 
-    def GetVertexPositions(self) -> torch.Tensor:  # [..., V, 3]
-        raise utils.UnimplementationError()
+    faces: torch.Tensor  # [..., F, 3]
 
-    def GetVertexNormals(self) -> torch.Tensor:  # [..., V, 3]
-        raise utils.UnimplementationError()
+    texture_faces: typing.Optional[torch.Tensor]  # [..., TF, 3]
 
-    def GetTextureVertexPositions(self) -> torch.Tensor:  # [..., TV, 2]
-        raise utils.UnimplementationError()
+    joint_Ts: typing.Optional[torch.Tensor]  # [..., J, 4, 4]
 
-    def GetFaces(self) -> torch.Tensor:  # [..., F, 3]
-        raise utils.UnimplementationError()
-
-    def GetTextureFaces(self) -> torch.Tensor:  # [..., TF, 3]
-        raise utils.UnimplementationError()
-
-    def GetJointsTs(self) -> torch.Tensor:  # [..., J, 4, 4]
-        raise utils.UnimplementationError()
-
-    def GetMeshData(self) -> mesh_utils.MeshData:
-        raise utils.UnimplementationError()
+    mesh_data: mesh_utils.MeshData
 
 
 @beartype
@@ -51,39 +38,7 @@ class AvatarBlender(torch.nn.Module):
     def __init__(self):
         super(AvatarBlender, self).__init__()
 
-    def GetKinTree(self) -> kin_utils.KinTree:
-        raise utils.UnimplementationError()
-
-    def GetVerticesCnt(self) -> int:  # V
-        raise utils.UnimplementationError()
-
-    def GetTextureVerticesCnt(self) -> int:  # TV
-        raise utils.UnimplementationError()
-
-    def GetFacesCnt(self) -> int:  # F
-        raise utils.UnimplementationError()
-
-    def GetjointsCnt(self) -> int:  # J
-        raise utils.UnimplementationError()
-
-    def GetVertexPositions(self) -> typing.Optional[torch.Tensor]:
-        # [..., V, 3]
-        raise utils.UnimplementationError()
-
-    def GetVertexNormals(self) -> typing.Optional[torch.Tensor]:  # [..., V, 3]
-        raise utils.UnimplementationError()
-
-    def GetTextureVertexPositions(self) -> typing.Optional[torch.Tensor]:
-        # [..., TV, 2]
-        raise utils.UnimplementationError()
-
-    def GetFaces(self) -> typing.Optional[torch.Tensor]:  # [..., F, 3]
-        raise utils.UnimplementationError()
-
-    def GetTextureFaces(self) -> typing.Optional[torch.Tensor]:  # [..., TF, 3]
-        raise utils.UnimplementationError()
-
-    def GetMeshData(self) -> typing.Optional[mesh_utils.MeshData]:
+    def GetAvatarModel() -> AvatarModel:
         raise utils.UnimplementationError()
 
     def forward(self, blending_param) -> AvatarModel:

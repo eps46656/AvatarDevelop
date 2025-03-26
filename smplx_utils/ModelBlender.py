@@ -1,30 +1,24 @@
 import dataclasses
-import typing
 
 import torch
 from beartype import beartype
 
-from .. import avatar_utils, kin_utils, mesh_utils, utils
+from .. import avatar_utils, utils
 from .blending_utils import Blending, BlendingParam
-from .ModelData import ModelData
+from .Model import Model
+from .ModelBuilder import ModelBuilder
 
 
 @beartype
 class ModelBlender(avatar_utils.AvatarBlender):
-    def _TryRegistParameter(self, x: typing.Optional[torch.Tensor]):
-        if x is not None and isinstance(x, torch.nn.Parameter):
-            self.register_parameter("vertex_positions", x)
-
     def __init__(
         self,
-        model_data: ModelData,
+        model_builder: ModelBuilder,
         device: torch.device,
     ):
         super(ModelBlender, self).__init__()
 
-        self.model_data = model_data
-
-        self._TryRegistParameter(self.model_data.vertex_positions)
+        self.model_builder = model_builder
 
         # ---
 
@@ -32,12 +26,14 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         # ---
 
+        model_config = model_builder.GetModelData().GetModelConfig()
+
         self.default_blending_param = BlendingParam(
             body_shapes=torch.zeros(
-                (self.model_data.GetBodyShapesCnt(),), dtype=utils.FLOAT, device=self.device),
+                (model_config.body_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
 
             expr_shapes=torch.zeros(
-                (self.model_data.GetExprShapesCnt(),), dtype=utils.FLOAT, device=self.device),
+                (model_config.expr_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
 
             global_transl=torch.zeros(
                 (3,), dtype=utils.FLOAT, device=self.device),
@@ -46,66 +42,73 @@ class ModelBlender(avatar_utils.AvatarBlender):
                 (3,), dtype=utils.FLOAT, device=self.device),
 
             body_poses=torch.zeros(
-                (self.model_data.body_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.body_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             jaw_poses=torch.zeros(
-                (self.model_data.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             leye_poses=torch.zeros(
-                (self.model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             reye_poses=torch.zeros(
-                (self.model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             lhand_poses=torch.zeros(
-                (self.model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             rhand_poses=torch.zeros(
-                (self.model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
 
             blending_vertex_normal=False,
         )
 
-    def GetKinTree(self) -> kin_utils.KinTree:
-        return self.kin_tree
+    def GetAvatarModel(self) -> avatar_utils.AvatarModel:
+        model_data = self.model_builder.GetModelData()
 
-    def GetVerticesCnt(self) -> int:  # V
-        return self.model_data.vertex_positions.shape[-2]
+        kin_tree = model_data.kin_tree
 
-    def GetTextureVerticesCnt(self) -> int:  # TV
-        return 0 if self.model_data.texture_vertex_positions is None else self.model_data.texture_vertex_positions.shape[-2]
+        vertices_cnt = model_data.vertex_positions.shape[-2]
 
-    def GetFacesCnt(self) -> int:  # F
-        return 0 if self.model_data.faces is None else self.model_data.faces.shape[-2]
+        texture_vertices_cnt = model_data.vertex_positions.shape[-2]
 
-    def GetjointsCnt(self) -> int:  # J
-        return 0 if self.model_data.texture_faces is None else self.model_data.texture_faces.shape[-2]
+        faces_cnt = 0 if model_data.faces is None else model_data.faces.shape[-2]
 
-    def GetVertexPositions(self) -> typing.Optional[torch.Tensor]:
-        # [..., V, 3]
-        return self.model_data.kin_tree.joints_cnt
+        joints_cnt = model_data.kin_tree.joints_cnt
 
-    def GetVertexNormals(self) -> typing.Optional[torch.Tensor]:  # [..., V, 3]
-        return self.model_data.body_shape_dirs.shape[-1]
+        vertex_positions = None
 
-    def GetTextureVertexPositions(self) -> typing.Optional[torch.Tensor]:
-        # [..., TV, 2]
-        return self.model_data.texture_vertex_positions
+        vertex_normals = None
 
-    def GetFaces(self) -> typing.Optional[torch.Tensor]:  # [..., F, 3]
-        return self.model_data.faces
+        texture_vertex_positions = model_data.texture_vertex_positions
 
-    def GetTextureFaces(self) -> typing.Optional[torch.Tensor]:  # [..., TF, 3]
-        return self.model_data.texture_faces
+        faces = model_data.faces
 
-    def GetMeshData(self) -> typing.Optional[mesh_utils.MeshData]:
-        raise utils.UnimplementationError()
+        texture_faces = model_data.texture_faces
+
+        joint_Ts = None
+
+        mesh_data = model_data.mesh_data
+
+        return Model(
+            kin_tree=kin_tree,
+            vertices_cnt=vertices_cnt,
+            texture_vertices_cnt=texture_vertices_cnt,
+            faces_cnt=faces_cnt,
+            joints_cnt=joints_cnt,
+            vertex_positions=vertex_positions,
+            vertex_normals=vertex_normals,
+            texture_vertex_positions=texture_vertex_positions,
+            faces=faces,
+            texture_faces=texture_faces,
+            joint_Ts=joint_Ts,
+            mesh_data=mesh_data,
+        )
 
     def GetBodyShapesCnt(self):
-        return 0 if self.model_data.body_shape_dirs is None else self.model_data.body_shape_dirs.shape[-1]
+        return self.model_builder.GetModelData().GetBodyShapesCnt()
 
     def GetExprShapesCnt(self):
-        return 0 if self.model_data.expr_shape_dirs is None else self.model_data.expr_shape_dirs.shape[-1]
+        return self.model_builder.GetModelData().GetExprShapesCnt()
 
     def SetDefaultBlendingParam(self, blending_param: BlendingParam):
         blending_param.Check(self.model_data, True)
@@ -118,7 +121,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
     def forward(self, blending_param: BlendingParam):
         return Blending(
-            model_data=self.model_data,
+            model_data=self.model_builder.GetModelData(),
             blending_param=blending_param.GetCombined(
                 self.default_blending_param),
             device=self.device,

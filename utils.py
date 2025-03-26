@@ -244,7 +244,12 @@ def WriteImage(
 
 
 @beartype
-def ReadVideo(path: os.PathLike) -> torch.Tensor:
+def ReadVideo(
+    path: os.PathLike
+) -> tuple[
+    typing.Optional[torch.Tensor],  # video
+    int,  # fps
+]:
     video, audio, d = torchvision.io.read_video(
         path,
         output_format="TCHW",
@@ -252,7 +257,9 @@ def ReadVideo(path: os.PathLike) -> torch.Tensor:
     )
     # [T, C, H, W]
 
-    return video, audio, d
+    video_fps = int(d.get("video_fps", -1))
+
+    return video, video_fps
 
 
 @beartype
