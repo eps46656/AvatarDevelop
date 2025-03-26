@@ -1,5 +1,4 @@
 import dataclasses
-import math
 import typing
 
 import torch
@@ -7,115 +6,12 @@ from beartype import beartype
 
 from .. import (avatar_utils, camera_utils, gaussian_utils, transform_utils,
                 utils)
+from .utils import GetFaceCoord
 
 
 @beartype
 @dataclasses.dataclass
-class FaceCoordResult:
-    Ts: torch.Tensor  # [..., F, 4, 4]
-    normalized_Ts: torch.Tensor  # [..., F, 4, 4]
-    face_area: torch.Tensor  # [..., F]
-
-
-@beartype
-def GetFaceCoord(
-    vertex_positions_a: torch.Tensor,  # [..., 3]
-    vertex_positions_b: torch.Tensor,  # [..., 3]
-    vertex_positions_c: torch.Tensor,  # [..., 3]
-):
-    vpa = vertex_positions_a
-    vpb = vertex_positions_b
-    vpc = vertex_positions_c
-
-    utils.CheckShapes(
-        vpa, (..., 3),
-        vpb, (..., 3),
-        vpc, (..., 3),
-    )
-
-    device = utils.CheckDevice(vpa, vpb, vpc)
-
-    batch_shapes = utils.BroadcastShapes(
-        vpa.shape[:-1],
-        vpb.shape[:-1],
-        vpc.shape[:-1],
-    )
-
-    vpa = vpa.expand(batch_shapes + (3,))
-    vpb = vpb.expand(batch_shapes + (3,))
-    vpc = vpc.expand(batch_shapes + (3,))
-
-    s = (vpa + vpb + vpc) / 3
-    # [..., 3]
-
-    f1 = vpc - s
-    f2 = (vpa - vpb) / math.sqrt(3)
-
-    f1_sq = f1.square().sum(-1)
-    f2_sq = f2.square().sum(-1)
-    f1_dot_f2 = (f1 * f2).sum(-1)
-
-    """
-
-    half_cos_2t = 0.5 / (1 + tan_2t.square()).sqrt()
-
-    cos_2t = 1 / (1 + tan_2t.square()).sqrt()
-
-    half_cos_2t = 0.5 / (1 + tan_2t.square()).sqrt()
-
-    cos_t = ((1 + cos_2t) / 2).sqrt()
-          = (0.5 + half_cos_2t).sqrt
-
-    cos_t = ((utils.EPS + 0.5) + half_cos_2t).sqrt().unsqueeze(-1)
-    sin_t = ((utils.EPS + 0.5) - half_cos_2t).sqrt().unsqueeze(-1)
-    """
-
-    t = torch.atan2(2 * f1_dot_f2, f1_sq - f2_sq) * 0.5
-
-    cos_t = torch.cos(t).unsqueeze(-1)
-    sin_t = torch.sin(t).unsqueeze(-1)
-
-    Ts = torch.empty(
-        batch_shapes + (4, 4), dtype=utils.FLOAT, device=device)
-
-    normalized_Ts = torch.empty(
-        batch_shapes + (4, 4), dtype=utils.FLOAT, device=device)
-
-    axis_x = Ts[..., :3, 0] = f1 * cos_t + f2 * sin_t
-    axis_y = Ts[..., :3, 1] = f2 * cos_t - f1 * sin_t
-    axis_z = Ts[..., :3, 2] = torch.linalg.cross(axis_x, axis_y)
-
-    z_norm = utils.EPS + utils.VectorNorm(axis_z)
-
-    normalized_Ts[..., :3, 0] = utils.Normalized(axis_x)
-    normalized_Ts[..., :3, 1] = utils.Normalized(axis_y)
-    normalized_Ts[..., :3, 2] = axis_z / z_norm.unsqueeze(-1)
-
-    err = (normalized_Ts[..., :3, 0] *
-           normalized_Ts[..., :3, 1]).sum(-1).abs().max()
-
-    assert err <= 2e-3, err
-
-    Ts[..., :3, 3] = s
-    Ts[..., 3, :3] = 0
-    Ts[..., 3, 3] = 1
-
-    normalized_Ts[..., :3, 3] = s
-    normalized_Ts[..., 3, :3] = 0
-    normalized_Ts[..., 3, 3] = 1
-
-    ret = FaceCoordResult(
-        Ts=Ts,
-        normalized_Ts=normalized_Ts,
-        face_area=z_norm * 3,
-    )
-
-    return ret
-
-
-@beartype
-@dataclasses.dataclass
-class GoMAvatarModelForwardResult:
+class ModuleForwardResult:
     rendered_img: torch.Tensor  # [..., C, H, W]
 
     rgb_loss: typing.Optional[torch.Tensor]
@@ -125,16 +21,15 @@ class GoMAvatarModelForwardResult:
 
 
 @beartype
-class GoMAvatarModel(torch.nn.Module):
+class Module(torch.nn.Module):
     def __init__(
         self,
-        avatar_blending_layer: avatar_utils.AvatarBlendingLayer,
+        avatar_blender: avatar_utils.AvatarBlender,
         color_channels_cnt: int,
     ):
-        super(GoMAvatarModel, self).__init__()
+        super().__init__()
 
-        self.avatar_blending_layer: avatar_utils.AvatarBlendingLayer = \
-            avatar_blending_layer
+        self.avatar_blending_layer: avatar_utils.AvatarBlender = avatar_blender
 
         faces_cnt = self.avatar_blending_layer.GetFacesCnt()
         assert 0 <= faces_cnt
@@ -181,22 +76,16 @@ class GoMAvatarModel(torch.nn.Module):
         avatar_model: avatar_utils.AvatarModel = \
             self.avatar_blending_layer(blending_param)
 
-        utils.PrintCudaMemUsage()
-
         faces = avatar_model.GetFaces()
         # [F, 3]
 
         vertex_positions = avatar_model.GetVertexPositions()
         # [..., V, 3]
 
-        utils.PrintCudaMemUsage()
-
         vertex_positions_a = vertex_positions[..., faces[:, 0], :]
         vertex_positions_b = vertex_positions[..., faces[:, 1], :]
         vertex_positions_c = vertex_positions[..., faces[:, 2], :]
         # [..., F, 3]
-
-        utils.PrintCudaMemUsage()
 
         face_coord_result = GetFaceCoord(
             vertex_positions_a, vertex_positions_b, vertex_positions_c)
@@ -205,57 +94,27 @@ class GoMAvatarModel(torch.nn.Module):
             face_coord_result.normalized_Ts[..., :3, :3],
             order="WXYZ",
         )
-        # [..., F, 4]
+        # [..., F, 4] wxyz
 
-        # d = face_coord_result.normalized_Ts[..., :3, :3].det()
-
-        # print(f"{d.min()=}")
-        # print(f"{d.max()=}")
-
-        utils.PrintCudaMemUsage()
+        utils.CheckAlmostZeros(
+            face_coord_result.normalized_Ts[..., :3, :3].det() - 1
+        )
 
         gp_global_means = face_coord_result.Ts[..., :3, 3]
         # [..., F, 3]
 
-        """
         gp_global_rot_qs = utils.QuaternionMul(
             face_coord_rot_qs, self.gp_rot_qs,
             order_1="WXYZ", order_2="WXYZ", order_out="WXYZ")
-        """
-
-        gp_global_rot_qs = self.gp_rot_qs
-
-        # print(f"{face_coord_rot_qs=}")
-
-        # d2 = (utils.VectorNorm(gp_global_rot_qs) - 1).square()
-
-        # print(f"{d2.min()=}")
-        # print(f"{d2.max()=}")
-        # print(f"{(utils.VectorNorm(self.gp_rot_qs) - 1).square().mean()=}")
-
         # [..., F, 4] wxyz
 
-        # print(f"{self.gp_scales.square().sum()}")
-        # print(f"{self.gp_rot_qs.square().sum()}")
+        utils.CheckAlmostZeros(utils.VectorNorm(gp_global_rot_qs) - 1)
 
         face_area = face_coord_result.face_area.unsqueeze(-1)
         # [..., F, 1]
 
-        # face_area_min = face_area.min()
-        # face_area_max = face_area.max()
-
-        # print(f"{face_area_min=}")
-        # print(f"{face_area_max=}")
-
-        # assert 0 < face_area_min
-        # assert face_area_max <= 1
-
-        # utils.Exit(0)
-
         gp_global_scales = face_area * self.gp_scales
         # [..., F, 3]
-
-        utils.PrintCudaMemUsage()
 
         rendered_result = gaussian_utils.RenderGaussian(
             camera_transform=camera_transform,
@@ -322,7 +181,7 @@ class GoMAvatarModel(torch.nn.Module):
 
             color_diff_loss = color_diff.square().mean()
 
-        return GoMAvatarModelForwardResult(
+        return ModuleForwardResult(
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,
             lap_loss=lap_loss,

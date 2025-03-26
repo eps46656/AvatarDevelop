@@ -20,9 +20,9 @@ class SubjectData:
     camera_transform: transform_utils.ObjectTransform
     camera_config: camera_utils.CameraConfig
 
-    model_data: smplx_utils.SMPLXModelData
+    model_data: smplx_utils.Model
 
-    blending_param: smplx_utils.SMPLXBlendingParam
+    blending_param: smplx_utils.BlendingParam
 
 
 @beartype
@@ -98,9 +98,9 @@ def _ReadCamera(
 @beartype
 def _ReadSMPLBlendingParam(
     subject_dir: pathlib.Path,
-    smplx_model_data: smplx_utils.SMPLXModelData,
+    smplx_model_data: smplx_utils.Model,
     device: torch.device,
-) -> smplx_utils.SMPLXBlendingParam:
+) -> smplx_utils.BlendingParam:
     body_shapes_cnt = smplx_model_data.body_shape_dirs.shape[-1]
     poses_cnt = smplx_model_data.body_joints_cnt
     # global_rot + smplx_utils.BODY_POSES_CNT
@@ -162,7 +162,7 @@ def _ReadSMPLBlendingParam(
 
     # ---
 
-    return smplx_utils.SMPLXBlendingParam(
+    return smplx_utils.BlendingParam(
         body_shapes=body_shapes.to(dtype=utils.FLOAT, device=device),
         global_transl=global_transl.to(dtype=utils.FLOAT, device=device),
         global_rot=global_rot.to(dtype=utils.FLOAT, device=device),
@@ -173,7 +173,7 @@ def _ReadSMPLBlendingParam(
 @beartype
 def ReadSubject(
     subject_dir: os.PathLike,
-    model_data_dict: dict[str, smplx_utils.SMPLXModelData],
+    model_data_dict: dict[str, smplx_utils.Model],
     device: torch.device,
 ):
     subject_dir = pathlib.Path(subject_dir)
@@ -224,7 +224,7 @@ class Dataset(dataset_utils.Dataset):
         self,
         dataset_dir: os.PathLike,
         subject_name: str,
-        model_data_dict: dict[str, smplx_utils.SMPLXModelData],
+        model_data_dict: dict[str, smplx_utils.Model],
         device: torch.device,
     ):
         dataset_dir = pathlib.Path(dataset_dir)
@@ -243,13 +243,15 @@ class Dataset(dataset_utils.Dataset):
 
     def BatchGet(self, idxes: torch.Tensor):
         return SubjectData(
-            vidoe=self.subject_data.video[idxes],
+            video=self.subject_data.video[idxes],
             mask=self.subject_data.mask[idxes],
 
             camera_transform=self.subject_data.camera_transform,
             camera_config=self.subject_data.camera_config,
 
-            blending_param=smplx_utils.SMPLXBlendingParam(
+            model_data=self.subject_data.model_data,
+
+            blending_param=smplx_utils.BlendingParam(
                 body_shapes=self.subject_data.blending_param.
                 body_shapes,
 

@@ -1,13 +1,15 @@
+import argparse
 import dataclasses
 import os
 import pathlib
+import shlex
 import sqlite3
 import time
 import traceback
 import typing
 
+import timedinput
 import torch
-import tqdm
 from beartype import beartype
 
 from . import dataset_utils, sqlite_utils, utils
@@ -20,7 +22,7 @@ class CheckpointMeta:
     prev: int
     epochs_cnt: int
     message: typing.Optional[str]
-    deep_save: bool
+    deep_saved: bool
     avg_loss: float
 
 
@@ -57,6 +59,7 @@ class LogDatabase:
                 );
             """)
 
+        self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA cache_size = -524288")
@@ -69,8 +72,8 @@ class LogDatabase:
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
                 "prev": sqlite_utils.SqliteDataTableColAttr(
-                    serialize=lambda x: x,
-                    deserialize=lambda x: x,),
+                    serialize=lambda x: None if x == -1 else x,
+                    deserialize=lambda x: -1 if x is None else x,),
                 "epochs_cnt": sqlite_utils.SqliteDataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
@@ -143,6 +146,178 @@ class TrainingCore:
     def Train(self) -> TrainingResult:
         raise utils.UnimplementationError()
 
+    def Eval(self):
+        raise utils.UnimplementationError()
+
+
+@beartype
+class AutoSavingConfig:
+    min_diff_time: int
+    max_diff_time: int
+    min_epochs_cnt: int
+    max_epochs_cnt: int
+
+    def Check(self):
+        assert 0 <= self.min_diff_time
+        assert self.min_diff_time <= self.max_diff_time
+
+        assert 0 <= self.min_epochs_cnt
+        assert self.min_epochs_cnt <= self.max_epochs_cnt
+
+    def QuerySave(self, diff_time: int, diff_epochs_cnt: int):
+        if self.max_diff_time <= diff_time or self.max_epochs_cnt <= diff_epochs_cnt:
+            return True
+
+        if diff_time < self.min_diff_time or diff_epochs_cnt < self.min_epochs_cnt:
+            return False
+
+        return True
+
+
+"""
+
+diff_time = cur_time - prv_time
+diff_epochs_cnt = cur_epochs_cnt - prv_epochs_cnt
+
+if max_time <= diff_time or max_epochs_cnt <= diff_epochs_cnt:
+    return save
+
+if diff_time < min_time or diff_epochs_cnt < min_epochs_cnt
+    return not save
+
+return save
+
+"""
+
+
+@beartype
+def MakeCommandParser():
+    parser = argparse.ArgumentParser(prog="parser")
+
+    subparser = parser.add_subparsers(
+        dest="op",
+        required=True,
+    )
+
+    # ---
+
+    nop_parser = subparser.add_parser(
+        "nop",
+        help="nop",
+    )
+
+    # ---
+
+    show_parser = subparser.add_parser(
+        "show",
+        help="show status",
+    )
+
+    # ---
+
+    load_parser = subparser.add_parser(
+        "load",
+        help="load a checkpoint",
+    )
+
+    load_parser.add_argument(
+        "--id",
+        type=int,
+        required=True,
+        help="the target checkpoint's id",
+    )
+
+    # ---
+
+    load_latest_parser = subparser.add_parser(
+        "load_latest",
+        help="load the latest checkpoint",
+    )
+
+    # ---
+
+    save_parser = subparser.add_parser(
+        "save",
+        help="save current state to a checkpoint",
+    )
+
+    save_parser.add_argument(
+        "--deep_saved",
+        action="store_true",
+        help="save the total state",
+    )
+
+    # ---
+
+    train_parser = subparser.add_parser(
+        "train",
+        help="train the module",
+    )
+
+    train_parser.add_argument(
+        "--epochs_cnt",
+        type=int,
+        default=1,
+        help="the number of epochs to train",
+    )
+
+    train_parser.add_argument(
+        "--min_diff_time",
+        type=int,
+        default=10 * 60,
+        help="",
+    )
+
+    train_parser.add_argument(
+        "--max_diff_time",
+        type=int,
+        default=30 * 60 * 60,
+        help="",
+    )
+
+    train_parser.add_argument(
+        "--min_diff_epochs_cnt",
+        type=int,
+        default=20,
+        help="",
+    )
+
+    train_parser.add_argument(
+        "--max_diff_epochs_cnt",
+        type=int,
+        default=100,
+        help="",
+    )
+
+    train_parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="",
+    )
+
+    # ---
+
+    eval_parser = subparser.add_parser(
+        "eval",
+        help="eval the module",
+    )
+
+    # ---
+
+    exe_cmd_file_parser = subparser.add_parser(
+        "exe_cmd_file",
+        help="execute file commands",
+    )
+
+    # ---
+
+    exit_parser = subparser.add_parser(
+        "exit",
+        help="exit the cli mode",
+    )
+
+    return parser
+
 
 @beartype
 class Trainer:
@@ -153,6 +328,10 @@ class Trainer:
     @staticmethod
     def _GetCheckpointDataPath(proj_dir: pathlib.Path, id: int):
         return proj_dir / f"ckpt_data_{id}.pth"
+
+    @staticmethod
+    def _GetCancelTokenPath(proj_dir: pathlib.Path, id: int):
+        return proj_dir / f"cancel_token.txt"
 
     def __init__(
         self,
@@ -169,24 +348,29 @@ class Trainer:
 
         self.__log_db = LogDatabase(log_db_path)
 
-        self.__cur_previous = -1
-        self.__cur_epochs_cnt = 0
-        self.__cur_avg_loss = 0.0
+        self.__prv: int = -1
+        self.__epochs_cnt: int = 0
+        self.__avg_loss: float = 0.0
 
         self.__diff_epochs_cnt = 0
 
         self.training_core: TrainingCore = None
 
-    # ---
-
-    def __del__(self):
-        pass
+        utils.WriteFile(Trainer._GetCancelTokenPath(self.__proj_dir), "w", "")
 
     def GetTrainingCore(self):
         return self.training_core
 
     def SetTrainingCore(self, training_core: TrainingCore):
         self.training_core = training_core
+
+    def Show(self):
+        print(f"")
+        print(f"            prv = {self.__prv}")
+        print(f"     epochs cnt = {self.__epochs_cnt}")
+        print(f"diff epochs cnt = {self.__diff_epochs_cnt}")
+        print(f"       avg loss = {self.__avg_loss}")
+        print(f"")
 
     def GetatestCheckpointMeta(self):
         return self.__log_db.SelectLatestCheckpointMeta()
@@ -201,7 +385,7 @@ class Trainer:
 
         d = torch.load(ckpt_data_path)
 
-        if ckpt_meta.deep_save:
+        if ckpt_meta.deep_saved:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name in d:
                     setattr(self.training_core, field_name, d[field_name])
@@ -222,7 +406,7 @@ class Trainer:
     def Save(
         self,
         message: str = None,
-        deep_save: bool = False,
+        deep_saved: bool = False,
     ):
         assert self.training_core is not None
 
@@ -230,19 +414,19 @@ class Trainer:
 
         self.__log_db.InsertCheckpointMeta(CheckpointMeta(
             id=id,
-            prev=self.__cur_previous,
-            epochs_cnt=self.__cur_epochs_cnt,
+            prev=self.__prv,
+            epochs_cnt=self.__epochs_cnt,
             message=message,
-            deep_save=deep_save,
-            avg_loss=self.__cur_avg_loss,
+            deep_saved=deep_saved,
+            avg_loss=self.__avg_loss,
         ))
 
-        self.__cur_previous = id
+        self.__prv = id
         self.__diff_epochs_cnt = 0
 
         d = dict()
 
-        if deep_save:
+        if deep_saved:
             for field_name in {"module", "optimizer", "scheduler"}:
                 field_val = getattr(self.training_core, field_name)
 
@@ -260,15 +444,97 @@ class Trainer:
     def _Train(self):
         training_result = self.training_core.Train()
 
-        self.__cur_epochs_cnt += 1
+        self.__epochs_cnt += 1
         self.__diff_epochs_cnt += 1
-        self.__cur_avg_loss = training_result.avg_loss
+        self.__avg_loss = training_result.avg_loss
 
-    def Train(self, epochs_cnt: int):
+    def Train(
+        self,
+        epochs_cnt: int,
+        min_diff_time: int,
+        max_diff_time: int,
+        min_diff_epochs_cnt: int,
+        max_diff_epochs_cnt: int,
+    ):
         assert 0 <= epochs_cnt
 
-        if epochs_cnt == 0:
-            return
+        assert 0 <= min_diff_time
+        assert min_diff_time <= max_diff_time
+
+        assert 0 <= min_diff_epochs_cnt
+        assert min_diff_epochs_cnt <= max_diff_epochs_cnt
+
+        cancel_token_path = Trainer._GetCancelTokenPath(self.__proj_dir)
+
+        utils.WriteFile(cancel_token_path, "w", "")
 
         for _ in range(epochs_cnt):
             self._Train()
+
+            cur_time = int(time.time())
+
+            diff_time = cur_time - self.__prv
+
+            if max_diff_time <= diff_time or max_diff_epochs_cnt <= self.__diff_epochs_cnt:
+                self.Save()
+                continue
+
+            if diff_time < max_diff_time or self.__diff_epochs_cnt < max_diff_epochs_cnt:
+                continue
+
+            self.Save()
+
+            if len(utils.ReadFile(cancel_token_path, "r")) != 0:
+                break
+
+    def Eval(self):
+        self.training_core.Eval()
+
+    def _CmdFileHandler(self, parser):
+        pass
+
+    def _CLIHandler(self, parser):
+        cmd = shlex.split(input("trainer> "))
+
+        args = parser.parse_args(cmd)
+
+        match args.op:
+            case "show":
+                self.Show()
+
+            case "load":
+                self.Load(args.id)
+
+            case "load_latest":
+                self.LoadLatest()
+
+            case "save":
+                self.Save(args.deep_saved)
+
+            case "train":
+                self.Train(
+                    epochs_cnt=args.epochs_cnt,
+                    min_diff_time=args.min_diff_time,
+                    max_diff_time=args.max_diff_time,
+                    min_diff_epochs_cnt=args.min_diff_epochs_cnt,
+                    max_diff_epochs_cnt=args.max_diff_epochs_cnt,
+                )
+
+            case "eval":
+                self.Eval()
+
+            case "exit":
+                return False
+
+        return True
+
+    def EnterCLI(self):
+        parser = MakeCommandParser()
+
+        while True:
+            try:
+                if not self._CLIHandler(parser):
+                    return
+            except:
+                print(traceback.format_exc())
+                continue

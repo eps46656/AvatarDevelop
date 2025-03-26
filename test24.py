@@ -8,7 +8,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (camera_utils, config, dataset_utils, gom_avatar_utils,
+from . import (camera_utils, config, dataset_utils, gom_avatar_utils_,
                people_snapshot_utils, smplx_utils, training_utils,
                transform_utils, utils)
 
@@ -25,7 +25,7 @@ ALPHA_COLOR_DIFF = 1.0
 
 
 @beartype
-def LossFunc(
+def MyLossFunc(
     rendered_img: torch.Tensor,  # [..., C, H, W]
 
     rgb_loss: typing.Optional[torch.Tensor],
@@ -48,11 +48,22 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         sum_loss = 0.0
 
-        for idxes in tqdm.tqdm(self.dataset_loader):
+        for idxes, sample in tqdm.tqdm(self.dataset_loader):
             idxes: torch.Tensor
 
-            sample = self.dataset.BatchGet(idxes)
-            result = self.module(**sample)
+            sample: people_snapshot_utils.SubjectData = \
+                self.dataset.BatchGet(idxes)
+
+            result = self.module(
+                camera_transform=sample.camera_transform,
+                camera_config=sample.camera_config,
+                img=sample.video,
+                mask=sample.mask,
+                blending_param=sample.blending_param,
+            )
+
+            if not isinstance(result, dict):
+                result = result.__dict__
 
             loss: torch.Tensor = self.loss_func(**result)
 
@@ -67,7 +78,7 @@ class MyTrainingCore(training_utils.TrainingCore):
         avg_loss = sum_loss / len(self.dataset)
 
         if self.scheduler is not None:
-            self.scheduler.step()
+            self.scheduler.step(avg_loss)
 
         return training_utils.TrainingResult(
             avg_loss=avg_loss
@@ -95,7 +106,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ReadSMPLXModelData(
+        key: smplx_utils.ReadModelData(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,
@@ -133,12 +144,12 @@ def main1():
     model_data.vertex_positions = torch.nn.Parameter(
         model_data.vertex_positions)
 
-    smplx_model_builder = smplx_utils.SMPLXModelBuilder(
+    smplx_model_builder = smplx_utils.ModelBlender(
         model_data=model_data,
         device=DEVICE,
     )
 
-    gom_avatar_model = gom_avatar_utils.model.GoMAvatarModel(
+    module = gom_avatar_utils_.model.GoMAvatarModel(
         avatar_blending_layer=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
@@ -151,7 +162,7 @@ def main1():
     )
 
     optimizer = torch.optim.Adam(
-        gom_avatar_model.parameters(),
+        module.parameters(),
         lr=1e-3,
     )
 
@@ -166,62 +177,26 @@ def main1():
         min_lr=1e-7,
     )
 
-    for epoch_i in range(10):
-        for frame_i in range(T):
-            optimizer.zero_grad()
+    training_core = MyTrainingCore(
+        module=module,
+        dataset=dataset,
+        dataset_loader=dataset_loader,
+        loss_func=MyLossFunc,
+        optimizer=optimizer,
+        scheduler=scheduler
+    )
 
-            print(f"{epoch_i=}\t\t{frame_i=}")
+    trainer = training_utils.Trainer(
+        proj_dir=DIR / "train_2025_0325"
+    )
 
-            result: gom_avatar_utils.model.GoMAvatarModelForwardResult =\
-                gom_avatar_model(
-                    subject_data.camera_transform,
-                    subject_data.camera_config,
+    trainer.SetTrainingCore(training_core)
 
-                    subject_data.video[frame_i],
+    trainer.Save("init", True)
 
-                    subject_data.mask[frame_i],
+    trainer.Train(10)
 
-                    smplx_utils.SMPLXBlendingParam(
-                        body_shapes=subject_data.blending_param.
-                        body_shapes,
-
-                        global_transl=subject_data.blending_param.
-                        global_transl[frame_i],
-
-                        global_rot=subject_data.blending_param.
-                        global_rot[frame_i],
-
-                        body_poses=subject_data.blending_param.
-                        body_poses[frame_i],
-                    )
-                )
-
-            frames[frame_i] = result.rendered_img.detach()
-
-            mean_rgb_loss = result.rgb_loss.mean()
-            mean_lap_loss = result.lap_loss.mean()
-            mean_normal_sim_loss = result.normal_sim_loss.mean()
-            mean_color_diff_loss = result.color_diff_loss.mean()
-
-            print(f"{mean_rgb_loss=}")
-            print(f"{mean_lap_loss=}")
-            print(f"{mean_normal_sim_loss=}")
-            print(f"{mean_color_diff_loss=}")
-
-            loss = mean_rgb_loss + mean_lap_loss + \
-                mean_normal_sim_loss + mean_color_diff_loss
-
-            loss.backward()
-            optimizer.step()
-
-        torch.save(gom_avatar_model.state_dict(),
-                   DIR / f"gom_avatar_model_{epoch_i}.pth")
-
-        utils.WriteVideo(
-            path=DIR / f"output_{epoch_i}.mp4",
-            video=utils.ImageDenormalize(frames),
-            fps=30,
-        )
+    trainer.Save("0", False)
 
 
 if __name__ == "__main__":

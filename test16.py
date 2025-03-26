@@ -34,7 +34,7 @@ def main2():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ReadSMPLXModelData(
+        key: smplx_utils.ReadModelData(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,

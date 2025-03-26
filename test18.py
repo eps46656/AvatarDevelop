@@ -52,7 +52,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ReadSMPLXModelData(
+        key: smplx_utils.ReadModelData(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,
@@ -81,7 +81,7 @@ def main1():
 
     # ---
 
-    smplx_builder = smplx_utils.SMPLXModelBuilder(
+    smplx_builder = smplx_utils.ModelBlender(
         model_data=subject_data.model_data,
         device=DEVICE,
     )
@@ -136,7 +136,7 @@ def main1():
 
     # ---
 
-    smplx_model: smplx_utils.SMPLXModel = smplx_builder.forward(
+    smplx_model: smplx_utils.Model = smplx_builder.forward(
         subject_data.blending_param)
 
     print(f"{smplx_model.vertex_positions.shape}")

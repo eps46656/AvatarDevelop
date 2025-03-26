@@ -99,7 +99,7 @@ def main3():
 
     model_data_path = DIR / f"smpl_models/{model_name}.pkl"
 
-    model_data = smplx_utils.ReadSMPLXModelData(
+    model_data = smplx_utils.ReadModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=smplx_utils.BODY_SHAPES_CNT,
         expr_shapes_cnt=0,

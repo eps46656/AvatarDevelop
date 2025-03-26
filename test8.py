@@ -17,21 +17,6 @@ FLOAT = torch.float32
 DEVICE = utils.CPU
 
 
-ORIGIN = torch.tensor([[0], [0], [0]], dtype=FLOAT)
-X_AXIS = torch.tensor([[1], [0], [0]], dtype=FLOAT)
-Y_AXIS = torch.tensor([[0], [1], [0]], dtype=FLOAT)
-Z_AXIS = torch.tensor([[0], [0], [1]], dtype=FLOAT)
-
-SMPLX_FT = +Z_AXIS
-SMPLX_BK = -Z_AXIS
-
-SMPLX_LT = +X_AXIS
-SMPLX_RT = -X_AXIS
-
-SMPLX_UP = +Y_AXIS
-SMPLX_DW = -Y_AXIS
-
-
 def CheckIsZero(
     zero: torch.Tensor,  # [...]
 ):

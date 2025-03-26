@@ -21,21 +21,9 @@ DEVICE = utils.CPU
 def main1():
     model_data_path = DIR / "smplx/models/smplx/SMPLX_NEUTRAL.pkl"
 
-    body_shapes_cnt = 10
-    expr_shapes_cnt = 10
-    body_joints_cnt = 22
-    jaw_joints_cnt = 1
-    eye_joints_cnt = 1
-    hand_joints_cnt = 15
-
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
+    model_data: smplx_utils.Model = smplx_utils.ReadModelData(
         model_data_path=model_data_path,
-        body_shapes_cnt=body_shapes_cnt,
-        expr_shapes_cnt=expr_shapes_cnt,
-        body_joints_cnt=body_joints_cnt,
-        jaw_joints_cnt=jaw_joints_cnt,
-        eye_joints_cnt=eye_joints_cnt,
-        hand_joints_cnt=hand_joints_cnt,
+        model_config=smplx_utils.smplx_model_config,
         device=DEVICE,
     )
 
@@ -151,7 +139,7 @@ def main4():
     eye_joints_cnt = 1
     hand_joints_cnt = 15
 
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
+    model_data: smplx_utils.Model = smplx_utils.ReadModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=body_shapes_cnt,
         expr_shapes_cnt=expr_shapes_cnt,
@@ -179,7 +167,7 @@ def main5():
     eye_joints_cnt = 1
     hand_joints_cnt = 15
 
-    model_data: smplx_utils.SMPLXModelData = smplx_utils.ReadSMPLXModelData(
+    model_data: smplx_utils.Model = smplx_utils.ReadModelData(
         model_data_path=model_data_path,
         body_shapes_cnt=body_shapes_cnt,
         expr_shapes_cnt=expr_shapes_cnt,

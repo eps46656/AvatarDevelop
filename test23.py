@@ -5,7 +5,7 @@ import pathlib
 import torch
 from beartype import beartype
 
-from . import (camera_utils, config, gom_avatar_utils, people_snapshot_utils,
+from . import (camera_utils, config, gom_avatar_utils_, people_snapshot_utils,
                smplx_utils, transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
@@ -35,7 +35,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ReadSMPLXModelData(
+        key: smplx_utils.ReadModelData(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,
@@ -78,12 +78,12 @@ def main1():
     model_data.vertex_positions = torch.nn.Parameter(
         model_data.vertex_positions)
 
-    smplx_model_builder = smplx_utils.SMPLXModelBuilder(
+    smplx_model_builder = smplx_utils.ModelBlender(
         model_data=model_data,
         device=DEVICE,
     )
 
-    gom_avatar_model = gom_avatar_utils.model.GoMAvatarModel(
+    gom_avatar_model = gom_avatar_utils_.model.GoMAvatarModel(
         avatar_blending_layer=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
@@ -106,7 +106,7 @@ def main1():
 
             print(f"{epoch_i=}\t\t{frame_i=}")
 
-            result: gom_avatar_utils.model.GoMAvatarModelForwardResult =\
+            result: gom_avatar_utils_.model.GoMAvatarModelForwardResult =\
                 gom_avatar_model(
                     subject_data.camera_transform,
                     subject_data.camera_config,
@@ -115,7 +115,7 @@ def main1():
 
                     subject_data.mask[frame_i],
 
-                    smplx_utils.SMPLXBlendingParam(
+                    smplx_utils.BlendingParam(
                         body_shapes=subject_data.blending_param.
                         body_shapes,
 

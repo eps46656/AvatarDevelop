@@ -50,5 +50,9 @@ class DatasetLoader:
 
         for batch_size in batch_sizes:
             nxt_i = i + batch_size
-            yield self.dataset.BatchGet(idxes[i:nxt_i])
+
+            cur_idxes = idxes[i:nxt_i]
+
+            yield cur_idxes, self.dataset.BatchGet(cur_idxes)
+
             i = nxt_i

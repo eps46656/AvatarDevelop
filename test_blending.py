@@ -115,8 +115,8 @@ def main3():
     hand_joints_cnt = 15
 
     with utils.Timer():
-        my_smplx_builder = smplx_utils.SMPLXModelBuilder(
-            smplx_utils.ReadSMPLXModelData(
+        my_smplx_builder = smplx_utils.ModelBlender(
+            smplx_utils.ReadModelData(
                 model_data_path=model_path,
                 body_shapes_cnt=body_shapes_cnt,
                 expr_shapes_cnt=expr_shapes_cnt,
@@ -220,7 +220,7 @@ def main3():
 
     with utils.Timer():
         my_smplx_model = my_smplx_builder.forward(
-            smplx_utils.SMPLXBlendingParam(
+            smplx_utils.BlendingParam(
                 body_shapes=body_shapes,
                 expr_shapes=expr_shapes,
 

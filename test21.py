@@ -35,7 +35,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ReadSMPLXModelData(
+        key: smplx_utils.ModelData.FromFile(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,
@@ -66,18 +66,18 @@ def main1():
 
     # ---
 
-    model_data = copy.copy(subject_data.model_data)
+    model_data = subject_data.model_data
 
     model_data.vertex_positions = torch.nn.Parameter(
         model_data.vertex_positions)
 
-    smplx_model_builder = smplx_utils.SMPLXModelBuilder(
+    smplx_model_builder = smplx_utils.ModelBlender(
         model_data=model_data,
         device=DEVICE,
     )
 
-    gom_avatar_model = gom_avatar_utils.model.GoMAvatarModel(
-        avatar_blending_layer=smplx_model_builder,
+    gom_avatar_module = gom_avatar_utils.Module(
+        avatar_blender=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
 
@@ -89,7 +89,7 @@ def main1():
     )
 
     optimizer = torch.optim.Adam(
-        gom_avatar_model.parameters(),
+        gom_avatar_module.parameters(),
         lr=1e-4,
     )
 
@@ -99,8 +99,8 @@ def main1():
 
             print(f"{epoch_i=}\t\t{frame_i=}")
 
-            result: gom_avatar_utils.model.GoMAvatarModelForwardResult =\
-                gom_avatar_model(
+            result: gom_avatar_utils.ModuleForwardResult =\
+                gom_avatar_module(
                     subject_data.camera_transform,
                     subject_data.camera_config,
 
@@ -108,7 +108,7 @@ def main1():
 
                     subject_data.mask[frame_i],
 
-                    smplx_utils.SMPLXBlendingParam(
+                    smplx_utils.BlendingParam(
                         body_shapes=subject_data.blending_param.
                         body_shapes,
 
@@ -141,7 +141,7 @@ def main1():
             loss.backward()
             optimizer.step()
 
-        torch.save(gom_avatar_model.state_dict(),
+        torch.save(gom_avatar_module.state_dict(),
                    DIR / f"gom_avatar_model_{epoch_i}.pth")
 
         utils.WriteVideo(

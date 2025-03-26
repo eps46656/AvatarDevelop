@@ -244,7 +244,7 @@ def WriteImage(
 
 
 @beartype
-def ReadVideo(path: os.PathLike):
+def ReadVideo(path: os.PathLike) -> torch.Tensor:
     video, audio, d = torchvision.io.read_video(
         path,
         output_format="TCHW",
@@ -261,7 +261,7 @@ def WriteVideo(
     video: torch.Tensor,  # [T, C, H, W]
     fps: int,
     codec: str = "h264",
-):
+) -> None:
     assert video.dtype == torch.uint8
 
     torchvision.io.write_video(
@@ -273,12 +273,12 @@ def WriteVideo(
 
 
 @beartype
-def ImageNormalize(img: torch.Tensor):
+def ImageNormalize(img: torch.Tensor) -> torch.Tensor:
     return torch.div(img, 255, out=torch.empty_like(img, dtype=FLOAT))
 
 
 @beartype
-def ImageDenormalize(img: torch.Tensor):
+def ImageDenormalize(img: torch.Tensor) -> torch.Tensor:
     return (img * 255).round().clamp(0, 255).to(dtype=torch.uint8)
 
 
@@ -301,15 +301,13 @@ def DataclassStr(x):
 
 
 @beartype
-def IsZeros(x: torch.Tensor):
-    return x.abs().max() <= 5e-4
+def IsAlmostZeros(x: torch.Tensor, eps: float = 5e-4) -> bool:
+    return x.abs().max() <= eps
 
 
 @beartype
-def ToEinopsOrder(order: str):
-    order = order.upper()
-    assert order.isalpha()
-    return " ".join(order)
+def CheckAlmostZeros(x: torch.Tensor, eps: float = 5e-4):
+    assert IsAlmostZeros(x, eps)
 
 
 class Dir(enum.StrEnum):
@@ -337,7 +335,8 @@ class Dir(enum.StrEnum):
 
 
 @beartype
-def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
+def CheckShapes(
+        *args: torch.Tensor | tuple[types.EllipsisType | int, ...]) -> None:
     assert len(args) % 2 == 0
 
     undet_shapes: dict[int, int] = dict()
@@ -396,12 +395,12 @@ def CheckShapes(*args: torch.Tensor | tuple[types.EllipsisType | int, ...]):
 
 
 @beartype
-def GetIdxes(shape):
+def GetIdxes(shape: typing.Iterable[int]) -> typing.Iterable[tuple[int, ...]]:
     return itertools.product(*(range(s) for s in shape))
 
 
 @beartype
-def PrintCudaMemUsage(device=None):
+def PrintCudaMemUsage(device=None) -> None:
     mem = torch.cuda.memory_allocated(device) * 1.0
 
     unit = "Bytes"
@@ -422,7 +421,7 @@ def PrintCudaMemUsage(device=None):
 
 
 @beartype
-def CheckQuaternionOrder(order: str):
+def CheckQuaternionOrder(order: str) -> None:
     assert len(order) == 4
     order = order.upper()
     assert all(d in order for d in "WXYZ")
@@ -433,7 +432,12 @@ def CheckQuaternionOrder(order: str):
 def GetQuaternionWXYZ(
     q: torch.Tensor,  # [..., 4]
     order: str,  # wxyz
-):
+) -> tuple[
+    torch.Tensor,  # w
+    torch.Tensor,  # x
+    torch.Tensor,  # y
+    torch.Tensor,  # z
+]:
     CheckShapes(q, (..., 4))
 
     w, x, y, z = None, None, None, None
@@ -456,7 +460,7 @@ def SetQuaternionWXYZ(
     z: torch.Tensor,  # [...]
     order: str,  # wxyz
     dst: torch.Tensor,  # [..., 4]
-):
+) -> None:
     CheckShapes(dst, (..., 4))
 
     for i, k in enumerate(CheckQuaternionOrder(order)):
@@ -468,7 +472,8 @@ def SetQuaternionWXYZ(
 
 
 @beartype
-def Sph2Cart(radius: float, theta: float, phi: float):
+def Sph2Cart(radius: float, theta: float, phi: float) \
+        -> tuple[float, float, float]:
     xy_radius = radius * math.sin(theta)
 
     x = xy_radius * math.cos(phi)
@@ -479,7 +484,8 @@ def Sph2Cart(radius: float, theta: float, phi: float):
 
 
 @beartype
-def Cart2Sph(x: float, y: float, z: float):
+def Cart2Sph(x: float, y: float, z: float) \
+        -> tuple[float, float, float]:
     xy_radius_sq = x**2 + y**2
     xy_radius = math.sqrt(xy_radius_sq)
 
@@ -491,7 +497,7 @@ def Cart2Sph(x: float, y: float, z: float):
 
 
 @beartype
-def NormalizedIdx(idx: int, length: int):
+def NormalizedIdx(idx: int, length: int) -> int:
     assert -length <= idx
     assert idx < length
 
@@ -499,7 +505,8 @@ def NormalizedIdx(idx: int, length: int):
 
 
 @beartype
-def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]):
+def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]) \
+        -> tuple[int, ...]:
     shapes = [
         [int(d) for d in (arg.shape if isinstance(arg, torch.Tensor) else arg)]
         for arg in args
@@ -526,7 +533,7 @@ def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]):
 
 
 @beartype
-def PromoteTypes(*args: torch.Tensor | torch.dtype):
+def PromoteTypes(*args: torch.Tensor | torch.dtype) -> torch.dtype:
     return functools.reduce(
         torch.promote_types,
         (arg if isinstance(arg, torch.dtype) else arg.dtype for arg in args),
@@ -535,7 +542,7 @@ def PromoteTypes(*args: torch.Tensor | torch.dtype):
 
 
 @beartype
-def CheckDevice(*args: torch.Tensor | torch.device):
+def CheckDevice(*args: torch.Tensor | torch.device) -> None:
     def GetDevice(x):
         return x if isinstance(x, torch.device) else x.device
 
@@ -548,12 +555,12 @@ def CheckDevice(*args: torch.Tensor | torch.device):
 
 @beartype
 def BatchEye(
-    batch_shape,
+    batch_shape,  # [...]
     n: int,
     *,
     dtype: torch.dtype = None,
     device: torch.device = None,
-):
+) -> torch.Tensor:  # [..., n, n]
     ret = torch.empty(batch_shape + (n, n), dtype=dtype, device=device)
     ret[..., :, :] = torch.eye(n, dtype=dtype)
     return ret
@@ -561,11 +568,11 @@ def BatchEye(
 
 @beartype
 def RandUnit(
-    size,
+    size,  # [..., D]
     *,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:
+) -> torch.Tensor:  # [..., D]
     v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
     return v / (EPS + VectorNorm(v, -1, True))
 
@@ -576,67 +583,67 @@ def RandQuaternion(
     *,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
+) -> torch.Tensor:  # [..., 4]
     return RandUnit(size + (4,), dtype=dtype, device=device)
 
 
 @beartype
 def RandRotVec(
-    size,
+    size,  # [...]
     *,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
+) -> torch.Tensor:  # [...]
     return RandUnit(size, dtype=dtype, device=device) * \
         torch.rand(size, dtype=dtype, device=device) * math.pi
 
 
 @beartype
 def Dot(
-    x: torch.Tensor,
-    y: torch.Tensor,
+    x: torch.Tensor,  # [...]
+    y: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
-):
+) -> torch.Tensor:  # [...]
     return (x * y).sum(dim, keepdim)
 
 
 @beartype
 def VectorNorm(
-    x: torch.Tensor,
+    x: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
-) -> torch.Tensor:
+) -> torch.Tensor:  # [...]
     return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim)
 
 
 @beartype
 def Normalized(
-    x: torch.Tensor,
+    x: torch.Tensor,  # [...]
     dim: int = -1,
     length: typing.Optional[int | float | torch.Tensor] = None,
-):
+) -> torch.Tensor:  # [...]
     norm = (EPS + VectorNorm(x, dim, True))
     return x / norm if length is None else x * (length / norm)
 
 
 @beartype
 def GetDiff(
-    x: torch.Tensor,
-    y: torch.Tensor,
+    x: torch.Tensor,  # [...]
+    y: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
-):
+) -> torch.Tensor:  # [...]
     return VectorNorm(x - y, dim, keepdim)
 
 
 @beartype
 def GetCosAngle(
-    x: torch.Tensor,
-    y: torch.Tensor,
+    x: torch.Tensor,  # [..., D]
+    y: torch.Tensor,  # [..., D]
     dim: int = -1,
     keepdim: bool = False,
-):
+) -> torch.Tensor:  # [...] or [..., 1]
     x_norm = VectorNorm(x, dim, keepdim)
     y_norm = VectorNorm(y, dim, keepdim)
 
@@ -645,11 +652,11 @@ def GetCosAngle(
 
 @beartype
 def GetAngle(
-    x: torch.Tensor,
-    y: torch.Tensor,
+    x: torch.Tensor,  # [..., D]
+    y: torch.Tensor,  # [..., D]
     dim: int = -1,
     keepdim: bool = False,
-):
+) -> torch.Tensor:  # [...] or [..., 1]
     return GetCosAngle(x, y, dim, keepdim).acos()
 
 
@@ -802,7 +809,7 @@ def AxisAngleToRotMat(
     *,
     out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
     out: typing.Optional[torch.Tensor] = None,  # [..., 3/4, 3/4]
-):
+) -> torch.Tensor:  # [..., 3/4, 3/4]
     CheckShapes(axis, (..., 3))
 
     if out_shape is None:
@@ -918,7 +925,7 @@ def QuaternionToRotMat(
     order: str,  # permutation of "wxyz"
     out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
     out: typing.Optional[torch.Tensor] = None,  # [..., 3/4, 3/4]
-):
+) -> torch.Tensor:  # [..., 3/4, 3/4]
     CheckShapes(quaternion, (..., 4))
 
     if out_shape is None:
@@ -1036,16 +1043,16 @@ def RotMatToQuaternion(
     a_idxes = a_idxes.expand(a_idxes.shape[:-2] + (4, 1))
     # [..., 4, 1]
 
+    ret = q_mat.gather(-1, a_idxes)
+    # [..., 4, 1]
+
+    ret = ret.squeeze(-1)
+    # [..., 4]
+
     if out is None:
-        out = torch.empty(
-            rot_mat.shape[:-2] + (4,),
-            dtype=rot_mat.dtype, device=rot_mat.device
-        )
-
-    out = out.unsqueeze(-1)
-    # [..., 4] -> [..., 4, 1]
-
-    torch.gather(q_mat, -1, a_idxes, out=out)
+        out = ret
+    else:
+        out.copy_(ret)
 
     """
 
@@ -1063,9 +1070,6 @@ def RotMatToQuaternion(
 
     """
 
-    out = out.squeeze(-1)
-    # [4, ..., 1] -> [..., 4]
-
     return out
 
 
@@ -1079,7 +1083,7 @@ def QuaternionMul(
     order_out: str,  # wxyz
 
     out: typing.Optional[torch.Tensor] = None,  # [..., 4]
-):
+) -> torch.Tensor:  # [..., 4]
     batch_shape = BroadcastShapes(q1, q2)
 
     q1 = q1.expand(batch_shape)
@@ -1134,7 +1138,7 @@ def MakeHomo(
 def HomoNormalize(
     x: torch.Tensor,  # [...]
     dim: int = -1,
-):
+) -> torch.Tensor:  # [...]
     dim = NormalizedIdx(dim, x.dim())
 
     idxes = [slice(None)] * x.dim()
