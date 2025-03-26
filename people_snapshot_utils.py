@@ -14,6 +14,8 @@ from . import camera_utils, dataset_utils, smplx_utils, transform_utils, utils
 @beartype
 @dataclasses.dataclass
 class SubjectData:
+    fps: int
+
     video: torch.Tensor  # [T, C, H, W]
     mask: torch.Tensor  # [T, H, W]
 
@@ -205,6 +207,7 @@ def ReadSubject(
     mask = _ReadMask(subject_dir, fps, device)
 
     ret = SubjectData(
+        fps=fps,
         video=video,
         camera_transform=camera_transform,
         camera_config=camera_config,
@@ -216,6 +219,7 @@ def ReadSubject(
     return ret
 
 
+"""
 @beartype
 class Dataset(dataset_utils.Dataset):
     def __init__(
@@ -263,3 +267,4 @@ class Dataset(dataset_utils.Dataset):
                 body_poses[idxes],
             ),
         )
+"""

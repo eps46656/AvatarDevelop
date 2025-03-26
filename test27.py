@@ -1,16 +1,135 @@
-import dataclasses
 import pathlib
+import time
+import typing
 
 import torch
+import tqdm
 from beartype import beartype
 
-from . import (config, gom_avatar_utils, people_snapshot_utils, smplx_utils,
-               utils)
+from . import (config, dataset_utils, gom_avatar_utils, people_snapshot_utils,
+               smplx_utils, training_utils, utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
-DEVICE = torch.device("cpu")
+DEVICE = utils.CUDA_DEVICE
+
+
+ALPHA_RGB = 1.0
+ALPHA_LAP = 1.0
+ALPHA_NORMAL_SIM = 1.0
+ALPHA_COLOR_DIFF = 1.0
+
+
+@beartype
+def MyLossFunc(
+    rendered_img: torch.Tensor,  # [..., C, H, W]
+
+    rgb_loss: typing.Optional[torch.Tensor],
+    lap_loss: typing.Optional[torch.Tensor],
+    normal_sim_loss: typing.Optional[torch.Tensor],
+    color_diff_loss: typing.Optional[torch.Tensor],
+):
+    weighted_rgb_loss = ALPHA_RGB * rgb_loss.mean()
+    weighted_lap_loss = ALPHA_LAP * lap_loss.mean()
+    weighted_normal_sim_loss = ALPHA_NORMAL_SIM * normal_sim_loss.mean()
+    weighted_color_diff_loss = ALPHA_COLOR_DIFF * color_diff_loss.mean()
+
+    return weighted_rgb_loss + weighted_lap_loss + weighted_normal_sim_loss + weighted_color_diff_loss
+
+
+@beartype
+class MyTrainingCore(training_utils.TrainingCore):
+    def Train(self) -> training_utils.TrainingResult:
+        assert self.scheduler is None or isinstance(
+            self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
+
+        sum_loss = 0.0
+
+        for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
+            batch_idxes: torch.Tensor
+
+            sample: people_snapshot_utils.SubjectData = \
+                self.dataset.BatchGet(batch_idxes)
+
+            result: gom_avatar_utils.ModuleForwardResult = self.module(
+                camera_transform=sample.camera_transform,
+                camera_config=sample.camera_config,
+                img=sample.video,
+                mask=sample.mask,
+                blending_param=sample.blending_param,
+            )
+
+            loss: torch.Tensor = self.loss_func(**result.__dict__)
+
+            sum_loss += float(loss) * batch_idxes.numel()
+
+            self.optimizer.zero_grad()
+
+            loss.backward()
+
+            self.optimizer.step()
+
+        avg_loss = sum_loss / len(self.dataset)
+
+        if self.scheduler is not None:
+            self.scheduler.step(avg_loss)
+
+        return training_utils.TrainingResult(
+            avg_loss=avg_loss
+        )
+
+    def Eval(self):
+        self.dataset: gom_avatar_utils.Dataset
+
+        out_frames = torch.empty_like(self.dataset.sample.img)
+        # [T, C, H, W]
+
+        T, C, H, W = self.dataset.sample.img.shape
+
+        batch_shape = self.dataset.GetBatchShape()
+
+        with torch.no_grad():
+            for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
+                batch_idxes: tuple[torch.Tensor, ...]
+
+                idxes = utils.RavelIdxes(
+                    batch_idxes, self.dataset.GetBatchShape())
+                # [K]
+
+                idxes = idxes.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(
+                    idxes.shape + (C, H, W))
+                # [K, C, H, W]
+
+                sample: people_snapshot_utils.SubjectData = \
+                    self.dataset.BatchGet(batch_idxes)
+
+                result: gom_avatar_utils.ModuleForwardResult = self.module(
+                    camera_transform=sample.camera_transform,
+                    camera_config=sample.camera_config,
+                    img=sample.video,
+                    mask=sample.mask,
+                    blending_param=sample.blending_param,
+                )
+
+                rendered_img = result.rendered_img.reshape((-1, C, H, W))
+                # [K, C, H, W]
+
+                out_frames.scatter_(
+                    0, idxes, rendered_img)
+
+                """
+
+                out_frames[idxes[k, c, h, w], c, h, w] =
+                    rendered_img[k, c, h, w]
+
+                """
+
+        utils.WriteVideo(
+            path=DIR / f"output_{int(time.time())}.mp4",
+            video=utils.ImageDenormalize(out_frames),
+            fps=25,
+        )
 
 
 def main1():
@@ -49,14 +168,20 @@ def main1():
     subject_dir = people_snapshot_dir / subject_name
 
     subject_data = people_snapshot_utils.ReadSubject(
-        subject_dir=subject_dir,
-        model_data_dict=model_data_dict,
-        device=DEVICE,
+        subject_dir, model_data_dict, DEVICE)
+
+    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
+        camera_transform=subject_data.camera_transform,
+        camera_config=subject_data.camera_config,
+        img=subject_data.video,
+        mask=subject_data.mask,
+        blending_param=subject_data.blending_param,
+    ))
+
+    dataset_loader = dataset_utils.DatasetLoader(
+        dataset,
+        batch_size=8,
     )
-
-    subject_data.video = utils.ImageNormalize(subject_data.video)
-
-    camera_config = subject_data.camera_config
 
     # ---
 
@@ -74,74 +199,47 @@ def main1():
         color_channels_cnt=3,
     ).train()
 
-    T = subject_data.video.shape[0]
-
-    frames = torch.empty(
-        (T, 3,
-         subject_data.camera_config.img_h, subject_data.camera_config.img_w)
-    )
-
     optimizer = torch.optim.Adam(
         gom_avatar_module.parameters(),
         lr=1e-4,
     )
 
-    for epoch_i in range(10):
-        for frame_i in range(T):
-            optimizer.zero_grad()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer,
+        mode="min",
+        factor=pow(0.1, 1/4),
+        patience=5,
+        threshold=0.05,
+        threshold_mode="rel",
+        cooldown=0,
+        min_lr=1e-7,
+    )
 
-            print(f"{epoch_i=}\t\t{frame_i=}")
+    training_core = MyTrainingCore(
+        module=gom_avatar_module,
+        dataset=dataset,
+        dataset_loader=dataset_loader,
+        loss_func=MyLossFunc,
+        optimizer=optimizer,
+        scheduler=scheduler
+    )
 
-            result: gom_avatar_utils.model.GoMAvatarModelForwardResult =\
-                gom_avatar_module(
-                    subject_data.camera_transform,
-                    subject_data.camera_config,
+    trainer = training_utils.Trainer(
+        proj_dir=DIR / "train_2025_0325"
+    )
 
-                    subject_data.video[frame_i],
+    pass
 
-                    subject_data.mask[frame_i],
+    """
+    torch.save(gom_avatar_module.state_dict(),
+               DIR / f"gom_avatar_model_{epoch_i}.pth")
 
-                    smplx_utils.BlendingParam(
-                        body_shapes=subject_data.blending_param.
-                        body_shapes,
-
-                        global_transl=subject_data.blending_param.
-                        global_transl[frame_i],
-
-                        global_rot=subject_data.blending_param.
-                        global_rot[frame_i],
-
-                        body_poses=subject_data.blending_param.
-                        body_poses[frame_i],
-                    )
-                )
-
-            frames[frame_i] = result.rendered_img.detach()
-
-            mean_rgb_loss = result.rgb_loss.mean()
-            mean_lap_loss = result.lap_loss.mean()
-            mean_normal_sim_loss = result.normal_sim_loss.mean()
-            mean_color_diff_loss = result.color_diff_loss.mean()
-
-            print(f"{mean_rgb_loss=}")
-            print(f"{mean_lap_loss=}")
-            print(f"{mean_normal_sim_loss=}")
-            print(f"{mean_color_diff_loss=}")
-
-            loss = mean_rgb_loss + mean_lap_loss + \
-                mean_normal_sim_loss + mean_color_diff_loss
-
-            loss.backward()
-            optimizer.step()
-
-        torch.save(gom_avatar_module.state_dict(),
-                   DIR / f"gom_avatar_model_{epoch_i}.pth")
-
-        utils.WriteVideo(
-            path=DIR / f"output_{epoch_i}.mp4",
-            video=utils.ImageDenormalize(frames),
-            fps=30,
-        )
+    utils.WriteVideo(
+        path=DIR / f"output_{epoch_i}.mp4",
+        video=utils.ImageDenormalize(frames),
+        fps=subject_data.fps,
+    )
+    """
 
 
 if __name__ == "__main__":

@@ -92,6 +92,79 @@ class BlendingParam:
             else:
                 assert value.shape[-len(shape_constraint):] == shape_constraint
 
+    def GetBatchShape(self) -> tuple[int, ...]:
+        return utils.BroadcastShapes(
+            utils.TryGetBatchShape(self.body_shapes, -1),
+            utils.TryGetBatchShape(self.expr_shapes, -1),
+            utils.TryGetBatchShape(self.global_transl, -1),
+            utils.TryGetBatchShape(self.global_rot, -1),
+            utils.TryGetBatchShape(self.body_poses, -2),
+            utils.TryGetBatchShape(self.jaw_poses, -2),
+            utils.TryGetBatchShape(self.leye_poses, -2),
+            utils.TryGetBatchShape(self.reye_poses, -2),
+            utils.TryGetBatchShape(self.lhand_poses, -2),
+            utils.TryGetBatchShape(self.rhand_poses, -2),
+        )
+
+    def Expand(self, shape) -> typing.Self:
+        shape = tuple(shape)
+
+        return BlendingParam(
+            body_shapes=utils.TryBatchExpand(self.body_shapes, shape, -1),
+            expr_shapes=utils.TryBatchExpand(self.expr_shapes, shape, -1),
+            global_transl=utils.TryBatchExpand(self.global_transl, shape, -1),
+            global_rot=utils.TryBatchExpand(self.global_rot, shape, -1),
+            body_poses=utils.TryBatchExpand(self.body_poses, shape, -2),
+            jaw_poses=utils.TryBatchExpand(self.jaw_poses, shape, -2),
+            leye_poses=utils.TryBatchExpand(self.leye_poses, shape, -2),
+            reye_poses=utils.TryBatchExpand(self.reye_poses, shape, -2),
+            lhand_poses=utils.TryBatchExpand(self.lhand_poses, shape, -2),
+            rhand_poses=utils.TryBatchExpand(self.rhand_poses, shape, -2),
+            blending_vertex_normal=self.blending_vertex_normal,
+        )
+
+    def Flatten(self) -> typing.Self:
+        batch_shape = self.GetBatchShape()
+
+        def F(x: torch.Tensor, batch_dim: int):
+            return None if x is None else utils.TryBatchExpand(self.body_shapes, batch_shape, batch_dim).flatten(end_dim=batch_dim)
+
+        return BlendingParam(
+            body_shapes=F(self.body_shapes, -1),
+            expr_shapes=F(self.expr_shapes, -1),
+            global_transl=F(self.global_transl, -1),
+            global_rot=F(self.global_rot, -1),
+            body_poses=F(self.body_poses, -2),
+            jaw_poses=F(self.jaw_poses, -2),
+            leye_poses=F(self.leye_poses, -2),
+            reye_poses=F(self.reye_poses, -2),
+            lhand_poses=F(self.lhand_poses, -2),
+            rhand_poses=F(self.rhand_poses, -2),
+            blending_vertex_normal=self.blending_vertex_normal,
+        )
+
+    def BatchGet(self, batch_idxes: torch.Tensor):
+        batch_shape = self.GetBatchShape()
+
+        assert len(batch_idxes) == batch_shape.dim()
+
+        def F(x: torch.Tensor, batch_dim: int):
+            return None if x is None else utils.TryBatchExpand(x, batch_shape, batch_dim)[batch_idxes]
+
+        return BlendingParam(
+            body_shapes=F(self.body_shapes, -1),
+            expr_shapes=F(self.expr_shapes, -1),
+            global_transl=F(self.global_transl, -1),
+            global_rot=F(self.global_rot, -1),
+            body_poses=F(self.body_poses, -2),
+            jaw_poses=F(self.jaw_poses, -2),
+            leye_poses=F(self.leye_poses, -2),
+            reye_poses=F(self.reye_poses, -2),
+            lhand_poses=F(self.lhand_poses, -2),
+            rhand_poses=F(self.rhand_poses, -2),
+            blending_vertex_normal=self.blending_vertex_normal,
+        )
+
     def GetPoses(self, model_data: ModelData) -> torch.Tensor:
         self.Check(model_data, False)
 
@@ -121,9 +194,11 @@ class BlendingParam:
             self.global_rot.shape[:-1],
             self.body_poses.shape[:-2],
 
-            tuple() if self.jaw_poses is None else self.jaw_poses.shape[:-2],
-            tuple() if self.leye_poses is None else self.leye_poses.shape[:-2],
-            tuple() if self.reye_poses is None else self.reye_poses.shape[:-2],
+            utils.TryGetBatchShape(self.jaw_poses, -2),
+            utils.TryGetBatchShape(self.leye_poses, -2),
+            utils.TryGetBatchShape(self.leye_poses, -2),
+            utils.TryGetBatchShape(self.reye_poses, -2),
+
             tuple() if not lhand_en else lhand_poses.shape[:-2],
             tuple() if not rhand_en else rhand_poses.shape[:-2],
         )

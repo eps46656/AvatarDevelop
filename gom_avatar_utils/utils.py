@@ -33,15 +33,15 @@ def GetFaceCoord(
 
     device = utils.CheckDevice(vpa, vpb, vpc)
 
-    batch_shapes = utils.BroadcastShapes(
+    batch_shape = utils.BroadcastShapes(
         vpa.shape[:-1],
         vpb.shape[:-1],
         vpc.shape[:-1],
     )
 
-    vpa = vpa.expand(batch_shapes + (3,))
-    vpb = vpb.expand(batch_shapes + (3,))
-    vpc = vpc.expand(batch_shapes + (3,))
+    vpa = vpa.expand(batch_shape + (3,))
+    vpb = vpb.expand(batch_shape + (3,))
+    vpc = vpc.expand(batch_shape + (3,))
 
     s = (vpa + vpb + vpc) / 3
     # [..., 3]
@@ -74,10 +74,10 @@ def GetFaceCoord(
     sin_t = torch.sin(t).unsqueeze(-1)
 
     Ts = torch.empty(
-        batch_shapes + (4, 4), dtype=utils.FLOAT, device=device)
+        batch_shape + (4, 4), dtype=utils.FLOAT, device=device)
 
     normalized_Ts = torch.empty(
-        batch_shapes + (4, 4), dtype=utils.FLOAT, device=device)
+        batch_shape + (4, 4), dtype=utils.FLOAT, device=device)
 
     axis_x = Ts[..., :3, 0] = f1 * cos_t + f2 * sin_t
     axis_y = Ts[..., :3, 1] = f2 * cos_t - f1 * sin_t

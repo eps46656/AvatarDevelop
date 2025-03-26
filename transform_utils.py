@@ -86,9 +86,24 @@ class ObjectTransform:
 
         return ObjectTransform(trans, inv_trans)
 
-    @property
-    def shape(self):
+    def GetBatchShape(self):
         return self.trans.shape[:-2]
+
+    def Expand(self, shape):
+        shape = tuple(shape)
+
+        return ObjectTransform(
+            self.trans.expand(shape + (4, 4)),
+            self.inv_trans.expand(shape + (4, 4)),
+        )
+
+    def BatchGet(self, batch_idxes: tuple[torch.Tensor, ...]):
+        assert len(batch_idxes) == self.GetBatchShape().dim()
+
+        return ObjectTransform(
+            self.trans[batch_idxes],
+            self.inv_trans[batch_idxes],
+        )
 
     def __str__(self):
         return "\n".join([
@@ -143,7 +158,7 @@ class ObjectTransform:
 
         return dst.trans @ self.inv_trans
 
-    def GetCollapsed(
+    def Collapse(
         self,
         trans: torch.Tensor,  # [..., 4, 4]
     ):
@@ -154,4 +169,13 @@ class ObjectTransform:
 
         return ObjectTransform(
             self.trans @ trans,
-            trans.inverse() @ self.inv_trans)
+            trans.inverse() @ self.inv_trans,
+        )
+
+    def Expand(self, shape):
+        shape = tuple(shape) + (4, 4)
+
+        return ObjectTransform(
+            self.trans.expand(shape),
+            self.inv_trans.expand(shape),
+        )

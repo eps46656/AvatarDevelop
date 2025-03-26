@@ -20,15 +20,15 @@ def GetAreaVector(
         vertex_positions_c, (..., 3),
     )
 
-    batch_shapes = utils.BroadcastShapes(
+    batch_shape = utils.BroadcastShapes(
         vertex_positions_a,
         vertex_positions_b,
         vertex_positions_c,
     )
 
-    vertex_positions_a = vertex_positions_a.expand(batch_shapes)
-    vertex_positions_b = vertex_positions_b.expand(batch_shapes)
-    vertex_positions_c = vertex_positions_c.expand(batch_shapes)
+    vertex_positions_a = vertex_positions_a.expand(batch_shape)
+    vertex_positions_b = vertex_positions_b.expand(batch_shape)
+    vertex_positions_c = vertex_positions_c.expand(batch_shape)
 
     return torch.linalg.cross(
         vertex_positions_b - vertex_positions_a,

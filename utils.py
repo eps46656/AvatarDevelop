@@ -512,11 +512,11 @@ def NormalizedIdx(idx: int, length: int) -> int:
 
 
 @beartype
-def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]) \
+def BroadcastShapes(*args: None | torch.Tensor | typing.Iterable[int]) \
         -> tuple[int, ...]:
     shapes = [
         [int(d) for d in (arg.shape if isinstance(arg, torch.Tensor) else arg)]
-        for arg in args
+        for arg in args if arg is not None
     ]
 
     k = max(len(shape) for shape in shapes)
@@ -537,6 +537,36 @@ def BroadcastShapes(*args: torch.Tensor | typing.Iterable[int]) \
     print(f"{ret=}")
 
     assert False
+
+
+@beartype
+def TryGetBatchShape(x: typing.Optional[torch.Tensor],  dim: int):
+    return tuple() if x is None else x.shape[:dim]
+
+
+@beartype
+def TryBatchExpand(x: typing.Optional[torch.Tensor], shape, dim: int):
+    return None if x is None else x.expand(tuple(shape) + x.shape[dim:])
+
+
+@beartype
+def RavelIdxes(
+    batch_idxes: tuple[torch.Tensor, ...],
+    shape
+) -> torch.Tensor:
+    shape = tuple(shape)
+
+    assert len(batch_idxes) == len(shape)
+
+    ret = batch_idxes[-1].clone()
+
+    m = 1
+
+    for d in range(len(shape) - 2, -1, -1):
+        m *= shape[d + 1]
+        ret += m * batch_idxes[d]
+
+    return ret
 
 
 @beartype
@@ -826,10 +856,7 @@ def AxisAngleToRotMat(
     assert 3 <= out_shape[0] <= 4
     assert 3 <= out_shape[1] <= 4
 
-    batch_shape = tuple(axis.shape[:-1])
-
-    if angle is not None:
-        batch_shape = BroadcastShapes(batch_shape, angle)
+    batch_shape = BroadcastShapes(axis.shape[:-1], angle)
 
     if out is None:
         out = torch.empty(

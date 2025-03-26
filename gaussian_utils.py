@@ -103,8 +103,8 @@ def RenderGaussian(
         gp_rots.shape[:-2],
         gp_scales.shape[:-2],
         gp_opacities.shape[:-2],
-        tuple() if gp_shs is None else gp_shs.shape[:-3],
-        tuple() if gp_colors is None else gp_colors.shape[:-2],
+        utils.TryGetBatchShape(gp_shs, -3),
+        utils.TryGetBatchShape(gp_colors, -2),
     )
 
     # ---

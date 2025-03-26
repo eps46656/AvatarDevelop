@@ -95,8 +95,8 @@ class ModelData:
         return self.body_shape_dirs.shape[-1]
 
     def GetExprShapesCnt(self) -> int:
-        return 0 if self.expr_shape_dirs is None \
-            else self.expr_shape_dirs.shape[-1]
+        return 0 if self.expr_shape_dirs is None else\
+            self.expr_shape_dirs.shape[-1]
 
     def GetModelConfig(self) -> ModelConfig:
         return ModelConfig(

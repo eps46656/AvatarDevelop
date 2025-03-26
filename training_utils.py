@@ -8,7 +8,6 @@ import time
 import traceback
 import typing
 
-import timedinput
 import torch
 from beartype import beartype
 
@@ -150,6 +149,10 @@ class TrainingCore:
         raise utils.UnimplementationError()
 
 
+DEFAULT_DIFF_TIME_WEIGHT = 1 / (30 * 60)
+DEFAULT_DIFF_EPOCHS_CNT_WEIGHT = 1 / 50
+
+
 @beartype
 def MakeCommandParser():
     parser = argparse.ArgumentParser(prog="parser")
@@ -224,14 +227,14 @@ def MakeCommandParser():
     train_parser.add_argument(
         "--diff_time_weight",
         type=int,
-        default=10 * 60,
+        default=DEFAULT_DIFF_TIME_WEIGHT,
         help="",
     )
 
     train_parser.add_argument(
         "--diff_epochs_cnt_weight",
         type=int,
-        default=20,
+        default=DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
         help="",
     )
 
@@ -399,8 +402,8 @@ class Trainer:
     def Train(
         self,
         epochs_cnt: int,
-        diff_time_weight: float,
-        diff_epochs_cnt_weight: float,
+        diff_time_weight: float = DEFAULT_DIFF_TIME_WEIGHT,
+        diff_epochs_cnt_weight: float = DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
     ):
         assert 0 <= epochs_cnt
 
