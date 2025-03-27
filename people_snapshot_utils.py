@@ -8,7 +8,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import camera_utils, dataset_utils, smplx_utils, transform_utils, utils
+from . import camera_utils, smplx_utils, transform_utils, utils
 
 
 @beartype
@@ -28,7 +28,7 @@ class SubjectData:
 
 
 @beartype
-def _ReadMask(
+def _read_mask(
     subject_dir: pathlib.Path,
     fps: int,
     device: torch.device,
@@ -36,8 +36,8 @@ def _ReadMask(
     mask_video_path = subject_dir / "masks.mp4"
 
     if mask_video_path.exists():
-        return utils.ImageNormalize(
-            utils.ReadVideo(mask_video_path)[0].to(dtype=utils.FLOAT, device=device).mean(1))
+        return utils.image_normalize(
+            utils.read_video(mask_video_path)[0].to(dtype=utils.FLOAT, device=device).mean(1))
 
     f = h5py.File(subject_dir / "masks.hdf5")
 
@@ -50,14 +50,14 @@ def _ReadMask(
     for i in tqdm.tqdm(range(T)):
         ret[i, 0] = torch.from_numpy(masks[i].astype(np.uint8) * 255)
 
-    utils.WriteVideo(mask_video_path, ret.expand((T, 3, H, W)), fps)
+    utils.write_video(mask_video_path, ret.expand((T, 3, H, W)), fps)
 
-    return utils.ImageNormalize(ret.to(dtype=utils.FLOAT, device=device)) \
+    return utils.image_normalize(ret.to(dtype=utils.FLOAT, device=device)) \
         .squeeze(1)
 
 
 @beartype
-def _ReadCamera(
+def _read_camera(
     subject_dir: pathlib.Path,
     img_h: int,
     img_w: int,
@@ -65,7 +65,7 @@ def _ReadCamera(
     transform_utils.ObjectTransform,  # camera <-> world
     camera_utils.CameraConfig,
 ]:
-    camera = utils.ReadPickle(subject_dir / "camera.pkl")
+    camera = utils.read_pickle(subject_dir / "camera.pkl")
 
     fx = float(camera['camera_f'][0])
     fy = float(camera['camera_f'][1])
@@ -81,9 +81,9 @@ def _ReadCamera(
 
     """
 
-    camera_transform = transform_utils.ObjectTransform.FromMatching("RDF")
+    camera_transform = transform_utils.ObjectTransform.from_matching("RDF")
 
-    camera_config = camera_utils.CameraConfig.FromSlopeUDLR(
+    camera_config = camera_utils.CameraConfig.from_slope_udlr(
         slope_u=cy / fy,
         slope_d=(img_h - cy) / fy,
         slope_l=cx / fx,
@@ -98,9 +98,10 @@ def _ReadCamera(
 
 
 @beartype
-def _ReadSMPLBlendingParam(
+def _read_smpl_blending_param(
     subject_dir: pathlib.Path,
     smplx_model_data: smplx_utils.ModelData,
+    frames_cnt: int,
     device: torch.device,
 ) -> smplx_utils.BlendingParam:
     body_shapes_cnt = smplx_model_data.body_shape_dirs.shape[-1]
@@ -122,7 +123,7 @@ def _ReadSMPLBlendingParam(
 
     T, cur_body_shapes_cnt, cur_flatten_poses_cnt = -1, -2, -3
 
-    T, cur_body_shapes_cnt, cur_flatten_poses_cnt = utils.CheckShapes(
+    T, cur_body_shapes_cnt, cur_flatten_poses_cnt = utils.check_shapes(
         body_shapes, (cur_body_shapes_cnt, ),
         global_transl, (T, 3),
         poses, (T, cur_flatten_poses_cnt),
@@ -165,15 +166,22 @@ def _ReadSMPLBlendingParam(
     # ---
 
     return smplx_utils.BlendingParam(
-        body_shapes=body_shapes.to(dtype=utils.FLOAT, device=device),
-        global_transl=global_transl.to(dtype=utils.FLOAT, device=device),
-        global_rot=global_rot.to(dtype=utils.FLOAT, device=device),
-        body_poses=body_poses.to(dtype=utils.FLOAT, device=device),
+        body_shapes=body_shapes[:frames_cnt]
+        .to(dtype=utils.FLOAT, device=device),
+
+        global_transl=global_transl[:frames_cnt]
+        .to(dtype=utils.FLOAT, device=device),
+
+        global_rot=global_rot[:frames_cnt]
+        .to(dtype=utils.FLOAT, device=device),
+
+        body_poses=body_poses[:frames_cnt]
+        .to(dtype=utils.FLOAT, device=device),
     )
 
 
 @beartype
-def ReadSubject(
+def read_subject(
     subject_dir: os.PathLike,
     model_data_dict: dict[str, smplx_utils.ModelData],
     device: torch.device,
@@ -194,17 +202,18 @@ def ReadSubject(
     else:
         model_data = model_data_dict["male"]
 
-    video, fps = utils.ReadVideo(subject_video_path)
+    video, fps = utils.read_video(subject_video_path)
     # [T, C, H, W]
 
     img_h, img_w = video.shape[2:]
 
     camera_transform, camera_config = \
-        _ReadCamera(subject_dir, img_h, img_w)
+        _read_camera(subject_dir, img_h, img_w)
 
-    blending_param = _ReadSMPLBlendingParam(subject_dir, model_data, device)
+    blending_param = _read_smpl_blending_param(
+        subject_dir, model_data, video.shape[0], device)
 
-    mask = _ReadMask(subject_dir, fps, device)
+    mask = _read_mask(subject_dir, fps, device)
 
     ret = SubjectData(
         fps=fps,
@@ -217,54 +226,3 @@ def ReadSubject(
     )
 
     return ret
-
-
-"""
-@beartype
-class Dataset(dataset_utils.Dataset):
-    def __init__(
-        self,
-        dataset_dir: os.PathLike,
-        subject_name: str,
-        model_data_dict: dict[str, smplx_utils.ModelData],
-        device: torch.device,
-    ):
-        dataset_dir = pathlib.Path(dataset_dir)
-
-        self.subject_data = ReadSubject(
-            dataset_dir / subject_name,
-            model_data_dict,
-            device,
-        )
-
-        self.subject_data.video = utils.ImageNormalize(
-            self.subject_data.video)
-
-    def __len__(self):
-        return self.subject_data.video.shape[0]
-
-    def BatchGet(self, idxes: torch.Tensor):
-        return SubjectData(
-            video=self.subject_data.video[idxes],
-            mask=self.subject_data.mask[idxes],
-
-            camera_transform=self.subject_data.camera_transform,
-            camera_config=self.subject_data.camera_config,
-
-            model_data=self.subject_data.model_data,
-
-            blending_param=smplx_utils.BlendingParam(
-                body_shapes=self.subject_data.blending_param.
-                body_shapes,
-
-                global_transl=self.subject_data.blending_param.
-                global_transl[idxes],
-
-                global_rot=self.subject_data.blending_param.
-                global_rot[idxes],
-
-                body_poses=self.subject_data.blending_param.
-                body_poses[idxes],
-            ),
-        )
-"""

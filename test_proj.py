@@ -23,7 +23,7 @@ def main1():
     theta = 45 * utils.DEG
     phi = (180 + 270) / 2 * utils.DEG
 
-    proj_mat = camera_utils.MakeProjMat(
+    proj_mat = camera_utils.make_proj_mat(
         img_shape=(H, W),
         origin=np.array(utils.Sph2Cart(raduis, theta, phi)),
         # origin=np.array([4, 5, 6, 7]),
@@ -63,7 +63,7 @@ def main1():
 
             img[x, y, :] = (255, 0, 0)
 
-    utils.WriteImage(DIR / "test.png", img)
+    utils.write_image(DIR / "test.png", img)
 
 
 def main2():

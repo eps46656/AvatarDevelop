@@ -1,4 +1,5 @@
 import dataclasses
+import typing
 
 import torch
 from beartype import beartype
@@ -12,7 +13,15 @@ class ModelBuilder(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-    def GetModelData(self) -> ModelData:
+    def get_model_data(self) -> ModelData:
+        raise utils.UnimplementationError()
+
+    @property
+    def device(self) -> torch.device:
+        raise utils.UnimplementationError()
+
+    @property
+    def to(self) -> typing.Self:
         raise utils.UnimplementationError()
 
     def forward(self) -> ModelData:
@@ -25,8 +34,17 @@ class StaticModelBuilder(ModelBuilder):
         super().__init__()
         self.model_data = model_data
 
-    def GetModelData(self) -> ModelData:
+    def get_model_data(self) -> ModelData:
         return self.model_data
+
+    @property
+    def device(self):
+        return self.model_data.device
+
+    @property
+    def to(self, *args, **kwargs):
+        self.model_data = self.model_data.to(*args, **kwargs)
+        return self
 
     def forward(self) -> ModelData:
         return self.model_data
@@ -41,8 +59,17 @@ class DeformableModelBuilder(ModelBuilder):
         self.model_data.vertex_positions = torch.nn.Parameter(
             self.model_data.vertex_positions)
 
-    def GetModelData(self) -> ModelData:
+    def get_model_data(self) -> ModelData:
         return self.model_data
+
+    @property
+    def device(self):
+        return self.model_data.device
+
+    @property
+    def to(self, *args, **kwargs):
+        self.model_data = self.model_data.to(*args, **kwargs)
+        return self
 
     def forward(self) -> ModelData:
         return self.model_data

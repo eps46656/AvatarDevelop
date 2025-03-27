@@ -50,7 +50,7 @@ def BFS_(adj_lists: dict[Vertex, set[Vertex]],
     for source in sources:
         assert source in adj_lists
 
-        if not utils.SetAdd(passed, source):
+        if not utils.set_add(passed, source):
             continue
 
         yield source
@@ -60,7 +60,7 @@ def BFS_(adj_lists: dict[Vertex, set[Vertex]],
             v = q.popleft()
 
             for u in adj_lists[v]:
-                if utils.SetAdd(passed, u):
+                if utils.set_add(passed, u):
                     yield u
                     q.append(u)
 
@@ -149,10 +149,10 @@ class Graph(typing.Generic[Vertex]):
         return dst in self.__adj_lists[src] or (bidirectional and src in self.__adj_lists[dst])
 
     def AddVertex(self, v: Vertex):
-        if not utils.DictInsert(self.__adj_lists, v, set())[2]:
+        if not utils.dict_insert(self.__adj_lists, v, set())[2]:
             return False
 
-        utils.DictInsert(self.__inv_adj_lists, v, set())
+        utils.dict_insert(self.__inv_adj_lists, v, set())
 
         return True
 
@@ -171,10 +171,10 @@ class Graph(typing.Generic[Vertex]):
 
         ret = 0
 
-        if utils.SetAdd(self.__adj_lists[src], dst):
+        if utils.set_add(self.__adj_lists[src], dst):
             ret += 1
 
-        if bidirectional and utils.SetAdd(self.__adj_lists[dst], src):
+        if bidirectional and utils.set_add(self.__adj_lists[dst], src):
             ret += 1
 
         return ret
@@ -202,12 +202,12 @@ class Graph(typing.Generic[Vertex]):
 
         ret = 0
 
-        if utils.SetDiscard(self.__adj_lists[src], dst):
-            utils.SetDiscard(self.__inv_adj_lists[dst], src)
+        if utils.set_discard(self.__adj_lists[src], dst):
+            utils.set_discard(self.__inv_adj_lists[dst], src)
             ret += 1
 
-        if bidirectional and utils.SetDiscard(self.__adj_lists[dst], src):
-            utils.SetDiscard(self.__inv_adj_lists[src], dst)
+        if bidirectional and utils.set_discard(self.__adj_lists[dst], src):
+            utils.set_discard(self.__inv_adj_lists[src], dst)
             ret += 1
 
         return ret

@@ -42,7 +42,7 @@ def MyLossFunc(
 
 
 class MyTrainingCore(training_utils.TrainingCore):
-    def Train(self) -> training_utils.TrainingResult:
+    def train(self) -> training_utils.TrainingResult:
         assert self.scheduler is None or isinstance(
             self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
@@ -52,7 +52,7 @@ class MyTrainingCore(training_utils.TrainingCore):
             idxes: torch.Tensor
 
             sample: people_snapshot_utils.SubjectData = \
-                self.dataset.BatchGet(idxes)
+                self.dataset.batch_get(idxes)
 
             result = self.module(
                 camera_transform=sample.camera_transform,
@@ -190,13 +190,13 @@ def main1():
         proj_dir=DIR / "train_2025_0325"
     )
 
-    trainer.SetTrainingCore(training_core)
+    trainer.set_training_core(training_core)
 
-    trainer.Save("init", True)
+    trainer.save("init", True)
 
-    trainer.Train(10)
+    trainer.train(10)
 
-    trainer.Save("0", False)
+    trainer.save("0", False)
 
 
 if __name__ == "__main__":

@@ -112,8 +112,8 @@ def main1():
         model_data["vt"], dtype=FLOAT, device=DEVICE).reshape((-1, 2))
     # [V, 2]
 
-    albedo_map = utils.ReadImage(DIR / "black_male.png", "hwc"
-                                 ).to(dtype=FLOAT, device=DEVICE)
+    albedo_map = utils.read_image(DIR / "black_male.png", "hwc"
+                                  ).to(dtype=FLOAT, device=DEVICE)
     print(f"{albedo_map.shape=}")
 
     albedo_texture = pytorch3d.renderer.TexturesUV(
@@ -153,7 +153,7 @@ def main1():
     cameras = pytorch3d.renderer.PerspectiveCameras(
         R=view_mat[:3, :3].transpose(0, 1).unsqueeze(0),
         T=view_mat[:3, 3].unsqueeze(0),
-        focal_length=[camera_utils.MakeFocalLengthByDiagFoV(
+        focal_length=[camera_utils.make_focal_length_by_fov_diag(
             img_shape, 45 * utils.DEG)],
         principal_point=[(img_shape[1] / 2, img_shape[0] / 2)],
         in_ndc=False,
@@ -178,7 +178,7 @@ def main1():
 
     print(f"{img.shape=}")
 
-    utils.WriteImage(DIR / "output.png", img.reshape(img_shape + (3,)), "hwc")
+    utils.write_image(DIR / "output.png", img.reshape(img_shape + (3,)), "hwc")
 
 
 if __name__ == "__main__":

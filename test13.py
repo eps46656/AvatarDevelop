@@ -28,7 +28,7 @@ def main2():
 
     fov_diag = 90 * utils.DEG
 
-    focal_length = camera_utils.MakeFocalLengthByDiagFoV(
+    focal_length = camera_utils.make_focal_length_by_fov_diag(
         img_h, img_w, fov_diag)
 
     near = 0.2
@@ -38,8 +38,8 @@ def main2():
 
     view_mat = torch.eye(4, dtype=utils.FLOAT)
 
-    view_mat[:3, :3] = utils.AxisAngleToRotMat(
-        utils.RandRotVec((3,), dtype=utils.FLOAT))
+    view_mat[:3, :3] = utils.axis_angle_to_rot_mat(
+        utils.rand_rot_vec((3,), dtype=utils.FLOAT))
 
     view_mat[:3, 3] = torch.rand((3,), dtype=utils.FLOAT)
 
@@ -88,7 +88,7 @@ def main2():
     ndc_points_a = cameras.transform_points_ndc(
         points[:, :3], image_size=(img_h, img_w))
 
-    ndc_points_b = utils.DoHomo(
+    ndc_points_b = utils.do_homo(
         my_proj_mat,
         (view_mat @ points.unsqueeze(-1)).squeeze(-1)
     )
@@ -96,7 +96,7 @@ def main2():
     # print(f"{ndc_points_a=}")
     # print(f"{ndc_points_b=}")
 
-    print(f"{utils.GetL2RMS(ndc_points_a - ndc_points_b[:, :-1])}")
+    print(f"{utils.get_l2_rms(ndc_points_a - ndc_points_b[:, :-1])}")
 
 
 if __name__ == "__main__":

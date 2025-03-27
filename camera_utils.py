@@ -21,22 +21,22 @@ class ProjType(enum.StrEnum):
 
 
 @beartype
-def MakeView(
+def make_view(
     origin: torch.Tensor,  # [..., 3]
     aim: torch.Tensor,  # [..., 3]
     quasi_u_dir: torch.Tensor,  # [..., 3]
 ):
-    utils.CheckShapes(
+    utils.check_shapes(
         origin, (..., 3),
         aim, (..., 3),
         quasi_u_dir, (..., 3),
     )
 
-    f_vec = utils.Normalized(aim - origin, -1)
-    r_vec = utils.Normalized(torch.linalg.cross(f_vec, quasi_u_dir, -1), -1)
+    f_vec = utils.normalized(aim - origin, -1)
+    r_vec = utils.normalized(torch.linalg.cross(f_vec, quasi_u_dir, -1), -1)
     u_vec = torch.linalg.cross(r_vec, f_vec, -1)
 
-    return transform_utils.ObjectTransform.FromMatching(
+    return transform_utils.ObjectTransform.from_matching(
         dirs="FRU",
         pos=origin,
         vecs=(f_vec, r_vec, u_vec),
@@ -44,7 +44,7 @@ def MakeView(
 
 
 @beartype
-def MakeFocalLengthByDiagFoV(img_h: int, img_w: int, fov_diag: float):
+def make_focal_length_by_fov_diag(img_h: int, img_w: int, fov_diag: float):
     assert 0 < img_h
     assert 0 < img_w
 
@@ -87,7 +87,7 @@ class CameraConfig:
         self.img_w = img_w
 
     @staticmethod
-    def FromFovDiag(
+    def from_fov_diag(
         *,
         fov_diag: float,
         depth_near: float,
@@ -97,7 +97,7 @@ class CameraConfig:
     ):
         assert 0 < fov_diag < 180 * utils.DEG
 
-        focal_length = MakeFocalLengthByDiagFoV(img_h, img_w, fov_diag)
+        focal_length = make_focal_length_by_fov_diag(img_h, img_w, fov_diag)
 
         foc_ud = img_h / (2 * focal_length)
         foc_lr = img_w / (2 * focal_length)
@@ -111,7 +111,7 @@ class CameraConfig:
         )
 
     @staticmethod
-    def FromFovHW(
+    def from_fov_hw(
         *,
         fov_h: float,
         fov_w: float,
@@ -135,7 +135,7 @@ class CameraConfig:
         )
 
     @staticmethod
-    def FromFovUDLR(
+    def from_fov_udlr(
         *,
         fov_u: float,
         fov_d: float,
@@ -160,7 +160,7 @@ class CameraConfig:
         )
 
     @staticmethod
-    def FromSlopeUDLR(
+    def from_slope_udlr(
         *,
         slope_u: float,
         slope_d: float,
@@ -180,7 +180,7 @@ class CameraConfig:
         )
 
     @staticmethod
-    def FromDeltaHW(
+    def from_delta_hw(
         *,
         delta_h: float,
         delta_w: float,
@@ -201,7 +201,7 @@ class CameraConfig:
         )
 
     @staticmethod
-    def FromDeltaUDLR(
+    def from_delta_udlr(
         *,
         delta_u: float,
         delta_d: float,
@@ -220,18 +220,22 @@ class CameraConfig:
             img_h, img_w,
         )
 
-    def GetFovH(self):
+    @property
+    def fov_h(self):
         assert self.proj_type == ProjType.PERS
         return math.atan(self.foc_u) + math.atan(self.foc_d)
 
-    def GetFovW(self):
+    @property
+    def fov_w(self):
         assert self.proj_type == ProjType.PERS
         return math.atan(self.foc_l) + math.atan(self.foc_r)
 
-    def GetPixelH(self):
+    @property
+    def pixel_h(self):
         return (self.foc_u + self.foc_d) / self.img_h
 
-    def GetPixelW(self):
+    @property
+    def pixel_w(self):
         return (self.foc_l + self.foc_r) / self.img_w
 
 
@@ -259,7 +263,7 @@ class Convention(enum.StrEnum):
 
 
 @beartype
-def MakeProjConfig_OpenGL(
+def make_proj_config_OpenGL(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -268,7 +272,7 @@ def MakeProjConfig_OpenGL(
         case Coord.NDC:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUB"),
+                from_matching("RUB"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -285,7 +289,7 @@ def MakeProjConfig_OpenGL(
         case Coord.Screen:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUB"),
+                from_matching("RUB"),
 
                 delta_u=camera_config.img_h / 2,
                 delta_d=camera_config.img_h / 2,
@@ -312,7 +316,7 @@ def MakeProjConfig_OpenCV(
         case Coord.NDC:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RDF"),
+                from_matching("RDF"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -329,7 +333,7 @@ def MakeProjConfig_OpenCV(
         case Coord.Screen:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RDF"),
+                from_matching("RDF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -347,7 +351,7 @@ def MakeProjConfig_OpenCV(
 
 
 @beartype
-def MakeProjConfig_Pytorch3D(
+def make_proj_config_Pytorch3D(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -361,7 +365,7 @@ def MakeProjConfig_Pytorch3D(
 
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("LUF"),
+                from_matching("LUF"),
 
                 delta_u=h_ratio,
                 delta_d=h_ratio,
@@ -378,7 +382,7 @@ def MakeProjConfig_Pytorch3D(
         case Coord.Screen:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RDF"),
+                from_matching("RDF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -405,7 +409,7 @@ def MakeProjConfig_Unity(
         case Coord.NDC:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUF"),
+                from_matching("RUF"),
 
                 delta_u=1.0,
                 delta_d=1.0,
@@ -422,7 +426,7 @@ def MakeProjConfig_Unity(
         case Coord.Screen:
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUF"),
+                from_matching("RUF"),
 
                 delta_u=0.0,
                 delta_d=camera_config.img_h * 1.0,
@@ -486,7 +490,7 @@ def MakeProjConfig_Blender(
 
 
 @beartype
-def MakeProjConfig(
+def make_proj_config(
     *,
     camera_config: CameraConfig,
     convention: Convention,
@@ -494,13 +498,13 @@ def MakeProjConfig(
 ) -> ProjConfig:
     match convention:
         case Convention.OpenGL:
-            return MakeProjConfig_OpenGL(
+            return make_proj_config_OpenGL(
                 camera_config=camera_config,
                 target_coord=target_coord,
             )
 
         case Convention.PyTorch3D:
-            return MakeProjConfig_Pytorch3D(
+            return make_proj_config_Pytorch3D(
                 camera_config=camera_config,
                 target_coord=target_coord,
             )
@@ -509,14 +513,14 @@ def MakeProjConfig(
 
 
 @beartype
-def MakeProjMatWithConfig(
+def make_proj_mat_with_config(
     *,
     camera_config: CameraConfig,
     camera_view_transform: transform_utils.ObjectTransform,
     proj_config: ProjConfig,
     dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
-    camera_std_transform = transform_utils.ObjectTransform.FromMatching("LUF")
+    camera_std_transform = transform_utils.ObjectTransform.from_matching("LUF")
     # camera <-> std
 
     # camera_view_transform
@@ -525,11 +529,11 @@ def MakeProjMatWithConfig(
     # proj_config.camera_proj_transform
     # camera <-> proj
 
-    src_to_std = camera_view_transform.GetTransTo(camera_std_transform)
+    src_to_std = camera_view_transform.get_trans_to(camera_std_transform)
     # view -> std
     # [..., 4, 4]
 
-    std_to_dst = camera_std_transform.GetTransTo(
+    std_to_dst = camera_std_transform.get_trans_to(
         proj_config.camera_proj_transform)
     # std -> proj
     # [4, 4]
@@ -596,7 +600,7 @@ def MakeProjMatWithConfig(
 
             re_std_dst_points = (M @ std_src_points.unsqueeze(-1)).squeeze(-1)
 
-            err = utils.GetL2RMS(re_std_dst_points - std_dst_points)
+            err = utils.get_l2_rms(re_std_dst_points - std_dst_points)
 
             assert err <= 1e-4, f"{err=}"
 
@@ -626,9 +630,9 @@ def MakeProjMatWithConfig(
 
             M[3, 2] = 1
 
-            re_std_dst_points = utils.DoHomo(M, std_src_points)
+            re_std_dst_points = utils.do_homo(M, std_src_points)
 
-            err = utils.GetL2RMS(re_std_dst_points - std_dst_points)
+            err = utils.get_l2_rms(re_std_dst_points - std_dst_points)
 
             assert err <= 1e-4, f"{err=}"
 
@@ -639,7 +643,7 @@ def MakeProjMatWithConfig(
 
 
 @beartype
-def MakeProjMat(
+def make_proj_mat(
     *,
     camera_config: CameraConfig,
     camera_view_transform: transform_utils.ObjectTransform,
@@ -647,10 +651,10 @@ def MakeProjMat(
     target_coord: Coord,
     dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
-    return MakeProjMatWithConfig(
+    return make_proj_mat_with_config(
         camera_config=camera_config,
         camera_view_transform=camera_view_transform,
-        proj_config=MakeProjConfig(
+        proj_config=make_proj_config(
             camera_config=camera_config,
             convention=convention,
             target_coord=target_coord,

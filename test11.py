@@ -20,15 +20,15 @@ def main1():
     Q = 5
     N = 10
 
-    src = utils.MakeHomo(torch.rand((N, P-1), dtype=utils.FLOAT))
+    src = utils.make_homo(torch.rand((N, P-1), dtype=utils.FLOAT))
 
     print(f"{src[:, -1].mean()}")
 
     ans_homo: torch.Tensor = torch.rand((Q, P), dtype=utils.FLOAT)
 
-    dst = utils.HomoNormalize((ans_homo @ src.unsqueeze(-1)).squeeze(-1))
+    dst = utils.homo_normalize((ans_homo @ src.unsqueeze(-1)).squeeze(-1))
 
-    H = utils.DLT(src, dst, True)
+    H = utils.dlt(src, dst, True)
 
     print(src)
     print(dst)
@@ -36,9 +36,9 @@ def main1():
     print(f"{ans_homo}")
     print(f"{H}")
 
-    re_dst = utils.HomoNormalize((H @ src.unsqueeze(-1)).squeeze(-1))
+    re_dst = utils.homo_normalize((H @ src.unsqueeze(-1)).squeeze(-1))
 
-    print(f"{utils.GetDiff(dst, re_dst).mean()}")
+    print(f"{utils.get_diff(dst, re_dst).mean()}")
 
 
 def MakeProjMat(
@@ -69,7 +69,7 @@ def MakeProjMat(
     far_r = far * half_ratio_w
     far_l = -far_r
 
-    H, err = utils.DLT(
+    H, err = utils.dlt(
         src=torch.tensor([
             [near_l, 0, near, 1],
             [near_r, 0, near, 1],

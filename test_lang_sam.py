@@ -18,10 +18,10 @@ def main1():
 
     video_path = DIR / "people_snapshot_public/female-3-sport/female-3-sport.mp4"
 
-    video, fps = utils.ReadVideo(video_path)
+    video, fps = utils.read_video(video_path)
 
-    person_mask = utils.ImageNormalize(
-        utils.ReadVideo(DIR / "out_video <the main person>.mp4")[0])
+    person_mask = utils.image_normalize(
+        utils.read_video(DIR / "out_video <the main person>.mp4")[0])
 
     bg = torch.ones(video.shape[1:]) * 255
 
@@ -51,9 +51,9 @@ def main1():
     for frame_i in range(T):
         out_video[frame_i] = mask[frame_i]
 
-    utils.WriteVideo(
+    utils.write_video(
         DIR / f"out_video_{prompt.replace(" ", "_")}.mp4",
-        utils.ImageDenormalize(out_video).expand_as(video),
+        utils.image_denormalize(out_video).expand_as(video),
         fps,
     )
 

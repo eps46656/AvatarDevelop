@@ -63,42 +63,45 @@ class LogDatabase:
         self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA cache_size = -524288")
 
-        self.ckpt_meta_table = sqlite_utils.SqliteDataTable(
+        self.ckpt_meta_table = sqlite_utils.DataTable(
             self.conn,
             "CheckpointMeta",
             {
-                "id": sqlite_utils.SqliteDataTableColAttr(
+                "id": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
-                "prev": sqlite_utils.SqliteDataTableColAttr(
+                "prev": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: None if x == -1 else x,
                     deserialize=lambda x: -1 if x is None else x,),
-                "epochs_cnt": sqlite_utils.SqliteDataTableColAttr(
+                "epochs_cnt": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
-                "message": sqlite_utils.SqliteDataTableColAttr(
+                "message": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
-                "deep_saved": sqlite_utils.SqliteDataTableColAttr(
+                "deep_saved": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: 1 if x else 0,
                     deserialize=lambda x: x != 0,),
-                "avg_loss": sqlite_utils.SqliteDataTableColAttr(
+                "avg_loss": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
             }
         )
 
-    def SelectCheckpointMeta(
+    def select_ckpt_meta(
         self,
         conditions: typing.Optional[dict[str, object]],
     ):
-        account = self.ckpt_meta_table.SelectOne(conditions)
-        return None if account is None else CheckpointMeta(**account)
+        ckpt_meta = self.ckpt_meta_table.select_one(conditions)
 
-    def SelectLatestCheckpointMeta(self):
+        print(f"{ckpt_meta=}")
+
+        return None if ckpt_meta is None else CheckpointMeta(**ckpt_meta)
+
+    def select_latest_ckpt_meta(self):
         table_name = "CheckpointMeta"
 
-        cmd = f"SELECT * FROM {table_name} WHERE id = (SELECT MAX(id) FROM {table_name})"
+        cmd = f"SELECT MAX(id) FROM {table_name}"
 
         try:
             cursor = self.ckpt_meta_table.conn.cursor()
@@ -107,21 +110,20 @@ class LogDatabase:
 
             row = cursor.fetchone()
 
-            return None if row is None else \
-                CheckpointMeta(**self.ckpt_meta_table.RowToDict(row))
+            return None if row is None else self.select_ckpt_meta({"id": row[0]})
         except:
             print(traceback.format_exc())
             self.ckpt_meta_table.conn.rollback()
 
-    def InsertCheckpointMeta(self, ckpt_meta: CheckpointMeta):
-        return self.ckpt_meta_table.Insert(ckpt_meta.__dict__)
+    def insert_ckpt_meta(self, ckpt_meta: CheckpointMeta):
+        return self.ckpt_meta_table.insert(ckpt_meta.__dict__)
 
-    def DeleteCheckpointMetas(
+    def delete_ckpt_metas(
         self,
         conditions: typing.Optional[dict[str, object]],
         fetching: bool,
     ):
-        ckpt_metas = self.ckpt_meta_table.Delete(conditions, fetching)
+        ckpt_metas = self.ckpt_meta_table.delete(conditions, fetching)
         return None if ckpt_metas is None else [
             CheckpointMeta(**ckpt_meta) for ckpt_meta in ckpt_metas]
 
@@ -142,10 +144,10 @@ class TrainingCore:
     optimizer: typing.Optional[torch.optim.Optimizer]
     scheduler: typing.Optional[object]
 
-    def Train(self) -> TrainingResult:
+    def train(self) -> TrainingResult:
         raise utils.UnimplementationError()
 
-    def Eval(self):
+    def eval(self):
         raise utils.UnimplementationError()
 
 
@@ -154,7 +156,7 @@ DEFAULT_DIFF_EPOCHS_CNT_WEIGHT = 1 / 50
 
 
 @beartype
-def MakeCommandParser():
+def make_cmd_parser():
     parser = argparse.ArgumentParser(prog="parser")
 
     subparser = parser.add_subparsers(
@@ -202,6 +204,13 @@ def MakeCommandParser():
     save_parser = subparser.add_parser(
         "save",
         help="save current state to a checkpoint",
+    )
+
+    save_parser.add_argument(
+        "--message",
+        type=str,
+        default="",
+        help="the message of checkpoint",
     )
 
     save_parser.add_argument(
@@ -271,20 +280,21 @@ def MakeCommandParser():
 @beartype
 class Trainer:
     @staticmethod
-    def _GetLogDatabasePath(proj_dir: pathlib.Path):
+    def _get_log_db_path(proj_dir: pathlib.Path):
         return proj_dir / "log.db"
 
     @staticmethod
-    def _GetCheckpointDataPath(proj_dir: pathlib.Path, id: int):
+    def _get_ckpt_data_path(proj_dir: pathlib.Path, id: int):
         return proj_dir / f"ckpt_data_{id}.pth"
 
     @staticmethod
-    def _GetCancelTokenPath(proj_dir: pathlib.Path, id: int):
+    def _get_cancel_token_path(proj_dir: pathlib.Path):
         return proj_dir / f"cancel_token.txt"
 
     def __init__(
         self,
         proj_dir: os.PathLike,
+        device: torch.device,
     ):
         self.__proj_dir = pathlib.Path(proj_dir)
 
@@ -293,9 +303,11 @@ class Trainer:
         else:
             assert self.__proj_dir.is_dir()
 
-        log_db_path = Trainer._GetLogDatabasePath(self.__proj_dir)
+        log_db_path = Trainer._get_log_db_path(self.__proj_dir)
 
         self.__log_db = LogDatabase(log_db_path)
+
+        self.__device = device
 
         self.__prv: int = -1
         self.__epochs_cnt: int = 0
@@ -305,15 +317,16 @@ class Trainer:
 
         self.training_core: TrainingCore = None
 
-        utils.WriteFile(Trainer._GetCancelTokenPath(self.__proj_dir), "w", "")
+        utils.write_file(Trainer._get_cancel_token_path(
+            self.__proj_dir), "w", "")
 
-    def GetTrainingCore(self):
+    def get_training_core(self):
         return self.training_core
 
-    def SetTrainingCore(self, training_core: TrainingCore):
+    def set_training_core(self, training_core: TrainingCore):
         self.training_core = training_core
 
-    def Show(self):
+    def show(self):
         print(f"")
         print(f"            prv = {self.__prv}")
         print(f"     epochs cnt = {self.__epochs_cnt}")
@@ -321,17 +334,17 @@ class Trainer:
         print(f"       avg loss = {self.__avg_loss}")
         print(f"")
 
-    def GetatestCheckpointMeta(self):
-        return self.__log_db.SelectLatestCheckpointMeta()
+    def get_latest_ckpt_meta(self):
+        return self.__log_db.select_latest_ckpt_meta()
 
-    def Load(self, id: int):
+    def load(self, id: int):
         assert self.training_core is not None
 
-        ckpt_meta = self.__log_db.SelectCheckpointMeta({"id": id})
+        ckpt_meta = self.__log_db.select_ckpt_meta({"id": id})
 
         assert ckpt_meta is not None
 
-        ckpt_data_path = Trainer._GetCheckpointDataPath(
+        ckpt_data_path = Trainer._get_ckpt_data_path(
             self.__proj_dir, ckpt_meta.id)
 
         d = torch.load(ckpt_data_path)
@@ -339,7 +352,8 @@ class Trainer:
         if ckpt_meta.deep_saved:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name in d:
-                    setattr(self.training_core, field_name, d[field_name])
+                    setattr(self.training_core, field_name,
+                            d[field_name].to(device=self.__device))
         else:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name not in d:
@@ -349,12 +363,13 @@ class Trainer:
                 assert field_val is not None
 
                 field_val.load_state_dict(d[field_name])
+                field_val.to(device=self.__device)
 
-    def LoadLatest(self):
-        ckpt_meta = self.GetatestCheckpointMeta()
-        self.Load(ckpt_meta.id)
+    def load_latest(self):
+        ckpt_meta = self.get_latest_ckpt_meta()
+        self.load(ckpt_meta.id)
 
-    def Save(
+    def save(
         self,
         message: str = None,
         deep_saved: bool = False,
@@ -363,7 +378,7 @@ class Trainer:
 
         id = int(time.time())
 
-        self.__log_db.InsertCheckpointMeta(CheckpointMeta(
+        self.__log_db.insert_ckpt_meta(CheckpointMeta(
             id=id,
             prev=self.__prv,
             epochs_cnt=self.__epochs_cnt,
@@ -378,30 +393,30 @@ class Trainer:
         d = dict()
 
         if deep_saved:
+            d = {
+                field_name: getattr(self.training_core, field_name)
+                for field_name in {"module", "optimizer", "scheduler"}
+            }
+        else:
             for field_name in {"module", "optimizer", "scheduler"}:
                 field_val = getattr(self.training_core, field_name)
 
                 d[field_name] = None if field_val is None else \
                     field_val.state_dict()
-        else:
-            d = {
-                field_name: getattr(self.training_core, field_name)
-                for field_name in {"module", "optimizer", "scheduler"}
-            }
 
         torch.save(
-            d, Trainer._GetCheckpointDataPath(self.__proj_dir, id))
+            d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
 
-    def _Train(self):
-        training_result = self.training_core.Train()
+    def _train(self):
+        training_result = self.training_core.train()
 
         self.__epochs_cnt += 1
         self.__diff_epochs_cnt += 1
         self.__avg_loss = training_result.avg_loss
 
-    def Train(
+    def train(
         self,
-        epochs_cnt: int,
+        epochs_cnt: int = 1,
         diff_time_weight: float = DEFAULT_DIFF_TIME_WEIGHT,
         diff_epochs_cnt_weight: float = DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
     ):
@@ -410,46 +425,46 @@ class Trainer:
         assert 0 <= diff_time_weight
         assert 0 <= diff_epochs_cnt_weight
 
-        cancel_token_path = Trainer._GetCancelTokenPath(self.__proj_dir)
+        cancel_token_path = Trainer._get_cancel_token_path(self.__proj_dir)
 
-        utils.WriteFile(cancel_token_path, "w", "")
+        utils.write_file(cancel_token_path, "w", "")
 
         for _ in range(epochs_cnt):
-            self._Train()
+            self._train()
 
             cur_time = int(time.time())
 
             diff_time = cur_time - self.__prv
 
             if 1 - 1e-3 <= diff_time_weight * diff_time + diff_epochs_cnt_weight + self.__diff_epochs_cnt:
-                self.Save()
+                self.save()
 
-            if len(utils.ReadFile(cancel_token_path, "r")) != 0:
+            if len(utils.read_file(cancel_token_path, "r")) != 0:
                 break
 
     def Eval(self):
-        self.training_core.Eval()
+        self.training_core.eval()
 
-    def _CLIHandler(self, parser):
+    def _cli_handler(self, cmd_parser):
         cmd = shlex.split(input("trainer> "))
 
-        args = parser.parse_args(cmd)
+        args = cmd_parser.parse_args(cmd)
 
         match args.op:
             case "show":
-                self.Show()
+                self.show()
 
             case "load":
-                self.Load(args.id)
+                self.load(args.id)
 
             case "load_latest":
-                self.LoadLatest()
+                self.load_latest()
 
             case "save":
-                self.Save(args.deep_saved)
+                self.save(args.message, args.deep_saved)
 
             case "train":
-                self.Train(
+                self.train(
                     epochs_cnt=args.epochs_cnt,
                     diff_time_weight=args.diff_time_weight,
                     diff_epochs_cnt_weight=args.diff_epochs_cnt_weight,
@@ -464,12 +479,15 @@ class Trainer:
         return True
 
     def EnterCLI(self):
-        parser = MakeCommandParser()
+        cmd_parser = make_cmd_parser()
 
         while True:
             try:
-                if not self._CLIHandler(parser):
+                if not self._cli_handler(cmd_parser):
                     return
+            except KeyboardInterrupt:
+                print(traceback.format_exc())
+                break
             except:
                 print(traceback.format_exc())
                 continue

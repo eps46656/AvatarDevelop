@@ -14,12 +14,12 @@ class ObjectTransform:
         trans: torch.Tensor,  # [..., 4, 4]
         inv_trans: torch.Tensor,  # [..., 4, 4]
     ):
-        utils.CheckShapes(
+        utils.check_shapes(
             trans, (..., 4, 4),
             inv_trans, (..., 4, 4),
         )
 
-        s = utils.BroadcastShapes(
+        s = utils.broadcast_shapes(
             trans.shape[:-2],
             inv_trans.shape[:-2],
         ) + (4, 4)
@@ -28,7 +28,7 @@ class ObjectTransform:
         self.inv_trans = inv_trans.expand(s)
 
     @staticmethod
-    def FromMatching(
+    def from_matching(
         dirs: str | tuple[utils.Dir, utils.Dir, utils.Dir],
         pos: torch.Tensor = utils.ORIGIN,  # [..., 3]
         vecs: tuple[torch.Tensor, torch.Tensor, torch.Tensor] = (
@@ -45,14 +45,14 @@ class ObjectTransform:
         assert dirs.count(utils.Dir.U) + dirs.count(utils.Dir.D) == 1
         assert dirs.count(utils.Dir.L) + dirs.count(utils.Dir.R) == 1
 
-        utils.CheckShapes(
+        utils.check_shapes(
             pos, (..., 3),
             vecs[0], (..., 3),
             vecs[1], (..., 3),
             vecs[2], (..., 3),
         )
 
-        batch_shape = utils.BroadcastShapes(
+        batch_shape = utils.broadcast_shapes(
             pos.shape[:-1],
             vecs[0].shape[:-1],
             vecs[1].shape[:-1],
@@ -86,10 +86,11 @@ class ObjectTransform:
 
         return ObjectTransform(trans, inv_trans)
 
-    def GetBatchShape(self):
+    @property
+    def shape(self):
         return self.trans.shape[:-2]
 
-    def Expand(self, shape):
+    def expand(self, shape):
         shape = tuple(shape)
 
         return ObjectTransform(
@@ -98,7 +99,7 @@ class ObjectTransform:
         )
 
     def BatchGet(self, batch_idxes: tuple[torch.Tensor, ...]):
-        assert len(batch_idxes) == self.GetBatchShape().dim()
+        assert len(batch_idxes) == len(self.shape)
 
         return ObjectTransform(
             self.trans[batch_idxes],
@@ -107,50 +108,57 @@ class ObjectTransform:
 
     def __str__(self):
         return "\n".join([
-            f"F: <{self.GetFVec()}>",
-            f"B: <{self.GetBVec()}>",
-            f"U: <{self.GetUVec()}>",
-            f"D: <{self.GetDVec()}>",
-            f"L: <{self.GetLVec()}>",
-            f"R: <{self.GetRVec()}>",
+            f"F: <{self.vec_f}>",
+            f"B: <{self.vec_b}>",
+            f"U: <{self.vec_u}>",
+            f"D: <{self.vec_d}>",
+            f"L: <{self.vec_l}>",
+            f"R: <{self.vec_r}>",
         ])
 
     def __repr__(self):
         return str(self)
 
-    def GetPos(self) -> torch.Tensor:
+    @property
+    def pos(self) -> torch.Tensor:
         return self.trans[..., :3, 3]
 
-    def GetVec(self, dir: utils.Dir) -> torch.Tensor:  # [..., 3]
+    def vec(self, dir: utils.Dir) -> torch.Tensor:  # [..., 3]
         match dir:
-            case utils.Dir.F: return self.GetFVec()
-            case utils.Dir.B: return self.GetBVec()
-            case utils.Dir.U: return self.GetUVec()
-            case utils.Dir.D: return self.GetDVec()
-            case utils.Dir.L: return self.GetLVec()
-            case utils.Dir.R: return self.GetRVec()
+            case utils.Dir.F: return self.vec_f
+            case utils.Dir.B: return self.vec_b
+            case utils.Dir.U: return self.vec_u
+            case utils.Dir.D: return self.vec_d
+            case utils.Dir.L: return self.vec_l
+            case utils.Dir.R: return self.vec_r
 
         assert False, f"Unknown direction {dir}."
 
-    def GetFVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_f(self) -> torch.Tensor:  # [..., 3]
         return +self.trans[..., :3, 0]
 
-    def GetBVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_b(self) -> torch.Tensor:  # [..., 3]
         return -self.trans[..., :3, 0]
 
-    def GetUVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_u(self) -> torch.Tensor:  # [..., 3]
         return +self.trans[..., :3, 1]
 
-    def GetDVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_d(self) -> torch.Tensor:  # [..., 3]
         return -self.trans[..., :3, 1]
 
-    def GetLVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_l(self) -> torch.Tensor:  # [..., 3]
         return +self.trans[..., :3, 2]
 
-    def GetRVec(self) -> torch.Tensor:  # [..., 3]
+    @property
+    def vec_r(self) -> torch.Tensor:  # [..., 3]
         return -self.trans[..., :3, 2]
 
-    def GetTransTo(self, dst: typing.Self):
+    def get_trans_to(self, dst: typing.Self):
         # self: object <-> coord_a
         # dst: object <-> coord_b
 
@@ -158,7 +166,7 @@ class ObjectTransform:
 
         return dst.trans @ self.inv_trans
 
-    def Collapse(
+    def collapse(
         self,
         trans: torch.Tensor,  # [..., 4, 4]
     ):
@@ -170,12 +178,4 @@ class ObjectTransform:
         return ObjectTransform(
             self.trans @ trans,
             trans.inverse() @ self.inv_trans,
-        )
-
-    def Expand(self, shape):
-        shape = tuple(shape) + (4, 4)
-
-        return ObjectTransform(
-            self.trans.expand(shape),
-            self.inv_trans.expand(shape),
         )

@@ -11,7 +11,6 @@ from .. import utils
 @dataclasses.dataclass
 class FaceCoordResult:
     Ts: torch.Tensor  # [..., F, 4, 4]
-    normalized_Ts: torch.Tensor  # [..., F, 4, 4]
     face_area: torch.Tensor  # [..., F]
 
 
@@ -20,20 +19,20 @@ def GetFaceCoord(
     vertex_positions_a: torch.Tensor,  # [..., 3]
     vertex_positions_b: torch.Tensor,  # [..., 3]
     vertex_positions_c: torch.Tensor,  # [..., 3]
-):
+) -> FaceCoordResult:
     vpa = vertex_positions_a
     vpb = vertex_positions_b
     vpc = vertex_positions_c
 
-    utils.CheckShapes(
+    utils.check_shapes(
         vpa, (..., 3),
         vpb, (..., 3),
         vpc, (..., 3),
     )
 
-    device = utils.CheckDevice(vpa, vpb, vpc)
+    device = utils.check_device(vpa, vpb, vpc)
 
-    batch_shape = utils.BroadcastShapes(
+    batch_shape = utils.broadcast_shapes(
         vpa.shape[:-1],
         vpb.shape[:-1],
         vpc.shape[:-1],
@@ -76,21 +75,16 @@ def GetFaceCoord(
     Ts = torch.empty(
         batch_shape + (4, 4), dtype=utils.FLOAT, device=device)
 
-    normalized_Ts = torch.empty(
-        batch_shape + (4, 4), dtype=utils.FLOAT, device=device)
+    axis_x = f1 * cos_t + f2 * sin_t
+    axis_y = f2 * cos_t - f1 * sin_t
+    axis_z = torch.linalg.cross(axis_x, axis_y)
 
-    axis_x = Ts[..., :3, 0] = f1 * cos_t + f2 * sin_t
-    axis_y = Ts[..., :3, 1] = f2 * cos_t - f1 * sin_t
-    axis_z = Ts[..., :3, 2] = torch.linalg.cross(axis_x, axis_y)
+    normalized_axis_x = Ts[..., :3, 0] = utils.normalized(axis_x)
+    normalized_axis_y = Ts[..., :3, 1] = utils.normalized(axis_y)
+    normalized_axis_z = Ts[..., :3, 2] = \
+        torch.linalg.cross(normalized_axis_x, normalized_axis_y)
 
-    z_norm = utils.EPS + utils.VectorNorm(axis_z)
-
-    normalized_Ts[..., :3, 0] = utils.Normalized(axis_x)
-    normalized_Ts[..., :3, 1] = utils.Normalized(axis_y)
-    normalized_Ts[..., :3, 2] = axis_z / z_norm.unsqueeze(-1)
-
-    err = (normalized_Ts[..., :3, 0] *
-           normalized_Ts[..., :3, 1]).sum(-1).abs().max()
+    err = (Ts[..., :3, 0] * Ts[..., :3, 1]).sum(-1).abs().max()
 
     assert err <= 2e-3, err
 
@@ -98,14 +92,9 @@ def GetFaceCoord(
     Ts[..., 3, :3] = 0
     Ts[..., 3, 3] = 1
 
-    normalized_Ts[..., :3, 3] = s
-    normalized_Ts[..., 3, :3] = 0
-    normalized_Ts[..., 3, 3] = 1
-
     ret = FaceCoordResult(
         Ts=Ts,
-        normalized_Ts=normalized_Ts,
-        face_area=z_norm * 3,
+        face_area=utils.vector_norm(axis_z) * (3 * math.sqrt(3) / 4),
     )
 
     return ret

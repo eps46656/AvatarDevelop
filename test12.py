@@ -21,7 +21,7 @@ def main1():
 
     fov_diag = 90 * utils.DEG
 
-    focal_length = camera_utils.MakeFocalLengthByDiagFoV(
+    focal_length = camera_utils.make_focal_length_by_fov_diag(
         img_h, img_w, fov_diag)
 
     near = 0.2
@@ -31,12 +31,12 @@ def main1():
 
     view_mat = torch.eye(4, dtype=utils.FLOAT)
 
-    view_mat[:3, :3] = utils.AxisAngleToRotMat(
-        utils.RandRotVec((3,), dtype=utils.FLOAT), homo=False)
+    view_mat[:3, :3] = utils.axis_angle_to_rot_mat(
+        utils.rand_rot_vec((3,), dtype=utils.FLOAT), homo=False)
 
     view_mat[:3, 3] = torch.rand((3,), dtype=utils.FLOAT)
 
-    my_camera_config = camera_utils.CameraConfig.FromFovDiag(
+    my_camera_config = camera_utils.CameraConfig.from_fov_diag(
         fov_diag=fov_diag,
         depth_near=near,
         depth_far=far,

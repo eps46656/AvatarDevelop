@@ -53,7 +53,7 @@ def main2():
 
     subject_dir = people_snapshot_dir / subject_name
 
-    subject_data = people_snapshot_utils.ReadSubject(
+    subject_data = people_snapshot_utils.read_subject(
         subject_dir=subject_dir,
         model_data_dict=model_data_dict,
         device=DEVICE,
@@ -61,7 +61,7 @@ def main2():
 
     print(f"{subject_data.mask.shape}")
 
-    utils.WriteImage(
+    utils.write_image(
         DIR / "mask.jpg",
         subject_data.mask[0],
     )

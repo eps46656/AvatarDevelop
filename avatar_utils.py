@@ -20,15 +20,16 @@ class AvatarModel:
     joints_cnt: int  # J
 
     vertex_positions: typing.Optional[torch.Tensor]  # [..., V, 3]
-    vertex_normals: typing.Optional[torch.Tensor]  # [..., V, 3]
+    vertex_normals: typing.Optional[torch.Tensor] = None  # [..., V, 3]
 
-    texture_vertex_positions: typing.Optional[torch.Tensor]  # [..., TV, 2]
+    texture_vertex_positions: typing.Optional[torch.Tensor] = None
+    # [..., TV, 2]
 
     faces: torch.Tensor  # [..., F, 3]
 
-    texture_faces: typing.Optional[torch.Tensor]  # [..., TF, 3]
+    texture_faces: typing.Optional[torch.Tensor] = None  # [..., TF, 3]
 
-    joint_Ts: typing.Optional[torch.Tensor]  # [..., J, 4, 4]
+    joint_Ts: typing.Optional[torch.Tensor] = None  # [..., J, 4, 4]
 
     mesh_data: mesh_utils.MeshData
 
@@ -38,7 +39,7 @@ class AvatarBlender(torch.nn.Module):
     def __init__(self):
         super(AvatarBlender, self).__init__()
 
-    def GetAvatarModel() -> AvatarModel:
+    def get_avatar_model() -> AvatarModel:
         raise utils.UnimplementationError()
 
     def forward(self, blending_param) -> AvatarModel:

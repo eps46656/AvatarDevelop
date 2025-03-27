@@ -1,4 +1,4 @@
-from .blending_utils import BlendingParam, Blending
+from .blending_utils import BlendingParam, blending
 from .config import BODY_SHAPES_SPACE_DIM, smpl_model_transform, smplx_model_transform
 from .Model import Model
 from .ModelBlender import ModelBlender

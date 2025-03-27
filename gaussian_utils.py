@@ -1,7 +1,6 @@
 import dataclasses
 import typing
 
-import einops
 import torch
 from beartype import beartype
 
@@ -9,10 +8,10 @@ import diff_gaussian_rasterization
 
 from . import camera_utils, transform_utils, utils
 
-camera_view_transform = transform_utils.ObjectTransform.FromMatching("RDF")
+camera_view_transform = transform_utils.ObjectTransform.from_matching("RDF")
 # camera <-> view
 
-camera_ndc_transform = transform_utils.ObjectTransform.FromMatching("RDF")
+camera_ndc_transform = transform_utils.ObjectTransform.from_matching("RDF")
 # camera <-> ndc
 
 
@@ -24,7 +23,7 @@ class RenderGaussianResult:
 
 
 @beartype
-def RenderGaussian(
+def render_gaussian(
     camera_transform: transform_utils.ObjectTransform,
     # camera <-> world
     # [...]
@@ -46,10 +45,10 @@ def RenderGaussian(
 
     device: torch.device,
 ):
-    world_view_mat = camera_transform.GetTransTo(camera_view_transform)
+    world_view_mat = camera_transform.get_trans_to(camera_view_transform)
     # world -> view [..., 4, 4]
 
-    view_ndc_mat = camera_utils.MakeProjMatWithConfig(
+    view_ndc_mat = camera_utils.make_proj_mat_with_config(
         camera_config=camera_config,
 
         camera_view_transform=camera_view_transform,
@@ -80,7 +79,7 @@ def RenderGaussian(
 
     N, C = -1, -2
 
-    N, C = utils.CheckShapes(
+    N, C = utils.check_shapes(
         bg_color, (..., C),
         gp_means, (..., N, 3),
         gp_rots, (..., N, 4),
@@ -91,20 +90,20 @@ def RenderGaussian(
     assert gp_shs is not None or gp_colors is not None
 
     if gp_shs is not None:
-        utils.CheckShapes(gp_shs, (..., N, (sh_degree + 1)**2, C))
+        utils.check_shapes(gp_shs, (..., N, (sh_degree + 1)**2, C))
 
     if gp_colors is not None:
-        utils.CheckShapes(gp_colors, (..., N, C))
+        utils.check_shapes(gp_colors, (..., N, C))
 
-    batch_shape = utils.BroadcastShapes(
+    batch_shape = utils.broadcast_shapes(
         camera_transform.shape,
         bg_color.shape[:-1],
         gp_means.shape[:-2],
         gp_rots.shape[:-2],
         gp_scales.shape[:-2],
         gp_opacities.shape[:-2],
-        utils.TryGetBatchShape(gp_shs, -3),
-        utils.TryGetBatchShape(gp_colors, -2),
+        utils.try_get_batch_shape(gp_shs, -3),
+        utils.try_get_batch_shape(gp_colors, -2),
     )
 
     # ---
@@ -115,7 +114,7 @@ def RenderGaussian(
     world_ndc_mat = world_ndc_mat.to(device=utils.CUDA_DEVICE).expand(
         batch_shape + (4, 4))
 
-    camera_pos = camera_transform.GetPos().to(device=utils.CUDA_DEVICE).expand(
+    camera_pos = camera_transform.pos().to(device=utils.CUDA_DEVICE).expand(
         batch_shape + (3,))
     # [..., 3]
 
@@ -142,7 +141,7 @@ def RenderGaussian(
         batch_shape + (C, camera_config.img_h, camera_config.img_w),
         dtype=utils.FLOAT, device=device)
 
-    for batch_idx in utils.GetIdxes(batch_shape):
+    for batch_idx in utils.get_idxes(batch_shape):
         renderer_settings = diff_gaussian_rasterization.GaussianRasterizationSettings(
             image_height=camera_config.img_h,  # image height: int
             image_width=camera_config.img_w,  # image width: int

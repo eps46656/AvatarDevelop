@@ -40,7 +40,7 @@ def MyLossFunc(
 
 @beartype
 class MyTrainingCore(training_utils.TrainingCore):
-    def Train(self) -> training_utils.TrainingResult:
+    def train(self) -> training_utils.TrainingResult:
         assert self.scheduler is None or isinstance(
             self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
 
@@ -49,13 +49,13 @@ class MyTrainingCore(training_utils.TrainingCore):
         for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
             batch_idxes: torch.Tensor
 
-            sample: people_snapshot_utils.SubjectData = \
-                self.dataset.BatchGet(batch_idxes)
+            sample: gom_avatar_utils.Sample = \
+                self.dataset.batch_get(batch_idxes)
 
             result: gom_avatar_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
-                img=sample.video,
+                img=sample.img,
                 mask=sample.mask,
                 blending_param=sample.blending_param,
             )
@@ -79,7 +79,7 @@ class MyTrainingCore(training_utils.TrainingCore):
             avg_loss=avg_loss
         )
 
-    def Eval(self):
+    def eval(self):
         self.dataset: gom_avatar_utils.Dataset
 
         out_frames = torch.empty_like(self.dataset.sample.img)
@@ -87,14 +87,14 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         T, C, H, W = self.dataset.sample.img.shape
 
-        batch_shape = self.dataset.GetBatchShape()
+        batch_shape = self.dataset.shape
 
         with torch.no_grad():
             for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
                 batch_idxes: tuple[torch.Tensor, ...]
 
-                idxes = utils.RavelIdxes(
-                    batch_idxes, self.dataset.GetBatchShape())
+                idxes = utils.ravel_idxes(
+                    batch_idxes, self.dataset.shape)
                 # [K]
 
                 idxes = idxes.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(
@@ -102,7 +102,7 @@ class MyTrainingCore(training_utils.TrainingCore):
                 # [K, C, H, W]
 
                 sample: people_snapshot_utils.SubjectData = \
-                    self.dataset.BatchGet(batch_idxes)
+                    self.dataset.batch_get(batch_idxes)
 
                 result: gom_avatar_utils.ModuleForwardResult = self.module(
                     camera_transform=sample.camera_transform,
@@ -125,9 +125,9 @@ class MyTrainingCore(training_utils.TrainingCore):
 
                 """
 
-        utils.WriteVideo(
+        utils.write_video(
             path=DIR / f"output_{int(time.time())}.mp4",
-            video=utils.ImageDenormalize(out_frames),
+            video=utils.image_denormalize(out_frames),
             fps=25,
         )
 
@@ -146,7 +146,7 @@ def main1():
     }
 
     model_data_dict = {
-        key: smplx_utils.ModelData.FromFile(
+        key: smplx_utils.ModelData.from_file(
             model_data_path=value,
             model_config=smplx_utils.smpl_model_config,
             device=DEVICE,
@@ -158,17 +158,15 @@ def main1():
 
     subject_name = "female-1-casual"
 
-    dataset = people_snapshot_utils.Dataset(
-        dataset_dir=people_snapshot_dir,
-        subject_name=subject_name,
-        model_data_dict=model_data_dict,
-        device=DEVICE,
-    )
-
     subject_dir = people_snapshot_dir / subject_name
 
-    subject_data = people_snapshot_utils.ReadSubject(
+    subject_data = people_snapshot_utils.read_subject(
         subject_dir, model_data_dict, DEVICE)
+
+    print(f"{subject_data.camera_transform.shape=}")
+    print(f"{subject_data.video.shape=}")
+    print(f"{subject_data.mask.shape=}")
+    print(f"{subject_data.blending_param.shape=}")
 
     dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
         camera_transform=subject_data.camera_transform,
@@ -225,21 +223,16 @@ def main1():
     )
 
     trainer = training_utils.Trainer(
-        proj_dir=DIR / "train_2025_0325"
+        proj_dir=DIR / "train_2025_0327"
     )
 
-    pass
+    trainer.set_training_core(training_core)
 
-    """
-    torch.save(gom_avatar_module.state_dict(),
-               DIR / f"gom_avatar_model_{epoch_i}.pth")
+    trainer.load_latest()
 
-    utils.WriteVideo(
-        path=DIR / f"output_{epoch_i}.mp4",
-        video=utils.ImageDenormalize(frames),
-        fps=subject_data.fps,
-    )
-    """
+    trainer.train()
+
+    trainer.save()
 
 
 if __name__ == "__main__":

@@ -49,7 +49,7 @@ class AbstractMesh:
 
         for fi in self.__graph.GetAdjacents(vi):
             for adj_vi in self.__graph.GetAdjacents(fi):
-                if utils.SetAdd(s, adj_vi):
+                if utils.set_add(s, adj_vi):
                     yield adj_vi
 
     def GetAdjacentVerticesFromFace(self, fi: int):
@@ -128,7 +128,7 @@ class AbstractMesh:
         return True
 
     def RemoveFace(self, fi: int):
-        if not utils.DictPop(self.__faces, fi):
+        if not utils.dict_pop(self.__faces, fi):
             return False
 
         self.__graph.RemoveVertex(fi)

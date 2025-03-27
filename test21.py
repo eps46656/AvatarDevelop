@@ -35,7 +35,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ModelData.FromFile(
+        key: smplx_utils.ModelData.from_file(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,
@@ -54,13 +54,13 @@ def main1():
 
     subject_dir = people_snapshot_dir / subject_name
 
-    subject_data = people_snapshot_utils.ReadSubject(
+    subject_data = people_snapshot_utils.read_subject(
         subject_dir=subject_dir,
         model_data_dict=model_data_dict,
         device=DEVICE,
     )
 
-    subject_data.video = utils.ImageNormalize(subject_data.video)
+    subject_data.video = utils.image_normalize(subject_data.video)
 
     camera_config = subject_data.camera_config
 
@@ -144,9 +144,9 @@ def main1():
         torch.save(gom_avatar_module.state_dict(),
                    DIR / f"gom_avatar_model_{epoch_i}.pth")
 
-        utils.WriteVideo(
+        utils.write_video(
             path=DIR / f"output_{epoch_i}.mp4",
-            video=utils.ImageDenormalize(frames),
+            video=utils.image_denormalize(frames),
             fps=30,
         )
 

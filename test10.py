@@ -32,7 +32,7 @@ def main1():
         model_data.faces
     )  # [F, V]
 
-    F, V = utils.CheckShapes(face_vertex_adj_mat, (-1, -2))
+    F, V = utils.check_shapes(face_vertex_adj_mat, (-1, -2))
 
     D = 5
 
@@ -60,7 +60,7 @@ def main1():
             if 0 < degree:
                 result_b[i] = g / degree - vertices[i]
 
-    err = utils.GetDiff(result_a, result_b).mean()
+    err = utils.get_diff(result_a, result_b).mean()
 
     print(f"{err=}")
 
@@ -95,7 +95,7 @@ def main2():
             if 0 < degree:
                 result_b[i] = g / degree - vertices[i]
 
-    err = utils.GetDiff(result_a, result_b).mean()
+    err = utils.get_diff(result_a, result_b).mean()
 
     print(f"{err=}")
 
@@ -183,7 +183,7 @@ def main5():
 
     D = 3
 
-    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.FromFaceVertexAdjList(
+    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_face_vertex_adj_list(
         V,
         model_data.faces,
         DEVICE
@@ -196,10 +196,10 @@ def main5():
     face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
 
     with utils.Timer():
-        lap_diff = mesh_data.GetLapDiff(vertex_positions)
+        lap_diff = mesh_data.calc_lap_diff(vertex_positions)
 
     with utils.Timer():
-        lap_diff_naive = mesh_data.GetLapDiffNaive(vertex_positions)
+        lap_diff_naive = mesh_data.calc_lap_diff_naive(vertex_positions)
 
     lap_diff_diff_1 = lap_diff.square().mean()
     lap_diff_diff_2 = lap_diff_naive.square().mean()

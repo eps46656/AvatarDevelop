@@ -35,7 +35,7 @@ def main1():
 
 
 def main2():
-    img = torch.Tensor(utils.ReadImage(DIR / "origin.png", "chw"))
+    img = torch.Tensor(utils.read_image(DIR / "origin.png", "chw"))
     # [c, h, w]
 
     scale_factor = 1.3
@@ -68,7 +68,7 @@ def main2():
 
     print(f"{dst_img.shape}")
 
-    utils.WriteImage(DIR / "new.png", dst_img.numpy(), "chw")
+    utils.write_image(DIR / "new.png", dst_img.numpy(), "chw")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ class KinTree:
     joints_tp: list[int]
 
     @staticmethod
-    def FromLinks(links, null_value=-1):
+    def from_links(links, null_value=-1):
         J = len(links)
 
         root = -1
@@ -73,26 +73,26 @@ class KinTree:
         )
 
     @staticmethod
-    def FromParents(parents: list[int], null_value=-1):
-        return KinTree.FromLinks(
+    def from_parents(parents: list[int], null_value=-1):
+        return KinTree.from_links(
             ((p, u) for u, p in enumerate(parents)),
             null_value)
 
 
 @beartype
-def GetJointRTs(
+def get_joint_rts(
     kin_tree: KinTree,
     pose_rs: torch.Tensor,  # [..., J, D, D]
     pose_ts: torch.Tensor,  # [..., J, D]
 ) -> torch.Tensor:  # joint_Ts[..., J, D+1, D+1]:
     J = kin_tree.joints_cnt
 
-    D, = utils.CheckShapes(
+    D, = utils.check_shapes(
         pose_rs, (..., J, -1, -1),
         pose_ts, (..., J, -1),
     )
 
-    batch_shape = utils.BroadcastShapes(
+    batch_shape = utils.broadcast_shapes(
         pose_rs.shape[:-3],
         pose_ts.shape[:-2],
     )
@@ -116,7 +116,7 @@ def GetJointRTs(
         cur_joint_T = joint_Ts[..., u, :, :]  # [..., D+1, D+1]
         parent_joint_T = joint_Ts[..., p, :, :]  # [... D+1, D+1]
 
-        utils.MergeRT(
+        utils.merge_rt(
             parent_joint_T[..., :D, :D],
             parent_joint_T[..., :D, D],
             pose_rs[..., u, :, :],

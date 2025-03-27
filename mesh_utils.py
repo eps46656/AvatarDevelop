@@ -9,18 +9,18 @@ from . import utils
 
 
 @beartype
-def GetAreaVector(
+def get_area_vec(
     vertex_positions_a: torch.Tensor,  # [..., 3]
     vertex_positions_b: torch.Tensor,  # [..., 3]
     vertex_positions_c: torch.Tensor,  # [..., 3]
 ) -> torch.Tensor:  # [..., 3]
-    utils.CheckShapes(
+    utils.check_shapes(
         vertex_positions_a, (..., 3),
         vertex_positions_b, (..., 3),
         vertex_positions_c, (..., 3),
     )
 
-    batch_shape = utils.BroadcastShapes(
+    batch_shape = utils.broadcast_shapes(
         vertex_positions_a,
         vertex_positions_b,
         vertex_positions_c,
@@ -36,7 +36,7 @@ def GetAreaVector(
 
 
 @beartype
-def GetAreaWeightedVertexNormals(
+def get_area_weighted_vertex_normals(
     *,
     faces: torch.Tensor,  # [F, 3]
     vertex_positions: torch.Tensor,  # [..., V, 3]
@@ -46,7 +46,7 @@ def GetAreaWeightedVertexNormals(
 ):
     F, V = -1, -2
 
-    F, V = utils.CheckShapes(
+    F, V = utils.check_shapes(
         faces, (F, 3),
         vertex_positions, (..., V, 3),
     )
@@ -60,13 +60,13 @@ def GetAreaWeightedVertexNormals(
     if vertex_positions_c is None:
         vertex_positions_c = vertex_positions[..., faces[:, 2], :]
 
-    utils.CheckShapes(
+    utils.check_shapes(
         vertex_positions_a, (..., F, 3),
         vertex_positions_b, (..., F, 3),
         vertex_positions_c, (..., F, 3),
     )
 
-    area_vector = GetAreaVector(
+    area_vector = get_area_vec(
         vertex_positions_a,
         vertex_positions_b,
         vertex_positions_c,
@@ -84,7 +84,7 @@ def GetAreaWeightedVertexNormals(
     # vertex_normals[..., faces[:, 1][i], :] += area_vector[..., i, :]
     # vertex_normals[..., faces[:, 2][i], :] += area_vector[..., i, :]
 
-    return utils.Normalized(vertex_normals)
+    return utils.normalized(vertex_normals)
 
 
 @beartype
@@ -129,7 +129,7 @@ class MeshData:
 
         VP, FP = -1, -2
 
-        utils.CheckShapes(
+        utils.check_shapes(
             vertex_vertex_adj_rel_list, (2, VP),
             face_vertex_adj_list, (F, 3),
             face_face_adj_rel_list, (2, FP),
@@ -145,13 +145,33 @@ class MeshData:
         self.vertex_degrees = vertex_degrees
         self.inv_vertex_degrees = inv_vertex_degrees
 
+    def to(self, *args, **kwargs) -> typing.Self:
+        d = {
+            "vertices_cnt": self.vertices_cnt,
+            "faces_cnt": self.faces_cnt,
+
+            "vertex_vertex_adj_rel_list": None,
+            "face_vertex_adj_list": None,
+
+            "vertex_degrees": None,
+            "inv_vertex_degrees": None,
+        }
+
+        for key, val in d.items():
+            if val is None:
+                cur_val = getattr(self, key)
+                d[key] = None if cur_val is None else \
+                    cur_val.to(*args, **kwargs)
+
+        return MeshData(**d)
+
     @staticmethod
-    def FromFaceVertexAdjList(
+    def from_face_vertex_adj_list(
         vertices_cnt: int,  # vertices_cnt
         face_vertex_adj_list: torch.Tensor,  # [F, 3]
         device: torch.device,
     ) -> typing.Self:
-        faces_cnt, = utils.CheckShapes(face_vertex_adj_list, (-1, 3))
+        faces_cnt, = utils.check_shapes(face_vertex_adj_list, (-1, 3))
 
         face_vertex_adj_list = face_vertex_adj_list.to(device=utils.CPU)
 
@@ -183,7 +203,7 @@ class MeshData:
 
             for i in range(l):
                 for j in range(i+1, l):
-                    face_face_adj_rel_list.add(utils.MinMax(fs[i], fs[j]))
+                    face_face_adj_rel_list.add(utils.min_max(fs[i], fs[j]))
 
         face_vertex_adj_list = face_vertex_adj_list.to(
             dtype=torch.long, device=device)
@@ -220,11 +240,11 @@ class MeshData:
             inv_vertex_degrees=inv_vertex_degrees,
         )
 
-    def GetLapDiff(
+    def calc_lap_diff(
         self,
         vertex_positions: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # [..., V, D]
-        utils.CheckShapes(vertex_positions, (..., self.vertices_cnt, -1))
+        utils.check_shapes(vertex_positions, (..., self.vertices_cnt, -1))
 
         index_0 = self.vertex_vertex_adj_rel_list[0, :]
         index_1 = self.vertex_vertex_adj_rel_list[1, :]
@@ -248,11 +268,11 @@ class MeshData:
 
         return buffer - vertex_positions
 
-    def GetLapDiffNaive(
+    def calc_lap_diff_naive(
         self,
         vertex_positions: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # [..., V, D]
-        utils.CheckShapes(vertex_positions, (..., self.vertices_cnt, -1))
+        utils.check_shapes(vertex_positions, (..., self.vertices_cnt, -1))
 
         VP = self.vertex_vertex_adj_rel_list.shape[1]
 
@@ -270,11 +290,11 @@ class MeshData:
 
         return buffer - vertex_positions
 
-    def GetFaceCosSim(
+    def calc_face_cos_sim(
         self,
         face_vecs: torch.Tensor,  # [..., F, D]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
         vecs_0 = face_vecs[
             ..., self.face_face_adj_rel_list[0, :], :]
@@ -283,13 +303,13 @@ class MeshData:
             ..., self.face_face_adj_rel_list[1, :], :]
         # [..., ?, D]
 
-        return utils.Dot(vecs_0, vecs_1)
+        return utils.dot(vecs_0, vecs_1)
 
-    def GetFaceCosSimNaive(
+    def calc_face_cos_sim_naive(
         self,
         face_vecs: torch.Tensor,  # [..., F]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
         FP = self.face_face_adj_rel_list.shape[1]
 
@@ -299,27 +319,27 @@ class MeshData:
 
             fa, fb = self.face_face_adj_rel_list[:, fp]
 
-            ret[..., fp] = utils.Dot(
+            ret[..., fp] = utils.dot(
                 face_vecs[..., fa, :], (face_vecs[..., fb, :]))
 
         return ret
 
-    def GetFaceDiff(
+    def get_face_diff(
         self,
         face_vecs: torch.Tensor,  # [..., F, D]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
         a = face_vecs[..., self.face_face_adj_rel_list[0, :], :]
         b = face_vecs[..., self.face_face_adj_rel_list[1, :], :]
 
         return a - b
 
-    def GetFaceDiffNaive(
+    def get_face_diff_naive(
         self,
         face_vecs: torch.Tensor,  # [..., F]
     ) -> torch.Tensor:  # [..., FP]
-        utils.CheckShapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
         FP = self.face_face_adj_rel_list.shape[1]
 

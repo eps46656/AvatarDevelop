@@ -15,7 +15,7 @@ DEVICE = torch.device("cuda")
 
 CUDA_DEVICE = torch.device("cuda")
 
-camera_view_transform = transform_utils.ObjectTransform.FromMatching(
+camera_view_transform = transform_utils.ObjectTransform.from_matching(
     "RUB")
 # camera <-> view
 
@@ -25,14 +25,14 @@ def main1():
     theta = 60.0 * utils.DEG
     phi = (180.0 + 45.0) * utils.DEG
 
-    camera_transform = camera_utils.MakeView(
+    camera_transform = camera_utils.make_view(
         origin=torch.tensor(utils.Sph2Cart(radius, theta, phi),
                             dtype=utils.FLOAT),
         aim=utils.ORIGIN,
         quasi_u_dir=utils.Z_AXIS,
     )  # camera <-> world
 
-    camera_config = camera_utils.CameraConfig.FromFovDiag(
+    camera_config = camera_utils.CameraConfig.from_fov_diag(
         fov_diag=90 * utils.DEG,
         depth_near=utils.DEPTH_NEAR,
         depth_far=utils.DEPTH_FAR,
@@ -85,7 +85,7 @@ def main1():
     print(f"{gp_shs.shape=}")
     print(f"{gp_colors.shape=}")
 
-    result = gaussian_utils.RenderGaussian(
+    result = gaussian_utils.render_gaussian(
         camera_transform=camera_transform,
 
         camera_config=camera_config,
@@ -113,7 +113,7 @@ def main1():
     if isinstance(img, torch.Tensor):
         print(f"{img.shape=}")
 
-    utils.WriteImage(
+    utils.write_image(
         DIR / "out.png",
         img * 255,
     )

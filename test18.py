@@ -71,7 +71,7 @@ def main1():
 
     subject_dir = people_snapshot_dir / subject_name
 
-    subject_data = people_snapshot_utils.ReadSubject(
+    subject_data = people_snapshot_utils.read_subject(
         subject_dir=subject_dir,
         model_data_dict=model_data_dict,
         device=DEVICE,
@@ -88,14 +88,14 @@ def main1():
 
     # ---
 
-    camera_view_transform = transform_utils.ObjectTransform.FromMatching(
+    camera_view_transform = transform_utils.ObjectTransform.from_matching(
         "LUF")
     # camera <-> view
 
     # subject_data.camera_transform
     # camera <-> world
 
-    world_to_view_mat = subject_data.camera_transform.GetTransTo(
+    world_to_view_mat = subject_data.camera_transform.get_trans_to(
         camera_view_transform)
     # world -> view
 
@@ -115,7 +115,7 @@ def main1():
     print(f"{camera_config.img_h=}")
     print(f"{camera_config.img_w=}")
 
-    camera_proj_mat = camera_utils.MakeProjMat(
+    camera_proj_mat = camera_utils.make_proj_mat(
         camera_config=camera_config,
         camera_view_transform=camera_view_transform,
         convention=camera_utils.Convention.PyTorch3D,
@@ -235,9 +235,9 @@ def main1():
         out_frames[frame_i, :, :, :] = einops.rearrange(
             img, "h w c -> c h w")
 
-    utils.WriteVideo(
+    utils.write_video(
         path=DIR / "output.mp4",
-        video=utils.ImageDenormalize(out_frames),
+        video=utils.image_denormalize(out_frames),
         fps=30,
     )
 

@@ -42,7 +42,7 @@ def LBS(
 
     V, D = -1, -2
 
-    V, D = utils.CheckShapes(
+    V, D = utils.check_shapes(
         lbs_weights, (..., V, J),
         binding_pose_rs, (..., J, D, D),
         binding_pose_ts, (..., J, D),
@@ -51,21 +51,21 @@ def LBS(
     )
 
     if vertex_positions is not None:
-        utils.CheckShapes(vertex_positions, (..., V, D))
+        utils.check_shapes(vertex_positions, (..., V, D))
 
     if vertex_directions is not None:
-        utils.CheckShapes(vertex_directions, (..., V, D))
+        utils.check_shapes(vertex_directions, (..., V, D))
 
     device = lbs_weights.device
 
-    binding_joint_Ts = kin_utils.GetJointRTs(
+    binding_joint_Ts = kin_utils.get_joint_rts(
         kin_tree, binding_pose_rs, binding_pose_ts)
     # binding_joint_rs[..., J, D+1, D+1]
 
     inv_binding_joint_Ts = binding_joint_Ts.inverse()
     # inv_binding_joint_rs[..., J, D+1, D+1]
 
-    target_joint_Ts = kin_utils.GetJointRTs(
+    target_joint_Ts = kin_utils.get_joint_rts(
         kin_tree, target_pose_rs, target_pose_ts)
     # target_joint_rs[..., J, D+1, D+1]
 

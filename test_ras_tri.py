@@ -16,7 +16,7 @@ def IsUnique(x: typing.Iterable[object]):
     ret = set()
 
     for obj in x:
-        assert utils.SetAdd(ret, obj)
+        assert utils.set_add(ret, obj)
 
     return ret
 
@@ -58,7 +58,7 @@ def main1():
 
         assert ratio <= 0.04
 
-    utils.WriteImage(DIR / "test.png", img)
+    utils.write_image(DIR / "test.png", img)
 
 
 if __name__ == "__main__":

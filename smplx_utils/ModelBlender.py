@@ -1,10 +1,11 @@
 import dataclasses
+import typing
 
 import torch
 from beartype import beartype
 
 from .. import avatar_utils, utils
-from .blending_utils import Blending, BlendingParam
+from .blending_utils import blending, BlendingParam
 from .Model import Model
 from .ModelBuilder import ModelBuilder
 
@@ -14,56 +15,53 @@ class ModelBlender(avatar_utils.AvatarBlender):
     def __init__(
         self,
         model_builder: ModelBuilder,
-        device: torch.device,
     ):
         super(ModelBlender, self).__init__()
 
         self.model_builder = model_builder
 
-        # ---
-
-        self.device = device
+        device = self.model_builder.device
 
         # ---
 
-        model_config = model_builder.GetModelData().GetModelConfig()
+        model_config = model_builder.get_model_data().get_model_config()
 
         self.default_blending_param = BlendingParam(
             body_shapes=torch.zeros(
-                (model_config.body_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (model_config.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
             expr_shapes=torch.zeros(
-                (model_config.expr_shapes_cnt,), dtype=utils.FLOAT, device=self.device),
+                (model_config.expr_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
             global_transl=torch.zeros(
-                (3,), dtype=utils.FLOAT, device=self.device),
+                (3,), dtype=utils.FLOAT, device=device),
 
             global_rot=torch.zeros(
-                (3,), dtype=utils.FLOAT, device=self.device),
+                (3,), dtype=utils.FLOAT, device=device),
 
             body_poses=torch.zeros(
-                (model_config.body_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.body_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             jaw_poses=torch.zeros(
-                (model_config.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             leye_poses=torch.zeros(
-                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             reye_poses=torch.zeros(
-                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             lhand_poses=torch.zeros(
-                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             rhand_poses=torch.zeros(
-                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=self.device),
+                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             blending_vertex_normal=False,
         )
 
-    def GetAvatarModel(self) -> avatar_utils.AvatarModel:
-        model_data = self.model_builder.GetModelData()
+    def get_avatar_model(self) -> avatar_utils.AvatarModel:
+        model_data = self.model_builder.get_model_data()
 
         kin_tree = model_data.kin_tree
 
@@ -104,14 +102,16 @@ class ModelBlender(avatar_utils.AvatarBlender):
             mesh_data=mesh_data,
         )
 
-    def GetBodyShapesCnt(self):
-        return self.model_builder.GetModelData().GetBodyShapesCnt()
+    @property
+    def body_shapes_cnt(self):
+        return self.model_builder.get_model_data().body_shapes_cnt
 
-    def GetExprShapesCnt(self):
-        return self.model_builder.GetModelData().GetExprShapesCnt()
+    @property
+    def expr_shapes_cnt(self):
+        return self.model_builder.get_model_data().expr_shapes_cnt
 
-    def SetDefaultBlendingParam(self, blending_param: BlendingParam):
-        blending_param.Check(self.model_data, True)
+    def set_default_blending_param(self, blending_param: BlendingParam):
+        blending_param.check(self.model_data, True)
 
         for field in dataclasses.fields(BlendingParam):
             value = getattr(blending_param, field)
@@ -119,10 +119,22 @@ class ModelBlender(avatar_utils.AvatarBlender):
             if value is not None:
                 setattr(self.default_blending_param, field, value)
 
+    @property
+    def device(self):
+        return self.model_builder.device
+
+    def to(self, *args, **kwargs) -> typing.Self:
+        self.model_builder.to(*args, **kwargs)
+
+        self.default_blending_param = self.default_blending_param \
+            .to(*args, **kwargs)
+
+        return self
+
     def forward(self, blending_param: BlendingParam):
-        return Blending(
-            model_data=self.model_builder.GetModelData(),
-            blending_param=blending_param.GetCombined(
+        return blending(
+            model_data=self.model_builder.get_model_data(),
+            blending_param=blending_param.combine(
                 self.default_blending_param),
-            device=self.device,
+            device=self.model_builder.device,
         )

@@ -83,8 +83,8 @@ def main1():
     binding_pose_ts = torch.zeros(
         (J, 3), dtype=utils.FLOAT, device=DEVICE)
 
-    pose_rs = utils.AxisAngleToRotMat(utils.RandUnit((J, 3)),
-                                      torch.rand((J,)))
+    pose_rs = utils.axis_angle_to_rot_mat(utils.rand_unit((J, 3)),
+                                          torch.rand((J,)))
     # [J, 3, 3]
 
     pose_ts = torch.rand((J, 3))
@@ -154,29 +154,29 @@ def main3():
         global_transl = torch.rand(
             (1, 3), dtype=utils.FLOAT, device=DEVICE) * 10 - 5
 
-        global_rot = utils.RandRotVec(
+        global_rot = utils.rand_rot_vec(
             (1, 3), dtype=utils.FLOAT, device=DEVICE)
 
         print(f"{global_rot=}")
 
         if True:
-            body_poses = utils.RandRotVec((1, body_joints_cnt - 1, 3),
-                                          dtype=utils.FLOAT, device=DEVICE)
+            body_poses = utils.rand_rot_vec((1, body_joints_cnt - 1, 3),
+                                            dtype=utils.FLOAT, device=DEVICE)
 
-            jaw_poses = utils.RandRotVec((1, jaw_joints_cnt, 3),
-                                         dtype=utils.FLOAT, device=DEVICE)
-
-            leye_poses = utils.RandRotVec((1, eye_joints_cnt, 3),
-                                          dtype=utils.FLOAT, device=DEVICE)
-
-            reye_poses = utils.RandRotVec((1, eye_joints_cnt, 3),
-                                          dtype=utils.FLOAT, device=DEVICE)
-
-            lhand_poses = utils.RandRotVec((1, hand_joints_cnt, 3),
+            jaw_poses = utils.rand_rot_vec((1, jaw_joints_cnt, 3),
                                            dtype=utils.FLOAT, device=DEVICE)
 
-            rhand_poses = utils.RandRotVec((1, hand_joints_cnt, 3),
-                                           dtype=utils.FLOAT, device=DEVICE)
+            leye_poses = utils.rand_rot_vec((1, eye_joints_cnt, 3),
+                                            dtype=utils.FLOAT, device=DEVICE)
+
+            reye_poses = utils.rand_rot_vec((1, eye_joints_cnt, 3),
+                                            dtype=utils.FLOAT, device=DEVICE)
+
+            lhand_poses = utils.rand_rot_vec((1, hand_joints_cnt, 3),
+                                             dtype=utils.FLOAT, device=DEVICE)
+
+            rhand_poses = utils.rand_rot_vec((1, hand_joints_cnt, 3),
+                                             dtype=utils.FLOAT, device=DEVICE)
         else:
             body_poses = torch.zeros((1, body_joints_cnt - 1, 3),
                                      dtype=utils.FLOAT, device=DEVICE)
@@ -246,14 +246,14 @@ def main3():
     # print(f"{my_smplx_model.joints=}")
     # print(f"{smplx_model.joints=}")
 
-    joint_err = utils.GetL2RMS(
+    joint_err = utils.get_l2_rms(
         my_smplx_model.joint_Ts[..., :3, 3].reshape((-1, 3)) -
         smplx_model.joints.flatten()[:165].reshape((-1, 3))
     )
 
     print(f"{joint_err=}")
 
-    vertices_err = utils.GetL2RMS(
+    vertices_err = utils.get_l2_rms(
         my_smplx_model.vertex_positions.reshape((-1, 3)) -
         smplx_model.vertices.reshape((-1, 3))
     )
@@ -263,7 +263,7 @@ def main3():
     vertex_normals = my_smplx_model.vertex_normals
 
     with utils.Timer():
-        re_vertex_normals = mesh_utils.GetAreaWeightedVertexNormals(
+        re_vertex_normals = mesh_utils.get_area_weighted_vertex_normals(
             faces=my_smplx_builder.GetFaces(),
             vertex_positions=my_smplx_model.vertex_positions
         )

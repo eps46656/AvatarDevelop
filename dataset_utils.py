@@ -6,10 +6,11 @@ from . import utils
 
 
 class Dataset:
-    def GetBatchShape() -> torch.Size:
+    @property
+    def shape() -> torch.Size:
         raise utils.UnimplementationError()
 
-    def BatchGet(self, batch_idxes: tuple[torch.Tensor, ...]):
+    def batch_get(self, batch_idxes: tuple[torch.Tensor, ...]):
         raise utils.UnimplementationError()
 
 
@@ -23,7 +24,7 @@ class DatasetLoader:
     ):
         self.dataset = dataset
 
-        dataset_shape = self.dataset.GetBatchShape()
+        dataset_shape = self.dataset.shape
         dataset_size = dataset_shape.numel()
 
         assert (0 < batch_size) != (0 < batches_cnt)
@@ -32,7 +33,7 @@ class DatasetLoader:
             (dataset_size + batch_size - 1) // batch_size
 
     def __iter__(self):
-        dataset_shape = self.dataset.GetBatchShape()
+        dataset_shape = self.dataset.shape
         dataset_size = dataset_shape.numel()
 
         idxes = torch.randperm(dataset_size)
@@ -53,9 +54,9 @@ class DatasetLoader:
 
             cur_batch_idxes = tuple(
                 batch_idxes[d][i:nxt_i]
-                for d in range(dataset_shape.dim())
+                for d in range(len(dataset_shape))
             )
 
-            yield cur_batch_idxes, self.dataset.BatchGet(cur_batch_idxes)
+            yield cur_batch_idxes, self.dataset.batch_get(cur_batch_idxes)
 
             i = nxt_i

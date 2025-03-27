@@ -7,12 +7,12 @@ from beartype import beartype
 
 
 @beartype
-def MakeSqliteCmdCondParam(conditions: dict[str, object]):
+def make_cmd_cond_param(conditions: dict[str, object]):
     return " AND ".join(f"{col_name} = ?" for col_name in conditions.keys()), tuple(conditions.values())
 
 
 @beartype
-def SqliteCount(
+def count(
     cursor: sqlite3.Cursor,
     table_name: str,
     conditions: typing.Optional[dict[str, object]],
@@ -25,7 +25,7 @@ def SqliteCount(
     cmd_params = tuple()
 
     if conditions:
-        cmd_conds, cmd_params = MakeSqliteCmdCondParam(conditions)
+        cmd_conds, cmd_params = make_cmd_cond_param(conditions)
         cmd.append(f"WHERE {cmd_conds}")
 
     cursor.execute(" ".join(cmd), cmd_params)
@@ -34,7 +34,7 @@ def SqliteCount(
 
 
 @beartype
-def SqliteSelect(
+def select(
     cursor: sqlite3.Cursor,
     table_name: str,
     fetching_cols: typing.Iterable[str],
@@ -50,14 +50,14 @@ def SqliteSelect(
     cmd_params = tuple()
 
     if conditions:
-        cmd_conds, cmd_params = MakeSqliteCmdCondParam(conditions)
+        cmd_conds, cmd_params = make_cmd_cond_param(conditions)
         cmd.append(f"WHERE {cmd_conds}")
 
     cursor.execute(" ".join(cmd), cmd_params)
 
 
 @beartype
-def SqliteInsert(
+def insert(
     cursor: sqlite3.Cursor,
     table_name: str,
     row: dict[str, object],
@@ -78,7 +78,7 @@ def SqliteInsert(
 
 
 @beartype
-def SqliteDelete(
+def delete(
     cursor: sqlite3.Cursor,
     table_name: str,
     fetching_cols: typing.Optional[typing.Iterable[str]],
@@ -94,7 +94,7 @@ def SqliteDelete(
     cmd_params = tuple()
 
     if conditions is not None:
-        cmd_conds, cmd_params = MakeSqliteCmdCondParam(conditions)
+        cmd_conds, cmd_params = make_cmd_cond_param(conditions)
         cmd.append(f"WHERE {cmd_conds}")
 
     if fetching_cols is not None:
@@ -105,25 +105,25 @@ def SqliteDelete(
 
 
 @dataclasses.dataclass
-class SqliteDataTableColAttr:
+class DataTableColAttr:
     serialize: typing.Callable[[object], object]
     deserialize: typing.Callable[[object], object]
 
 
 @beartype
-class SqliteDataTable:
+class DataTable:
     def __init__(
         self,
         conn: sqlite3.Connection,
         table_name: str,
-        col_attrs: dict[str, SqliteDataTableColAttr],
+        col_attrs: dict[str, DataTableColAttr],
     ):
         self.conn = conn
         self.table_name = table_name
 
-        self.col_attrs: dict[str, SqliteDataTableColAttr] = col_attrs
+        self.col_attrs: dict[str, DataTableColAttr] = col_attrs
 
-    def _SerializeConditions(
+    def _serialize_conds(
         self,
         conditions: typing.Optional[dict[str, object]],
     ):
@@ -138,7 +138,7 @@ class SqliteDataTable:
             for col_name, col_val in conditions.items()
         }
 
-    def _SerializeRow(self, row: dict[str, object]):
+    def _serialize_row(self, row: dict[str, object]):
         ret = dict()
 
         for col_name, col_attr in self.col_attrs.items():
@@ -151,17 +151,17 @@ class SqliteDataTable:
 
         return ret
 
-    def RowToDict(self, row):
+    def row_to_dict(self, row):
         return {
             col_name: col_attr.deserialize(col_val)
             for col_name, col_attr, col_val in zip(self.col_attrs.keys(), self.col_attrs.values(), row)
         }
 
-    def Count(self, conditions: typing.Optional[dict[str, object]]):
+    def count(self, conditions: typing.Optional[dict[str, object]]):
         try:
             cursor = self.conn.cursor()
 
-            return SqliteCount(
+            return count(
                 cursor,
                 self.table_name,
                 conditions,
@@ -170,12 +170,12 @@ class SqliteDataTable:
             print(traceback.format_exc())
             self.conn.rollback()
 
-    def _Select(self, conditions: typing.Optional[dict[str, object]]):
-        conditions = self._SerializeConditions(conditions)
+    def _select(self, conditions: typing.Optional[dict[str, object]]):
+        conditions = self._serialize_conds(conditions)
 
         cursor = self.conn.cursor()
 
-        SqliteSelect(
+        select(
             cursor,
             self.table_name,
             self.col_attrs.keys(),
@@ -184,25 +184,25 @@ class SqliteDataTable:
 
         return cursor
 
-    def SelectMany(self, conditions: typing.Optional[dict[str, object]]):
-        cursor = self._Select(conditions)
+    def select_many(self, conditions: typing.Optional[dict[str, object]]):
+        cursor = self._select(conditions)
 
-        return [self.RowToDict(row) for row in cursor.fetchall()]
+        return [self.row_to_dict(row) for row in cursor.fetchall()]
 
-    def SelectOne(self, conditions: typing.Optional[dict[str, object]]):
-        cursor = self._Select(conditions)
+    def select_one(self, conditions: typing.Optional[dict[str, object]]):
+        cursor = self._select(conditions)
 
         row = cursor.fetchone()
 
-        return None if row is None else self.RowToDict(row)
+        return None if row is None else self.row_to_dict(row)
 
-    def Insert(self, row: dict[str, object]):
-        row = self._SerializeRow(row)
+    def insert(self, row: dict[str, object]):
+        row = self._serialize_row(row)
 
         try:
             cursor = self.conn.cursor()
 
-            ret = SqliteInsert(cursor, self.table_name, row)
+            ret = insert(cursor, self.table_name, row)
 
             self.conn.commit()
 
@@ -211,29 +211,29 @@ class SqliteDataTable:
             print(traceback.format_exc())
             self.conn.rollback()
 
-    def Delete(
+    def delete(
         self,
         conditions: typing.Optional[dict[str, object]],
         fetching: bool,
     ):
-        conditions = self._SerializeConditions(conditions)
+        conditions = self._serialize_conds(conditions)
 
         try:
             cursor = self.conn.cursor()
 
             if not fetching:
-                SqliteDelete(cursor, self.table_name, None, conditions)
+                delete(cursor, self.table_name, None, conditions)
                 self.conn.commit()
                 return None
 
-            SqliteDelete(
+            delete(
                 cursor,
                 self.table_name,
                 self.col_attrs.keys(),
                 conditions,
             )
 
-            ret = [self.RowToDict(row) for row in cursor.fetchall()]
+            ret = [self.row_to_dict(row) for row in cursor.fetchall()]
 
             self.conn.commit()
 
@@ -242,11 +242,11 @@ class SqliteDataTable:
             print(traceback.format_exc())
             self.conn.rollback()
 
-    def DeleteAll(self):
+    def delete_all(self):
         try:
             cursor = self.conn.cursor()
 
-            SqliteDelete(cursor, self.table_name, None, None)
+            delete(cursor, self.table_name, None, None)
 
             self.conn.commit()
         except sqlite3.Error:

@@ -34,13 +34,13 @@ def NaiveRasterizeTriangle(points: np.ndarray,
 
     inv_mat = np.linalg.inv(mat)
 
-    x_min = math.ceil(utils.Clamp(
+    x_min = math.ceil(utils.clamp(
         min(pa[0], pb[0], pc[0]), x_range[0], x_range[1] - 1))
-    x_max = math.floor(utils.Clamp(
+    x_max = math.floor(utils.clamp(
         max(pa[0], pb[0], pc[0]), x_range[0], x_range[1] - 1)) + 1
-    y_min = math.ceil(utils.Clamp(
+    y_min = math.ceil(utils.clamp(
         min(pa[1], pb[1], pc[1]), y_range[0], y_range[1] - 1))
-    y_max = math.floor(utils.Clamp(
+    y_max = math.floor(utils.clamp(
         max(pa[1], pb[1], pc[1]), y_range[0], y_range[1] - 1)) + 1
 
     if x_max <= x_min or y_max <= y_min:
@@ -78,10 +78,10 @@ def RasterizeTriangle(points: torch.Tensor,
     pbx, pby = points[:, 1]
     pcx, pcy = points[:, 2]
 
-    x_min = utils.Clamp(float(min(pax, pbx, pcx)), x_range[0], x_range[1] - 1)
-    x_max = utils.Clamp(float(max(pax, pbx, pcx)), x_range[0], x_range[1] - 1)
-    y_min = utils.Clamp(float(min(pay, pby, pcy)), y_range[0], y_range[1] - 1)
-    y_max = utils.Clamp(float(max(pay, pby, pcy)), y_range[0], y_range[1] - 1)
+    x_min = utils.clamp(float(min(pax, pbx, pcx)), x_range[0], x_range[1] - 1)
+    x_max = utils.clamp(float(max(pax, pbx, pcx)), x_range[0], x_range[1] - 1)
+    y_min = utils.clamp(float(min(pay, pby, pcy)), y_range[0], y_range[1] - 1)
+    y_max = utils.clamp(float(max(pay, pby, pcy)), y_range[0], y_range[1] - 1)
 
     if x_max <= x_min or y_max <= y_min:
         return
@@ -263,10 +263,10 @@ def RasterizeEllipseWithCoeff(
     cur_x_min, cur_x_max = GetEllipseRange(c_x2, c_xy, c_y2, c_x, c_y, c_1)
     cur_y_min, cur_y_max = GetEllipseRange(c_y2, c_xy, c_x2, c_y, c_x, c_1)
 
-    x_min = utils.Clamp(cur_x_min, x_range[0], x_range[1] - 1)
-    x_max = utils.Clamp(cur_x_max, x_range[0], x_range[1] - 1)
-    y_min = utils.Clamp(cur_y_min, y_range[0], y_range[1] - 1)
-    y_max = utils.Clamp(cur_y_max, y_range[0], y_range[1] - 1)
+    x_min = utils.clamp(cur_x_min, x_range[0], x_range[1] - 1)
+    x_max = utils.clamp(cur_x_max, x_range[0], x_range[1] - 1)
+    y_min = utils.clamp(cur_y_min, y_range[0], y_range[1] - 1)
+    y_max = utils.clamp(cur_y_max, y_range[0], y_range[1] - 1)
 
     scan_type = 1 if x_max - x_min <= y_max - y_min else 2
 

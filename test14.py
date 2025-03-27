@@ -441,7 +441,7 @@ class GaussianRendererWrapper(torch.nn.Module):
         camera_transform: transform_utils.ObjectTransform,
         camera_config: camera_utils.CameraConfig,
     ):
-        view_mat = camera_transform.GetTransTo(
+        view_mat = camera_transform.get_trans_to(
             GaussianRendererWrapper.torch_splatting_view_transform)
         # world -> view
 
@@ -451,7 +451,7 @@ class GaussianRendererWrapper(torch.nn.Module):
         print(f"{GaussianRendererWrapper.torch_splatting_view_transform.trans=}")
         print(f"{GaussianRendererWrapper.torch_splatting_view_transform.inv_trans=}")
 
-        ndc_proj_mat = camera_utils.MakeProjMatWithConfig(
+        ndc_proj_mat = camera_utils.make_proj_mat_with_config(
             camera_config=camera_config,
             view_coord=GaussianRendererWrapper.torch_splatting_view_dirs,
             proj_config=camera_utils.ProjConfig(
@@ -472,8 +472,8 @@ class GaussianRendererWrapper(torch.nn.Module):
         print(f"{view_mat=}")
         print(f"{ndc_proj_mat=}")
 
-        fov_x = camera_config.GetFovW()
-        fov_y = camera_config.GetFovH()
+        fov_x = camera_config.fov_w
+        fov_y = camera_config.fov_h
 
         focal_x = camera_config.img_w / \
             (camera_config.foc_l + camera_config.foc_r)
@@ -542,7 +542,7 @@ class GaussianRendererWrapper(torch.nn.Module):
 def main1():
     pytorch3d_view_dirs = utils.Dir3.FromStr("LUF")
 
-    pytorch3d_view_coord = transform_utils.ObjectTransform.FromMatching(
+    pytorch3d_view_coord = transform_utils.ObjectTransform.from_matching(
         pos=utils.ORIGIN,
         dirs=pytorch3d_view_dirs,
         vecs=(utils.X_AXIS, utils.Y_AXIS, utils.Z_AXIS),
@@ -552,14 +552,14 @@ def main1():
     theta = 60.0 * utils.DEG
     phi = (180.0 + 45.0) * utils.DEG
 
-    camera_transform = camera_utils.MakeView(
+    camera_transform = camera_utils.make_view(
         origin=torch.tensor(utils.Sph2Cart(radius, theta, phi),
                             dtype=utils.FLOAT),
         aim=utils.ORIGIN,
         quasi_u_dir=utils.Z_AXIS,
     )  # camera <-> world
 
-    camera_config = camera_utils.CameraConfig.FromFovDiag(
+    camera_config = camera_utils.CameraConfig.from_fov_diag(
         fov_diag=90 * utils.DEG,
         depth_near=0.1,
         depth_far=100.0,
@@ -624,7 +624,7 @@ def main1():
     if isinstance(img, torch.Tensor):
         print(f"{img.shape=}")
 
-    utils.WriteImage(
+    utils.write_image(
         DIR / "out.png",
         img * 255,
     )

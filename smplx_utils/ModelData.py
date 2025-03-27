@@ -45,23 +45,23 @@ class ModelData:
 
     mesh_data: mesh_utils.MeshData
 
-    def Check(self) -> None:
-        V, = utils.CheckShapes(self.vertex_positions, (..., -1, 3))
+    def check(self) -> None:
+        V, = utils.check_shapes(self.vertex_positions, (..., -1, 3))
 
         TV, = (0,) if self.texture_vertex_positions is None else\
-            utils.CheckShapes(self.texture_vertex_positions, (..., -1, 2))
+            utils.check_shapes(self.texture_vertex_positions, (..., -1, 2))
 
         F, = (0,) if self.faces is None else\
-            utils.CheckShapes(self.faces, (-1, 3))
+            utils.check_shapes(self.faces, (-1, 3))
 
         TF, = (0,) if self.texture_faces is None else\
-            utils.CheckShapes(self.texture_faces, (-1, 3))
+            utils.check_shapes(self.texture_faces, (-1, 3))
 
         BS, = (0, ) if self.body_shape_dirs is None else \
-            utils.CheckShapes(self.body_shape_dirs, (..., V, 3, -1))
+            utils.check_shapes(self.body_shape_dirs, (..., V, 3, -1))
 
         ES, = (0, ) if self.expr_shape_dirs is None else \
-            utils.CheckShapes(self.expr_shape_dirs, (..., V, 3, -1))
+            utils.check_shapes(self.expr_shape_dirs, (..., V, 3, -1))
 
         BJ = self.body_joints_cnt
         JJ = self.jaw_joints_cnt
@@ -77,31 +77,32 @@ class ModelData:
 
         assert BJ + JJ + EJ * 2 + HANDJ * 2 == J
 
-        utils.CheckShapes(self.lbs_weights, (..., V, J))
+        utils.check_shapes(self.lbs_weights, (..., V, J))
 
-        utils.CheckShapes(self.body_shape_joint_regressor, (..., J, 3, BS))
+        utils.check_shapes(self.body_shape_joint_regressor, (..., J, 3, BS))
 
         if self.expr_shape_joint_regressor is not None:
-            utils.CheckShapes(self.expr_shape_joint_regressor, (..., J, 3, ES))
+            utils.check_shapes(
+                self.expr_shape_joint_regressor, (..., J, 3, ES))
 
         if 0 < HANDJ:
             assert self.lhand_poses_mean is not None
             assert self.rhand_poses_mean is not None
 
-            utils.CheckShapes(self.lhand_poses_mean, (..., HANDJ, 3))
-            utils.CheckShapes(self.rhand_poses_mean, (..., HANDJ, 3))
+            utils.check_shapes(self.lhand_poses_mean, (..., HANDJ, 3))
+            utils.check_shapes(self.rhand_poses_mean, (..., HANDJ, 3))
 
-    def GetBodyShapesCnt(self) -> int:
+    def body_shapes_cnt(self) -> int:
         return self.body_shape_dirs.shape[-1]
 
-    def GetExprShapesCnt(self) -> int:
+    def expr_shapes_cnt(self) -> int:
         return 0 if self.expr_shape_dirs is None else\
             self.expr_shape_dirs.shape[-1]
 
-    def GetModelConfig(self) -> ModelConfig:
+    def get_model_config(self) -> ModelConfig:
         return ModelConfig(
-            body_shapes_cnt=self.GetBodyShapesCnt(),
-            expr_shapes_cnt=self.GetExprShapesCnt(),
+            body_shapes_cnt=self.body_shapes_cnt,
+            expr_shapes_cnt=self.expr_shapes_cnt,
             body_joints_cnt=self.body_joints_cnt,
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
@@ -109,13 +110,13 @@ class ModelData:
         )
 
     @staticmethod
-    def FromFile(
+    def from_file(
         *,
         model_data_path: os.PathLike,
         model_config: ModelConfig,
         device: torch.device,
     ) -> typing.Self:
-        model_data = utils.ReadPickle(model_data_path)
+        model_data = utils.read_pickle(model_data_path)
 
         kin_tree_table = model_data["kintree_table"]
 
@@ -123,7 +124,7 @@ class ModelData:
             (int(kin_tree_table[0, j]), int(kin_tree_table[1, j]))
             for j in range(kin_tree_table.shape[1])]
 
-        kin_tree = kin_utils.KinTree.FromLinks(kin_tree_links, 2**32-1)
+        kin_tree = kin_utils.KinTree.from_links(kin_tree_links, 2**32-1)
         # joints_cnt = J
 
         J = kin_tree.joints_cnt
@@ -134,27 +135,27 @@ class ModelData:
             .to(dtype=utils.FLOAT, device=device)
         # [V, 3]
 
-        V, = utils.CheckShapes(vertex_positions, (-1, 3))
+        V, = utils.check_shapes(vertex_positions, (-1, 3))
 
         # ---
 
         lbs_weights = torch.from_numpy(model_data["weights"]) \
             .to(dtype=utils.FLOAT, device=device)
 
-        utils.CheckShapes(lbs_weights, (V, J))
+        utils.check_shapes(lbs_weights, (V, J))
 
         # ---
 
         joint_regressor = torch.from_numpy(model_data["J_regressor"]) \
             .to(dtype=utils.FLOAT, device=device)
 
-        utils.CheckShapes(joint_regressor, (J, V))
+        utils.check_shapes(joint_regressor, (J, V))
 
         # ---
 
-        def GetShapeDirs(shape_dirs: torch.Tensor, shape_dirs_cnt: int) \
+        def get_shape_dirs(shape_dirs: torch.Tensor, shape_dirs_cnt: int) \
                 -> torch.Tensor:
-            K, = utils.CheckShapes(shape_dirs, (V, 3, -1))
+            K, = utils.check_shapes(shape_dirs, (V, 3, -1))
 
             assert 0 <= shape_dirs_cnt
 
@@ -175,11 +176,11 @@ class ModelData:
 
         shape_dirs = torch.from_numpy(model_data["shapedirs"])
 
-        body_shape_dirs = GetShapeDirs(
+        body_shape_dirs = get_shape_dirs(
             shape_dirs[:, :, :BODY_SHAPES_SPACE_DIM],
             model_config.body_shapes_cnt)
 
-        expr_shape_dirs = GetShapeDirs(
+        expr_shape_dirs = get_shape_dirs(
             shape_dirs[:, :, BODY_SHAPES_SPACE_DIM:],
             model_config.expr_shapes_cnt)
 
@@ -212,7 +213,7 @@ class ModelData:
             texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
                 .to(dtype=utils.FLOAT, device=device)
 
-            TV, = utils.CheckShapes(texture_vertex_positions, (..., -1, 2))
+            TV, = utils.check_shapes(texture_vertex_positions, (..., -1, 2))
         else:
             texture_vertex_positions = None
             TV = 0
@@ -222,7 +223,7 @@ class ModelData:
         faces = torch.from_numpy(model_data["f"]) \
             .to(dtype=torch.long, device=device)
 
-        F, = utils.CheckShapes(faces, (..., -1, 3))
+        F, = utils.check_shapes(faces, (..., -1, 3))
 
         # ---
 
@@ -230,7 +231,7 @@ class ModelData:
             texture_faces = torch.from_numpy(model_data["ft"]) \
                 .to(dtype=torch.long, device=device)
 
-            TF, = utils.CheckShapes(texture_faces, (..., -1, 3))
+            TF, = utils.check_shapes(texture_faces, (..., -1, 3))
         else:
             texture_faces = None
 
@@ -256,7 +257,7 @@ class ModelData:
 
         # ---
 
-        mesh_data = mesh_utils.MeshData.FromFaceVertexAdjList(
+        mesh_data = mesh_utils.MeshData.from_face_vertex_adj_list(
             V, faces, device)
 
         # ---
@@ -265,7 +266,7 @@ class ModelData:
             kin_tree=kin_tree,
 
             vertex_positions=vertex_positions,
-            vertex_normals=mesh_utils.GetAreaWeightedVertexNormals(
+            vertex_normals=mesh_utils.get_area_weighted_vertex_normals(
                 faces=faces,
                 vertex_positions=vertex_positions,
             ).to(dtype=utils.FLOAT, device=device),
@@ -294,3 +295,48 @@ class ModelData:
 
             mesh_data=mesh_data,
         )
+
+    @property
+    def device(self):
+        return self.vertex_positions.device
+
+    def to(self, *args, **kwargs) -> typing.Self:
+        d = {
+            "kin_tree": self.kin_tree,
+
+            "vertex_positions": None,
+            "vertex_normals": None,
+
+            "texture_vertex_positions": None,
+
+            "faces": None,
+            "texture_faces": None,
+
+            "lbs_weights": None,
+
+            "body_shape_dirs": None,
+            "expr_shape_dirs": None,
+
+            "body_joints_cnt": self.body_joints_cnt,
+            "jaw_joints_cnt": self.jaw_joints_cnt,
+            "eye_joints_cnt": self.eye_joints_cnt,
+            "hand_joints_cnt": self.hand_joints_cnt,
+
+            "joint_ts_mean": None,
+
+            "body_shape_joint_regressor": None,
+            "expr_shape_joint_regressor": None,
+
+            "lhand_poses_mean": None,
+            "rhand_poses_mean": None,
+
+            "mesh_data": None,
+        }
+
+        for key, val in d.items():
+            if val is None:
+                cur_val = getattr(self, key)
+                d[key] = None if cur_val is None else \
+                    cur_val.to(*args, **kwargs)
+
+        return ModelData(**d)

@@ -71,7 +71,7 @@ src_f - src_n
 def main2():
     f = 1 / 2.8284
 
-    camera_config = camera_utils.CameraConfig.FromSlopeUDLR(
+    camera_config = camera_utils.CameraConfig.from_slope_udlr(
         slope_u=f,
         slope_d=f,
         slope_l=f,
@@ -82,15 +82,15 @@ def main2():
         depth_far=200.0,
     )
 
-    proj_mat = camera_utils.MakeProjMatWithConfig(
+    proj_mat = camera_utils.make_proj_mat_with_config(
         camera_config=camera_config,
 
         camera_view_transform=transform_utils.ObjectTransform.
-        FromMatching("RDF"),
+        from_matching("RDF"),
 
         proj_config=camera_utils.ProjConfig(
             camera_proj_transform=transform_utils.ObjectTransform.
-            FromMatching("RDF"),
+            from_matching("RDF"),
             delta_u=1.0,
             delta_d=1.0,
             delta_l=1.0,

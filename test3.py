@@ -44,7 +44,7 @@ def main1():
     theta = 60 * utils.DEG
     phi = (180 + 270) / 2 * utils.DEG
 
-    proj_mat = camera_utils.MakeProjMat(
+    proj_mat = camera_utils.make_proj_mat(
         img_shape=(H, W),
         origin=torch.tensor(utils.Sph2Cart(raduis, theta, phi)),
         # origin=torch.tensor([4, 5, 6, 7]),
@@ -57,7 +57,7 @@ def main1():
     # model_mat[]
 
     model_mat: torch.Tensor = \
-        utils.AxisAngleToRotMat(torch.tensor([0, 0, 1], dtype=FLOAT), 135*utils.DEG) @ \
+        utils.axis_angle_to_rot_mat(torch.tensor([0, 0, 1], dtype=FLOAT), 135*utils.DEG) @ \
         torch.linalg.lstsq(
             # model coordinate
             torch.tensor([
@@ -161,7 +161,7 @@ def main1():
     F = faces.shape[0]
 
     texture = torch.tensor(
-        utils.ReadImage(
+        utils.read_image(
             DIR / "black_male.png", "chw"),
         dtype=float)
 
@@ -227,7 +227,7 @@ def main1():
             if 0 < w_map[h, w]:
                 img[h, w, :] = albedo_map[:, h, w].to(dtype=int).numpy()
 
-    utils.WriteImage(DIR / "test.png", img, "hwc")
+    utils.write_image(DIR / "test.png", img, "hwc")
 
 
 if __name__ == "__main__":
