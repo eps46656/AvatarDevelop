@@ -1,4 +1,3 @@
-import dataclasses
 import heapq
 
 import torch
@@ -8,12 +7,17 @@ from . import utils
 
 
 @beartype
-@dataclasses.dataclass
 class KinTree:
-    joints_cnt: int
-    root: int
-    parents: list[int]
-    joints_tp: list[int]
+    def __init__(
+        self,
+        *,
+        root: int,
+        parents: list[int],
+        joints_tp: list[int],
+    ):
+        self.root = root
+        self.parents = parents
+        self.joints_tp = joints_tp
 
     @staticmethod
     def from_links(links, null_value=-1):
@@ -66,7 +70,6 @@ class KinTree:
             raise ValueError("Loop detected.")
 
         return KinTree(
-            joints_cnt=J,
             root=root,
             parents=parents,
             joints_tp=list(reversed(reversed_joints_tp))
@@ -78,51 +81,54 @@ class KinTree:
             ((p, u) for u, p in enumerate(parents)),
             null_value)
 
+    @property
+    def joints_cnt(self) -> int:
+        return len(self.parents)
 
-@beartype
-def get_joint_rts(
-    kin_tree: KinTree,
-    pose_rs: torch.Tensor,  # [..., J, D, D]
-    pose_ts: torch.Tensor,  # [..., J, D]
-) -> torch.Tensor:  # joint_Ts[..., J, D+1, D+1]:
-    J = kin_tree.joints_cnt
+    def get_joint_rts(
+        self,
+        pose_rs: torch.Tensor,  # [..., J, D, D]
+        pose_ts: torch.Tensor,  # [..., J, D]
+    ) -> torch.Tensor:  # joint_Ts[..., J, D+1, D+1]:
+        J = self.joints_cnt
 
-    D, = utils.check_shapes(
-        pose_rs, (..., J, -1, -1),
-        pose_ts, (..., J, -1),
-    )
-
-    batch_shape = utils.broadcast_shapes(
-        pose_rs.shape[:-3],
-        pose_ts.shape[:-2],
-    )
-
-    joint_Ts = torch.empty(
-        batch_shape + (J, D+1, D+1),
-        dtype=torch.promote_types(pose_rs.dtype, pose_ts.dtype),
-        device=pose_rs.device,
-    )
-    # [..., J, D+1, D+1]
-
-    joint_Ts[..., :, D, :D] = 0
-    joint_Ts[..., :, D, D] = 1
-
-    joint_Ts[..., kin_tree.root, :D, :D] = pose_rs[..., kin_tree.root, :, :]
-    joint_Ts[..., kin_tree.root, :D, D] = pose_ts[..., kin_tree.root, :]
-
-    for u in kin_tree.joints_tp[1:]:
-        p = kin_tree.parents[u]
-
-        cur_joint_T = joint_Ts[..., u, :, :]  # [..., D+1, D+1]
-        parent_joint_T = joint_Ts[..., p, :, :]  # [... D+1, D+1]
-
-        utils.merge_rt(
-            parent_joint_T[..., :D, :D],
-            parent_joint_T[..., :D, D],
-            pose_rs[..., u, :, :],
-            pose_ts[..., u, :],
-            out_rs=cur_joint_T[..., :D, :D],
-            out_ts=cur_joint_T[..., :D, D],
+        D = utils.check_shapes(
+            pose_rs, (..., J, -1, -1),
+            pose_ts, (..., J, -1),
         )
 
-    return joint_Ts
+        batch_shape = utils.broadcast_shapes(
+            pose_rs.shape[:-3],
+            pose_ts.shape[:-2],
+        )
+
+        joint_Ts = torch.empty(
+            batch_shape + (J, D+1, D+1),
+            dtype=torch.promote_types(pose_rs.dtype, pose_ts.dtype),
+            device=pose_rs.device,
+        )
+        # [..., J, D+1, D+1]
+
+        joint_Ts[..., :, D, :D] = 0
+        joint_Ts[..., :, D, D] = 1
+
+        joint_Ts[..., self.root, :D,
+                 :D] = pose_rs[..., self.root, :, :]
+        joint_Ts[..., self.root, :D, D] = pose_ts[..., self.root, :]
+
+        for u in self.joints_tp[1:]:
+            p = self.parents[u]
+
+            cur_joint_T = joint_Ts[..., u, :, :]  # [..., D+1, D+1]
+            parent_joint_T = joint_Ts[..., p, :, :]  # [... D+1, D+1]
+
+            utils.merge_rt(
+                parent_joint_T[..., :D, :D],
+                parent_joint_T[..., :D, D],
+                pose_rs[..., u, :, :],
+                pose_ts[..., u, :],
+                out_rs=cur_joint_T[..., :D, :D],
+                out_ts=cur_joint_T[..., :D, D],
+            )
+
+        return joint_Ts

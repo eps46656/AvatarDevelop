@@ -1,5 +1,4 @@
 
-import dataclasses
 import typing
 
 import torch
@@ -9,7 +8,6 @@ from .. import camera_utils, dataset_utils, transform_utils, utils
 
 
 @beartype
-@dataclasses.dataclass
 class Sample:
     camera_transform: transform_utils.ObjectTransform  # [...]
     camera_config: camera_utils.CameraConfig
@@ -17,6 +15,73 @@ class Sample:
     img: torch.Tensor  # [..., C, H, W]
     mask: typing.Optional[torch.Tensor]  # [..., H, W]
     blending_param: object
+
+    def __init__(
+        self,
+        *,
+        camera_transform: transform_utils.ObjectTransform,  # [...]
+        camera_config: camera_utils.CameraConfig,
+
+        img: torch.Tensor,  # [..., C, H, W]
+        mask: typing.Optional[torch.Tensor],  # [..., H, W]
+        blending_param: object,
+    ):
+        C, H, W = -1, 2, -3
+
+        utils.check_shapes(img, (..., C, H, W))
+
+        if mask is not None:
+            utils.check_shapes(mask, (..., H, W))
+
+        # ---
+
+        self.camera_transform = camera_transform
+        self.camera_config = camera_config
+
+        self.img = img
+        self.mask = mask
+        self.blending_param = blending_param
+
+    @property
+    def shape(self) -> torch.Size:
+        return utils.broadcast_shapes(
+            self.camera_transform.shape,
+            self.img.shape[:-3],
+            utils.try_get_batch_shape(self.mask.shape, -2),
+            self.blending_param.shape,
+        )
+
+    @property
+    def device(self) -> torch.device:
+        return self.camera_transform.device
+
+    def to(self, *args, **kwargs) -> typing.Self:
+        return Sample(
+            camera_transform=self.camera_transform.to(*args, **kwargs),
+            camera_config=self.camera_config,
+
+            img=self.img.to(*args, **kwargs),
+            mask=None if self.mask is None else self.mask.to(*args, **kwargs),
+            blending_param=self.blending_param.to(*args, **kwargs),
+        )
+
+    def batch_get(self, batch_idxes: tuple[torch.Tensor]) -> typing.Self:
+        batch_shape = self.shape
+
+        assert len(batch_idxes) == len(batch_shape)
+
+        return Sample(
+            camera_transform=self.camera_transform.batch_get(
+                batch_idxes),
+
+            camera_config=self.camera_config,
+
+            img=self.img[batch_idxes],
+            mask=None if self.mask is None else
+            self.mask[batch_idxes],
+
+            blending_param=self.blending_param.batch_get(batch_idxes)
+        )
 
 
 @beartype
@@ -52,27 +117,20 @@ class Dataset(dataset_utils.Dataset):
             mask=None if sample.mask is None else
             sample.mask.expand(batch_shape + (H, W)),
 
-            blending_param=sample.blending_param.Expand(batch_shape)
+            blending_param=sample.blending_param.expand(batch_shape)
         )
 
     @property
     def shape(self):
         return self.sample.camera_transform.shape
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor]):
-        batch_shape = self.sample.camera_transform.shape
+    @property
+    def device(self) -> torch.device:
+        return self.sample.device
 
-        assert len(batch_idxes) == len(batch_shape)
+    def to(self, *args, **kwargs) -> typing.Self:
+        self.sample = self.sample.to(*args, **kwargs)
+        return self
 
-        return Sample(
-            camera_transform=self.sample.camera_transform.BatchGet(
-                batch_idxes),
-
-            camera_config=self.sample.camera_config,
-
-            img=self.sample.img[batch_idxes],
-            mask=None if self.sample.mask is None else
-            self.sample.mask[batch_idxes],
-
-            blending_param=self.sample.blending_param.BatchGet(batch_idxes)
-        )
+    def batch_get(self, batch_idxes: tuple[torch.Tensor]) -> Sample:
+        return self.sample.batch_get(batch_idxes)

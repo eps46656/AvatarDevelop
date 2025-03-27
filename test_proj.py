@@ -25,7 +25,7 @@ def main1():
 
     proj_mat = camera_utils.make_proj_mat(
         img_shape=(H, W),
-        origin=np.array(utils.Sph2Cart(raduis, theta, phi)),
+        origin=np.array(utils.sph_to_cart(raduis, theta, phi)),
         # origin=np.array([4, 5, 6, 7]),
         aim=origin,
         quasi_u_dir=z_axis,
@@ -70,9 +70,9 @@ def main2():
     for _ in range(1024):
         x, y, z = np.random.rand(3) * 10
 
-        radius, theta, phi = utils.Cart2Sph(x, y, z)
+        radius, theta, phi = utils.cart_to_sph(x, y, z)
 
-        re_x, re_y, re_z = utils.Sph2Cart(radius, theta, phi)
+        re_x, re_y, re_z = utils.sph_to_cart(radius, theta, phi)
 
         err = np.linalg.norm(
             np.array([x, y, z]) - np.array([re_x, re_y, re_z]))

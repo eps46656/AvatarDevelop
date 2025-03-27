@@ -14,7 +14,7 @@ DIR = FILE.parents[0]
 
 INT = torch.int32
 FLOAT = torch.float32
-DEVICE = utils.CPU
+DEVICE = utils.CPU_DEVICE
 
 
 def CheckIsZero(
@@ -27,7 +27,7 @@ def CheckIsZero(
 def CheckIsEye(
     eye: torch.Tensor,  # [..., D, D]
 ):
-    D, = utils.check_shapes(eye, (..., -1, -1))
+    D = utils.check_shapes(eye, (..., -1, -1))
 
     for i in range(D):
         for j in range(D):

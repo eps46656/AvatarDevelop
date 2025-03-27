@@ -25,7 +25,7 @@ DEG = math.pi / 180.0
 INT = torch.int32
 FLOAT = torch.float32
 
-CPU = torch.device("cpu")
+CPU_DEVICE = torch.device("cpu")
 CUDA_DEVICE = torch.device("cuda")
 
 ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
@@ -347,7 +347,7 @@ class Dir(enum.StrEnum):
 @beartype
 def check_shapes(
     *args: torch.Tensor | tuple[types.EllipsisType | int, ...],
-) -> tuple[int, ...]:
+) -> None | int | tuple[int, ...]:
     assert len(args) % 2 == 0
 
     undet_shapes: dict[int, int] = dict()
@@ -399,10 +399,16 @@ def check_shapes(
                 assert old_p_val == t_val, \
                     f"Tensor shape {old_p_val} and {t_val} are inconsistant."
 
-    return tuple(
+    ret = tuple(
         undet_shape
         for _, undet_shape in sorted(undet_shapes.items(), reverse=True)
     )
+
+    match len(ret):
+        case 0: return
+        case 1: return ret[0]
+
+    return ret
 
 
 @beartype
@@ -483,7 +489,7 @@ def set_quaternion_wxyz(
 
 
 @beartype
-def Sph2Cart(radius: float, theta: float, phi: float) \
+def sph_to_cart(radius: float, theta: float, phi: float) \
         -> tuple[float, float, float]:
     xy_radius = radius * math.sin(theta)
 
@@ -495,7 +501,7 @@ def Sph2Cart(radius: float, theta: float, phi: float) \
 
 
 @beartype
-def Cart2Sph(x: float, y: float, z: float) \
+def cart_to_sph(x: float, y: float, z: float) \
         -> tuple[float, float, float]:
     xy_radius_sq = x**2 + y**2
     xy_radius = math.sqrt(xy_radius_sq)
@@ -517,7 +523,7 @@ def NormalizedIdx(idx: int, length: int) -> int:
 
 @beartype
 def broadcast_shapes(*args: None | torch.Tensor | typing.Iterable[int]) \
-        -> tuple[int, ...]:
+        -> torch.Size:
     shapes = [
         [int(d) for d in (arg.shape if isinstance(arg, torch.Tensor) else arg)]
         for arg in args if arg is not None
@@ -525,7 +531,7 @@ def broadcast_shapes(*args: None | torch.Tensor | typing.Iterable[int]) \
 
     k = max(len(shape) for shape in shapes)
 
-    ret = tuple(
+    ret = torch.Size(
         max((shape[i - k + len(shape)] if 0 <= i - k + len(shape) else 1)
             for shape in shapes)
         for i in range(k)
@@ -545,11 +551,11 @@ def broadcast_shapes(*args: None | torch.Tensor | typing.Iterable[int]) \
 
 @beartype
 def try_get_batch_shape(x: typing.Optional[torch.Tensor],  dim: int):
-    return tuple() if x is None else x.shape[:dim]
+    return torch.Size() if x is None else x.shape[:dim]
 
 
 @beartype
-def TryBatchExpand(x: typing.Optional[torch.Tensor], shape, dim: int):
+def try_batch_expand(x: typing.Optional[torch.Tensor], shape, dim: int):
     return None if x is None else x.expand(tuple(shape) + x.shape[dim:])
 
 
@@ -583,13 +589,19 @@ def promote_types(*args: torch.Tensor | torch.dtype) -> torch.dtype:
 
 
 @beartype
-def check_device(*args: torch.Tensor | torch.device) -> torch.device:
-    def GetDevice(x):
-        return x if isinstance(x, torch.device) else x.device
+def check_device(*args: None | torch.Tensor | torch.device) -> torch.device:
+    ret = None
 
-    ret = GetDevice(args[0])
+    for arg in args:
+        if arg is None:
+            continue
 
-    assert all(GetDevice(arg) == ret for arg in args)
+        device = arg.device if isinstance(arg, torch.Tensor) else arg
+
+        if ret is None:
+            ret = device
+        else:
+            assert ret == device
 
     return ret
 

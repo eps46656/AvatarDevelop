@@ -12,7 +12,7 @@ DIR = FILE.parents[0]
 
 INT = torch.int32
 FLOAT = torch.float32
-DEVICE = utils.CPU
+DEVICE = utils.CPU_DEVICE
 
 
 def main1():

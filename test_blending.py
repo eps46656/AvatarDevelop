@@ -13,7 +13,7 @@ from . import blending_utils, kin_utils, mesh_utils, smplx_utils, utils
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
-DEVICE = utils.CPU
+DEVICE = utils.CPU_DEVICE
 
 
 def main1():

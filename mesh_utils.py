@@ -1,5 +1,4 @@
 import collections
-import dataclasses
 import typing
 
 import torch
@@ -88,22 +87,11 @@ def get_area_weighted_vertex_normals(
 
 
 @beartype
-@dataclasses.dataclass
 class MeshData:
     # V: vertices cnt
     # F: faces cnt
     # VP: adj vertex pairs cnt
     # FP: adj face pairs cnt
-
-    vertices_cnt: int
-    faces_cnt: int
-
-    vertex_vertex_adj_rel_list: torch.Tensor  # [2, VP]
-    face_vertex_adj_list: torch.Tensor  # [F, 3]
-    face_face_adj_rel_list: torch.Tensor  # [2, FP]
-
-    vertex_degrees: torch.Tensor  # [V]
-    inv_vertex_degrees: torch.Tensor  # [V]
 
     def __init__(
         self,
@@ -129,7 +117,7 @@ class MeshData:
 
         VP, FP = -1, -2
 
-        utils.check_shapes(
+        VP, FP = utils.check_shapes(
             vertex_vertex_adj_rel_list, (2, VP),
             face_vertex_adj_list, (F, 3),
             face_face_adj_rel_list, (2, FP),
@@ -152,6 +140,7 @@ class MeshData:
 
             "vertex_vertex_adj_rel_list": None,
             "face_vertex_adj_list": None,
+            "face_face_adj_rel_list": None,
 
             "vertex_degrees": None,
             "inv_vertex_degrees": None,
@@ -171,9 +160,9 @@ class MeshData:
         face_vertex_adj_list: torch.Tensor,  # [F, 3]
         device: torch.device,
     ) -> typing.Self:
-        faces_cnt, = utils.check_shapes(face_vertex_adj_list, (-1, 3))
+        faces_cnt = utils.check_shapes(face_vertex_adj_list, (-1, 3))
 
-        face_vertex_adj_list = face_vertex_adj_list.to(device=utils.CPU)
+        face_vertex_adj_list = face_vertex_adj_list.to(device=utils.CPU_DEVICE)
 
         edge_to_face_d: collections.defaultdict[tuple[int, int],
                                                 list[int]] = \

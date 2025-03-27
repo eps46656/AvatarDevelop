@@ -11,7 +11,7 @@ FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
 
-DEVICE = utils.CPU
+DEVICE = utils.CPU_DEVICE
 
 
 def main1():

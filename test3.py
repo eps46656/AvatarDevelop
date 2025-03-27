@@ -46,7 +46,7 @@ def main1():
 
     proj_mat = camera_utils.make_proj_mat(
         img_shape=(H, W),
-        origin=torch.tensor(utils.Sph2Cart(raduis, theta, phi)),
+        origin=torch.tensor(utils.sph_to_cart(raduis, theta, phi)),
         # origin=torch.tensor([4, 5, 6, 7]),
         aim=ORIGIN,
         quasi_u_dir=Z_AXIS,

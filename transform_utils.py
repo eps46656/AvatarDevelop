@@ -87,24 +87,16 @@ class ObjectTransform:
         return ObjectTransform(trans, inv_trans)
 
     @property
-    def shape(self):
+    def shape(self) -> torch.Size:
         return self.trans.shape[:-2]
 
-    def expand(self, shape):
-        shape = tuple(shape)
+    @property
+    def device(self) -> torch.device:
+        return self.trans.device
 
+    def to(self, *args, **kwargs) -> typing.Self:
         return ObjectTransform(
-            self.trans.expand(shape + (4, 4)),
-            self.inv_trans.expand(shape + (4, 4)),
-        )
-
-    def BatchGet(self, batch_idxes: tuple[torch.Tensor, ...]):
-        assert len(batch_idxes) == len(self.shape)
-
-        return ObjectTransform(
-            self.trans[batch_idxes],
-            self.inv_trans[batch_idxes],
-        )
+            self.trans.to(*args, **kwargs), self.inv_trans.to(*args, **kwargs))
 
     def __str__(self):
         return "\n".join([
@@ -175,7 +167,25 @@ class ObjectTransform:
 
         # return: object <-> coord_b
 
+        new_trans = self.trans @ trans
+
+        return ObjectTransform(new_trans, new_trans.inverse())
+
+    def inverse(self):
+        return ObjectTransform(self.inv_trans, self.trans)
+
+    def expand(self, shape):
+        s = tuple(shape) + (4, 4)
+
         return ObjectTransform(
-            self.trans @ trans,
-            trans.inverse() @ self.inv_trans,
+            self.trans.expand(s),
+            self.inv_trans.expand(s),
+        )
+
+    def batch_get(self, batch_idxes: tuple[torch.Tensor, ...]):
+        assert len(batch_idxes) == len(self.shape)
+
+        return ObjectTransform(
+            self.trans[batch_idxes],
+            self.inv_trans[batch_idxes],
         )

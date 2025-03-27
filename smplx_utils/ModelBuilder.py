@@ -20,7 +20,6 @@ class ModelBuilder(torch.nn.Module):
     def device(self) -> torch.device:
         raise utils.UnimplementationError()
 
-    @property
     def to(self) -> typing.Self:
         raise utils.UnimplementationError()
 
@@ -38,11 +37,10 @@ class StaticModelBuilder(ModelBuilder):
         return self.model_data
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.model_data.device
 
-    @property
-    def to(self, *args, **kwargs):
+    def to(self, *args, **kwargs) -> typing.Self:
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 
@@ -56,18 +54,21 @@ class DeformableModelBuilder(ModelBuilder):
         super().__init__()
         self.model_data = dataclasses.replace(model_data)
 
-        self.model_data.vertex_positions = torch.nn.Parameter(
+        vertex_positions = torch.nn.Parameter(
             self.model_data.vertex_positions)
+
+        self.model_data.vertex_positions = vertex_positions
+
+        self.register_parameter("vertex_positions", vertex_positions)
 
     def get_model_data(self) -> ModelData:
         return self.model_data
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.model_data.device
 
-    @property
-    def to(self, *args, **kwargs):
+    def to(self, *args, **kwargs) -> typing.Self:
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 

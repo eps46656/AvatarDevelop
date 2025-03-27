@@ -45,16 +45,22 @@ def render_gaussian(
 
     device: torch.device,
 ):
-    world_view_mat = camera_transform.get_trans_to(camera_view_transform)
+    cur_camera_view_transform = camera_view_transform.to(
+        device=camera_transform.device)
+
+    cur_camera_ndc_transform = camera_ndc_transform.to(
+        device=camera_transform.device)
+
+    world_view_mat = camera_transform.get_trans_to(cur_camera_view_transform)
     # world -> view [..., 4, 4]
 
     view_ndc_mat = camera_utils.make_proj_mat_with_config(
         camera_config=camera_config,
 
-        camera_view_transform=camera_view_transform,
+        camera_view_transform=cur_camera_view_transform,
 
         proj_config=camera_utils.ProjConfig(
-            camera_proj_transform=camera_ndc_transform,
+            camera_proj_transform=cur_camera_ndc_transform,
             # camera <-> ndc
 
             delta_u=1.0,
@@ -114,7 +120,7 @@ def render_gaussian(
     world_ndc_mat = world_ndc_mat.to(device=utils.CUDA_DEVICE).expand(
         batch_shape + (4, 4))
 
-    camera_pos = camera_transform.pos().to(device=utils.CUDA_DEVICE).expand(
+    camera_pos = camera_transform.pos.to(device=utils.CUDA_DEVICE).expand(
         batch_shape + (3,))
     # [..., 3]
 

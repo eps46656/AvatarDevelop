@@ -351,9 +351,15 @@ class Trainer:
 
         if ckpt_meta.deep_saved:
             for field_name in {"module", "optimizer", "scheduler"}:
-                if field_name in d:
-                    setattr(self.training_core, field_name,
-                            d[field_name].to(device=self.__device))
+                if field_name not in d:
+                    continue
+
+                val = d[field_name]
+
+                if field_name == "module":
+                    val = val.to(device=self.__device)
+
+                setattr(self.training_core, field_name, val)
         else:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name not in d:
@@ -363,7 +369,9 @@ class Trainer:
                 assert field_val is not None
 
                 field_val.load_state_dict(d[field_name])
-                field_val.to(device=self.__device)
+
+                if field_name == "module":
+                    field_val.to(device=self.__device)
 
     def load_latest(self):
         ckpt_meta = self.get_latest_ckpt_meta()
@@ -442,7 +450,7 @@ class Trainer:
             if len(utils.read_file(cancel_token_path, "r")) != 0:
                 break
 
-    def Eval(self):
+    def eval(self):
         self.training_core.eval()
 
     def _cli_handler(self, cmd_parser):
@@ -471,14 +479,14 @@ class Trainer:
                 )
 
             case "eval":
-                self.Eval()
+                self.eval()
 
             case "exit":
                 return False
 
         return True
 
-    def EnterCLI(self):
+    def enter_cli(self):
         cmd_parser = make_cmd_parser()
 
         while True:

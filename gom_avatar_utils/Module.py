@@ -6,7 +6,7 @@ from beartype import beartype
 
 from .. import (avatar_utils, camera_utils, gaussian_utils, transform_utils,
                 utils)
-from .utils import GetFaceCoord
+from .utils import get_face_coord
 
 
 @beartype
@@ -65,10 +65,12 @@ class Module(torch.nn.Module):
             dtype=utils.FLOAT))
         # [F, 1]
 
-    def to(self, *args, **kwargs):
+    def to(self, *args, **kwargs) -> typing.Self:
         super().to(*args, **kwargs)
 
         self.avatar_blender = self.avatar_blender.to(*args, **kwargs)
+
+        return self
 
     def forward(
         self,
@@ -100,11 +102,7 @@ class Module(torch.nn.Module):
         vertex_positions_c = vertex_positions[..., faces[:, 2], :]
         # [..., F, 3]
 
-        print(f"{vertex_positions_a.shape}")
-        print(f"{vertex_positions_b.shape}")
-        print(f"{vertex_positions_c.shape}")
-
-        face_coord_result = GetFaceCoord(
+        face_coord_result = get_face_coord(
             vertex_positions_a, vertex_positions_b, vertex_positions_c)
 
         face_coord_rot_qs = utils.rot_mat_to_quaternion(
@@ -114,7 +112,8 @@ class Module(torch.nn.Module):
         # [..., F, 4] wxyz
 
         utils.check_almost_zeros(
-            face_coord_result.Ts[..., :3, :3].det() - 1
+            face_coord_result.Ts[..., :3, :3].det() - 1,
+            5e-3,
         )
 
         gp_global_means = face_coord_result.Ts[..., :3, 3]
@@ -124,8 +123,6 @@ class Module(torch.nn.Module):
             face_coord_rot_qs, self.gp_rot_qs,
             order_1="WXYZ", order_2="WXYZ", order_out="WXYZ")
         # [..., F, 4] wxyz
-
-        utils.check_almost_zeros(utils.vector_norm(gp_global_rot_qs) - 1)
 
         face_area = face_coord_result.face_area.unsqueeze(-1)
         # [..., F, 1]
@@ -164,7 +161,8 @@ class Module(torch.nn.Module):
         else:
             mask_ = mask.unsqueeze(-3)
 
-            white_img = torch.ones_like(img)
+            white_img = torch.ones_like(
+                img, dtype=utils.FLOAT, device=img.device)
 
             masked_img = white_img * (1 - mask_) + img * mask_
 

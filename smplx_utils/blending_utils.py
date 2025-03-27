@@ -10,47 +10,80 @@ from .ModelData import ModelData
 
 
 @beartype
-@dataclasses.dataclass
 class BlendingParam:
-    body_shapes: typing.Optional[torch.Tensor] = None
-    # [..., BS]
+    batch_dim_table = {
+        "body_shapes": -1,
+        "expr_shapes": -1,
+        "global_transl": -1,
+        "global_rot": -1,
+        "body_poses": -2,
+        "jaw_poses": -2,
+        "leye_poses": -2,
+        "reye_poses": -2,
+        "lhand_poses": -2,
+        "rhand_poses": -2,
+    }
 
-    expr_shapes: typing.Optional[torch.Tensor] = None
-    # [..., ES]
+    def __init__(
+        self,
+        *,
+        body_shapes: typing.Optional[torch.Tensor] = None,  # [..., BS]
+        expr_shapes: typing.Optional[torch.Tensor] = None,  # [..., ES]
 
-    global_transl: typing.Optional[torch.Tensor] = None
-    # [..., 3]
+        global_transl: typing.Optional[torch.Tensor] = None,  # [..., 3]
+        global_rot: typing.Optional[torch.Tensor] = None,  # [..., 3]
 
-    global_rot: typing.Optional[torch.Tensor] = None
-    # [..., 3]
+        body_poses: typing.Optional[torch.Tensor] = None,  # [..., BJ - 1, 3]
+        jaw_poses: typing.Optional[torch.Tensor] = None,  # [..., JJ, 3]
+        leye_poses: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
+        reye_poses: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
 
-    body_poses: typing.Optional[torch.Tensor] = None
-    # [..., BJ - 1, 3]
+        lhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
+        rhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
 
-    jaw_poses: typing.Optional[torch.Tensor] = None
-    # [..., JJ, 3]
+        blending_vertex_normal: bool = False,
+    ):
+        BS, ES, BJ_, JJ, EYEJ, HANDJ = -1, -2, -3, -4, -5, -6
 
-    leye_poses: typing.Optional[torch.Tensor] = None
-    # [..., EYEJ, 3]
+        BS, ES, BJ_, JJ, EYEJ, HANDJ = utils.check_shapes(
+            body_shapes, (..., BS),
+            expr_shapes, (..., ES),
 
-    reye_poses: typing.Optional[torch.Tensor] = None
-    # [..., EYEJ, 3]
+            global_transl, (..., 3),
+            global_rot, (..., 3),
 
-    lhand_poses: typing.Optional[torch.Tensor] = None
-    # [..., HANDJ, 3]
+            body_poses, (..., BJ_, 3),
+            jaw_poses, (..., JJ, 3),
+            leye_poses, (..., EYEJ, 3),
+            reye_poses, (..., EYEJ, 3),
 
-    rhand_poses: typing.Optional[torch.Tensor] = None
-    # [..., HANDJ, 3]
+            lhand_poses, (..., HANDJ, 3),
+            rhand_poses, (..., HANDJ, 3),
+        )
 
-    blending_vertex_normal: bool = False
+        # ---
+
+        self.body_shapes = body_shapes
+        self.expr_shapes = expr_shapes
+
+        self.global_transl = global_transl
+        self.global_rot = global_rot
+
+        self.body_poses = body_poses
+        self.jaw_poses = jaw_poses
+        self.leye_poses = leye_poses
+        self.reye_poses = reye_poses
+
+        self.lhand_poses = lhand_poses
+        self.rhand_poses = rhand_poses
+
+        self.blending_vertex_normal = blending_vertex_normal
 
     def check(
         self,
         model_data: ModelData,
         single_batch: bool,
     ) -> None:
-        model_data.check()
-
         BS = model_data.body_shapes_cnt
         ES = model_data.expr_shapes_cnt
 
@@ -72,20 +105,13 @@ class BlendingParam:
             "rhand_poses": (HANDJ, 3),
         }
 
-        for field in dataclasses.fields(BlendingParam):
-            field_name = field.name
-
-            if field_name not in tensor_shape_constraints:
-                continue
-
+        for field_name, shape_constraint in tensor_shape_constraints.items():
             value = getattr(self, field_name)
 
             if value is None:
                 continue
 
             assert isinstance(value, torch.Tensor)
-
-            shape_constraint = tensor_shape_constraints[field_name]
 
             if single_batch:
                 assert value.shape == shape_constraint
@@ -111,38 +137,23 @@ class BlendingParam:
     def device(self):
         return self.body_shapes.device
 
-    @classmethod
-    def _batch_dim_table(self):
-        return {
-            "body_shapes": -1,
-            "expr_shapes": -1,
-            "global_transl": -1,
-            "global_rot": -1,
-            "body_poses": -2,
-            "jaw_poses": -2,
-            "leye_poses": -2,
-            "reye_poses": -2,
-            "lhand_poses": -2,
-            "rhand_poses": -2,
-        }
-
     def to(self, *args, **kwargs) -> typing.Self:
-        d = BlendingParam._batch_dim_table()
+        d = dict()
 
-        for key in d.keys():
+        for key in BlendingParam.batch_dim_table.keys():
             cur_val = getattr(self, key)
             d[key] = None if cur_val is None else cur_val.to(*args, **kwargs)
 
-        return ModelData(
+        return BlendingParam(
             **d, blending_vertex_normal=self.blending_vertex_normal)
 
     def expand(self, shape) -> typing.Self:
         shape = tuple(shape)
 
-        d = BlendingParam._batch_dim_table()
+        d = dict()
 
-        for key, val in d.items():
-            d[key] = utils.TryBatchExpand(getattr(self, key), shape, val)
+        for key, val in BlendingParam.batch_dim_table.items():
+            d[key] = utils.try_batch_expand(getattr(self, key), shape, val)
 
         return BlendingParam(
             **d, blending_vertex_normal=self.blending_vertex_normal)
@@ -150,11 +161,11 @@ class BlendingParam:
     def flatten(self) -> typing.Self:
         batch_shape = self.shape
 
-        d = BlendingParam._batch_dim_table()
+        d = dict()
 
-        for key, val in d.items():
+        for key, val in BlendingParam.batch_dim_table.items():
             cur_val = getattr(self, key)
-            d[key] = None if cur_val is None else utils.TryBatchExpand(
+            d[key] = None if cur_val is None else utils.try_batch_expand(
                 self.body_shapes, batch_shape, val).flatten(end_dim=val)
 
         return BlendingParam(
@@ -165,13 +176,13 @@ class BlendingParam:
 
         assert len(batch_shape) == len(batch_idxes)
 
-        d = BlendingParam._batch_dim_table()
+        d = dict()
 
-        for key, val in d.items():
+        for key, val in BlendingParam.batch_dim_table.items():
             cur_val = getattr(self, key)
 
             d[key] = None if cur_val is None else \
-                cur_val.expand(batch_shape + cur_val.shape[:val])
+                cur_val.expand(batch_shape + cur_val.shape[val:])[batch_idxes]
 
         return BlendingParam(
             **d, blending_vertex_normal=self.blending_vertex_normal)
@@ -240,16 +251,13 @@ class BlendingParam:
         return ret
 
     def combine(self, obj: typing.Self) -> typing.Self:
-        ret = BlendingParam()
+        ret = BlendingParam(**self.__dict__)
 
-        for field in dataclasses.fields(BlendingParam):
-            field_name = field.name
+        for field_name in BlendingParam.batch_dim_table.keys():
+            field_value = getattr(self, field_name)
 
-            value = getattr(self, field_name)
-
-            setattr(ret, field_name,
-                    getattr(obj, field_name)
-                    if value is None else value)
+            if field_value is None:
+                setattr(ret, field_name, getattr(obj, field_name))
 
         return ret
 
@@ -260,8 +268,6 @@ def blending(
     blending_param: BlendingParam,
     device: torch.device,
 ) -> Model:
-    model_config = model_data.get_model_config()
-
     blending_param.check(model_data, False)
 
     vps = model_data.vertex_positions
@@ -341,10 +347,6 @@ def blending(
 
         vertices_cnt=model_data.vertex_positions.shape[-2],
         texture_vertices_cnt=0,
-
-        faces_cnt=0 if model_data.faces is None else model_data.faces.shape[0],
-
-        joints_cnt=model_data.kin_tree.joints_cnt,
 
         vertex_positions=vps,
         vertex_normals=None if lbs_result.blended_vertex_directions is None else utils.normalized(

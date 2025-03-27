@@ -553,7 +553,7 @@ def main1():
     phi = (180.0 + 45.0) * utils.DEG
 
     camera_transform = camera_utils.make_view(
-        origin=torch.tensor(utils.Sph2Cart(radius, theta, phi),
+        origin=torch.tensor(utils.sph_to_cart(radius, theta, phi),
                             dtype=utils.FLOAT),
         aim=utils.ORIGIN,
         quasi_u_dir=utils.Z_AXIS,

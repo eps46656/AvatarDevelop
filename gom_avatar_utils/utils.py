@@ -15,7 +15,7 @@ class FaceCoordResult:
 
 
 @beartype
-def GetFaceCoord(
+def get_face_coord(
     vertex_positions_a: torch.Tensor,  # [..., 3]
     vertex_positions_b: torch.Tensor,  # [..., 3]
     vertex_positions_c: torch.Tensor,  # [..., 3]
