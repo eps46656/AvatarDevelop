@@ -21,9 +21,9 @@ def main1():
 
     print(f"{checkpoint_records}")
 
-    checkpoint_records[999] = training_utils.CheckpointRecord(
+    checkpoint_records[999] = training_utils.CheckpointMeta(
         timestamp=999,
-        previous=1,
+        prv=1,
         epochs_cnt=5,
         message="",
     )

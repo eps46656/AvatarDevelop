@@ -3,7 +3,6 @@ import os
 import pathlib
 
 import h5py
-import numpy as np
 import torch
 import tqdm
 from beartype import beartype
@@ -32,12 +31,11 @@ def _read_mask(
     subject_dir: pathlib.Path,
     fps: int,
     device: torch.device,
-):
+) -> torch.Tensor:
     mask_video_path = subject_dir / "masks.mp4"
 
     if mask_video_path.exists():
-        return utils.image_normalize(
-            utils.read_video(mask_video_path)[0].to(dtype=utils.FLOAT, device=device).mean(1))
+        return utils.read_video(mask_video_path)[0].mean(1).to(device=device)
 
     f = h5py.File(subject_dir / "masks.hdf5")
 
@@ -45,15 +43,14 @@ def _read_mask(
 
     T, H, W = masks.shape
 
-    ret = torch.empty((T, 1, H, W), dtype=torch.uint8)
+    ret = torch.empty((T, 1, H, W), dtype=utils.FLOAT)
 
     for i in tqdm.tqdm(range(T)):
-        ret[i, 0] = torch.from_numpy(masks[i].astype(np.uint8) * 255)
+        ret[i, 0] = torch.from_numpy(masks[i])
 
     utils.write_video(mask_video_path, ret.expand((T, 3, H, W)), fps)
 
-    return utils.image_normalize(ret.to(dtype=utils.FLOAT, device=device)) \
-        .squeeze(1)
+    return ret.to(evice=device).squeeze(1)
 
 
 @beartype

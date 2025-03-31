@@ -16,7 +16,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
         self,
         model_builder: ModelBuilder,
     ):
-        super(ModelBlender, self).__init__()
+        super().__init__()
 
         self.model_builder = model_builder
 
@@ -40,7 +40,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
                 (3,), dtype=utils.FLOAT, device=device),
 
             body_poses=torch.zeros(
-                (model_config.body_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+                (model_config.body_joints_cnt - 1, 3), dtype=utils.FLOAT, device=device),
 
             jaw_poses=torch.zeros(
                 (model_config.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=device),
@@ -69,14 +69,6 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         texture_vertices_cnt = model_data.vertex_positions.shape[-2]
 
-        faces_cnt = 0 if model_data.faces is None else model_data.faces.shape[-2]
-
-        joints_cnt = model_data.kin_tree.joints_cnt
-
-        vertex_positions = None
-
-        vertex_normals = None
-
         texture_vertex_positions = model_data.texture_vertex_positions
 
         faces = model_data.faces
@@ -91,10 +83,9 @@ class ModelBlender(avatar_utils.AvatarBlender):
             kin_tree=kin_tree,
             vertices_cnt=vertices_cnt,
             texture_vertices_cnt=texture_vertices_cnt,
-            faces_cnt=faces_cnt,
-            joints_cnt=joints_cnt,
-            vertex_positions=vertex_positions,
-            vertex_normals=vertex_normals,
+            vertex_positions=None,
+            vertex_normals=None,
+            vertex_rotations=None,
             texture_vertex_positions=texture_vertex_positions,
             faces=faces,
             texture_faces=texture_faces,

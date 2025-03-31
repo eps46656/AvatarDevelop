@@ -11,6 +11,7 @@ import sys
 import time
 import types
 import typing
+import PIL
 
 import einops
 import torch
@@ -118,7 +119,8 @@ class Timer:
             self.end - self.beg
 
     def start(self):
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         self.beg = time.time()
         self.end = None
@@ -126,7 +128,9 @@ class Timer:
     def stop(self):
         assert self.beg is not None
 
-        torch.cuda.synchronize()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
         self.end = time.time()
 
     def __enter__(self):
@@ -145,6 +149,21 @@ class Timer:
 
         print(
             f"{self.filename}:{self.line_num}\t\t{self.function}\t\tduration: {self.duration * 1000:>18.6f} ms")
+
+
+@beartype
+class DisableStdOut:
+    def __init__(self):
+        self.original_stdout = None
+
+    def __enter__(self):
+        self.original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, "w")
+
+    def __exit__(self, type: object, value: object, traceback: object):
+        sys.stdout.close()
+        sys.stdout = self.original_stdout
+        self.original_stdout = None
 
 
 @beartype
@@ -214,12 +233,32 @@ def write_pickle(
 
 
 @beartype
+def image_normalize(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = FLOAT,
+) -> torch.Tensor:
+    return torch.div(img, k, out=torch.empty_like(img, dtype=dtype))
+
+
+@beartype
+def image_denormalize(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = torch.uint8,
+) -> torch.Tensor:
+    return (img * k).round().clamp(0, k).to(dtype=dtype)
+
+
+@beartype
 def read_image(path: os.PathLike):
     img = torchvision.io.decode_image(
         path, torchvision.io.ImageReadMode.RGB)
     # [C, H, W]
 
-    return img
+    return image_normalize(img)
 
 
 @beartype
@@ -232,6 +271,8 @@ def write_image(
     path = pathlib.Path(path)
 
     os.makedirs(path.parents[0], exist_ok=True)
+
+    img = image_denormalize(img)
 
     if path.suffix == ".png":
         torchvision.io.write_png(img, path)
@@ -260,7 +301,7 @@ def read_video(
 
     video_fps = int(d.get("video_fps", -1))
 
-    return video, video_fps
+    return image_normalize(video), video_fps
 
 
 @beartype
@@ -270,24 +311,21 @@ def write_video(
     fps: int,
     codec: str = "h264",
 ) -> None:
-    assert video.dtype == torch.uint8
-
     torchvision.io.write_video(
         filename=path,
-        video_array=einops.rearrange(video, "t c h w -> t h w c"),
+        video_array=image_denormalize(
+            einops.rearrange(video, "t c h w -> t h w c")),
         fps=fps,
         video_codec=codec,
     )
 
 
 @beartype
-def image_normalize(img: torch.Tensor) -> torch.Tensor:
-    return torch.div(img, 255, out=torch.empty_like(img, dtype=FLOAT))
-
-
-@beartype
-def image_denormalize(img: torch.Tensor) -> torch.Tensor:
-    return (img * 255).round().clamp(0, 255).to(dtype=torch.uint8)
+def to_pillow_image(
+    imgs: list[torch.Tensor],
+) -> list[PIL.Image.Image]:
+    f = torchvision.transforms.ToPILImage()
+    return [f(img * 255) for img in imgs]
 
 
 """
@@ -1278,7 +1316,7 @@ def get_inv_rt(
     )
     # [..., D, 1]
 
-    return out_rs, out_ts.unsqueeze(-1)
+    return out_rs, out_ts.squeeze(-1)
 
 
 @beartype

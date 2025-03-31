@@ -16,6 +16,10 @@ class ModelData:
         *,
         kin_tree: kin_utils.KinTree,
 
+        body_joints_cnt: int,  # BJ
+        jaw_joints_cnt: int,  # JJ
+        eye_joints_cnt: int,  # EYEJ
+
         vertex_positions: torch.Tensor,  # [..., V, 3]
         vertex_normals: torch.Tensor,  # [..., V, 3]
 
@@ -23,7 +27,7 @@ class ModelData:
         # [..., TV, 2]
 
         faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
-        texture_faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
+        texture_faces: typing.Optional[torch.Tensor] = None,  # [TF, 3]
 
         body_shape_dirs: torch.Tensor,  # [..., V, 3, BS]
         expr_shape_dirs: typing.Optional[torch.Tensor] = None,
@@ -34,11 +38,9 @@ class ModelData:
         expr_shape_joint_regressor: typing.Optional[torch.Tensor] = None,
         # [..., J, 3, BS]
 
-        body_joints_cnt: int,
-        jaw_joints_cnt: int,
-        eye_joints_cnt: int,
-
         joint_ts_mean: torch.Tensor,  # [..., J, 3]
+
+        pose_dirs: torch.Tensor,  # [..., V, 3, (J - 1) * 3 * 3]
 
         lbs_weights: torch.Tensor,  # [..., V, J]
 
@@ -61,13 +63,17 @@ class ModelData:
             body_shape_joint_regressor,
             expr_shape_joint_regressor,
             joint_ts_mean,
+            pose_dirs,
             lbs_weights,
-            joint_ts_mean,
             lhand_poses_mean,
             rhand_poses_mean,
         )
 
         J = kin_tree.joints_cnt
+
+        BJ = body_joints_cnt
+        JJ = jaw_joints_cnt
+        EJ = eye_joints_cnt
 
         V = utils.check_shapes(
             vertex_positions, (..., -1, 3),
@@ -82,6 +88,8 @@ class ModelData:
         TF = 0 if texture_faces is None else \
             utils.check_shapes(texture_faces, (-1, 3))
 
+        utils.check_shapes(pose_dirs, (..., V, 3, (J - 1) * 3 * 3))
+
         utils.check_shapes(lbs_weights, (..., V, J))
 
         BS = 0 if body_shape_dirs is None else \
@@ -90,21 +98,14 @@ class ModelData:
         ES = 0 if expr_shape_dirs is None else \
             utils.check_shapes(expr_shape_dirs, (..., V, 3, -1))
 
-        utils.check_shapes(self.body_shape_joint_regressor, (..., J, 3, BS))
+        utils.check_shapes(body_shape_joint_regressor, (..., J, 3, BS))
 
-        if self.expr_shape_joint_regressor is not None:
-            utils.check_shapes(
-                self.expr_shape_joint_regressor, (..., J, 3, ES))
-
-        BJ = body_joints_cnt
-        JJ = jaw_joints_cnt
-        EJ = eye_joints_cnt
+        if expr_shape_joint_regressor is not None:
+            utils.check_shapes(expr_shape_joint_regressor, (..., J, 3, ES))
 
         assert 1 <= BJ
         assert 0 <= JJ
         assert 0 <= EJ
-
-        assert BJ + JJ + EJ * 2 + HANDJ * 2 == J
 
         if lhand_poses_mean is None:
             assert rhand_poses_mean is None
@@ -114,9 +115,15 @@ class ModelData:
             assert lhand_poses_mean.shape == rhand_poses_mean.shape
             HANDJ = utils.check_shapes(lhand_poses_mean, (..., -1, 3))
 
+        assert BJ + JJ + EJ * 2 + HANDJ * 2 == J
+
         # ---
 
         self.kin_tree = kin_tree
+
+        self.body_joints_cnt = body_joints_cnt
+        self.jaw_joints_cnt = jaw_joints_cnt
+        self.eye_joints_cnt = eye_joints_cnt
 
         self.vertex_positions = vertex_positions
         self.vertex_normals = vertex_normals
@@ -132,16 +139,13 @@ class ModelData:
         self.body_shape_joint_regressor = body_shape_joint_regressor
         self.expr_shape_joint_regressor = expr_shape_joint_regressor
 
-        self.body_joints_cnt = body_joints_cnt
-        self.jaw_joints_cnt = jaw_joints_cnt
-        self.eye_joints_cnt = eye_joints_cnt
-
         self.joint_ts_mean = joint_ts_mean
+
+        self.pose_dirs = pose_dirs
 
         self.lbs_weights = lbs_weights
 
         self.lhand_poses_mean = lhand_poses_mean
-
         self.rhand_poses_mean = rhand_poses_mean
 
         self.mesh_data = mesh_data
@@ -196,6 +200,13 @@ class ModelData:
         # [V, 3]
 
         V = utils.check_shapes(vertex_positions, (-1, 3))
+
+        # ---
+
+        pose_dirs = torch.from_numpy(model_data["posedirs"]) \
+            .to(dtype=utils.FLOAT, device=device)
+
+        utils.check_shapes(pose_dirs, (V, 3, (J - 1) * 3 * 3))
 
         # ---
 
@@ -325,6 +336,10 @@ class ModelData:
         return ModelData(
             kin_tree=kin_tree,
 
+            body_joints_cnt=model_config.body_joints_cnt,
+            jaw_joints_cnt=model_config.jaw_joints_cnt,
+            eye_joints_cnt=model_config.eye_joints_cnt,
+
             vertex_positions=vertex_positions,
             vertex_normals=mesh_utils.get_area_weighted_vertex_normals(
                 faces=faces,
@@ -336,19 +351,16 @@ class ModelData:
             faces=faces,
             texture_faces=texture_faces,
 
-            lbs_weights=lbs_weights,
-
             body_shape_dirs=body_shape_dirs,
             expr_shape_dirs=expr_shape_dirs,
 
             body_shape_joint_regressor=body_shape_joint_regressor,
             expr_shape_joint_regressor=expr_shape_joint_regressor,
 
-            body_joints_cnt=model_config.body_joints_cnt,
-            jaw_joints_cnt=model_config.jaw_joints_cnt,
-            eye_joints_cnt=model_config.eye_joints_cnt,
-
             joint_ts_mean=joint_ts_mean,
+
+            pose_dirs=pose_dirs,
+            lbs_weights=lbs_weights,
 
             lhand_poses_mean=lhand_poses_mean,
             rhand_poses_mean=rhand_poses_mean,
@@ -383,6 +395,8 @@ class ModelData:
             "eye_joints_cnt": self.eye_joints_cnt,
 
             "joint_ts_mean": None,
+
+            "pose_dirs": None,
 
             "lbs_weights": None,
 

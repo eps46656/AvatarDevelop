@@ -197,3 +197,69 @@ def render_gaussian(
         colors=colors,
         radii=radii,
     )
+
+
+@beartype
+def query_gaussian(
+    gp_means: torch.Tensor,  # [N, 3]
+    gp_rots: torch.Tensor,  # [N, 4] quaternion
+    gp_scales: torch.Tensor,  # [N, 3]
+    gp_colors: torch.Tensor,  # [N, C]
+    gp_opacities: torch.Tensor,  # [..., N, 1]
+
+    points: torch.Tensor,  # [..., 3]
+):
+    device = utils.check_device(
+        gp_means,
+        gp_rots,
+        gp_scales,
+        gp_colors,
+        gp_opacities,
+        points,
+    )
+
+    N, C = -1, -2
+
+    N, C = utils.check_shapes(
+        gp_means, (N, 3),
+        gp_rots, (N, 4),
+        gp_scales, (N, 3),
+        gp_colors, (N, C),
+        gp_opacities, (N, 1),
+        points, (..., 3),
+    )
+
+    gp_rot_mats = utils.quaternion_to_rot_mat(
+        gp_rots,
+        order="WXYZ",
+        out_shape=(3, 3),
+    )  # [N, 3, 3]
+
+    gp_scale_mats = torch.zeros(
+        (N, 3, 3), dtype=gp_scales.dtype, device=device)
+
+    gp_scale_mats[:, 0, 0] = gp_scales[:, 0]
+    gp_scale_mats[:, 1, 1] = gp_scales[:, 1]
+    gp_scale_mats[:, 2, 2] = gp_scales[:, 2]
+
+    gp_rs = gp_rot_mats @ gp_scale_mats
+    # [N, 3, 3]
+
+    inv_cov = (gp_rs @ gp_rs.transpose(-1, -2)).inverse()
+    # [N, 3, 3]
+
+    rel_points = (points.unsqueeze(-2) - gp_means).unsqueeze(-1)
+    # [..., N, 3, 1]
+
+    k = torch.exp(-0.5 * (
+        rel_points.transpose(-1, -2) @ inv_cov @ rel_points)) \
+        .squeeze(-1).squeeze(-1)
+    # [..., N, 1, 1] -> [..., N]
+
+    ret = torch.einsum(
+        "...i,ic->...c",
+        k,  # [..., N]
+        gp_colors * gp_opacities,  # [N, C]
+    )  # [..., C]
+
+    return ret

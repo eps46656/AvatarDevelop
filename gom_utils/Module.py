@@ -14,10 +14,10 @@ from .utils import get_face_coord
 class ModuleForwardResult:
     rendered_img: torch.Tensor  # [..., C, H, W]
 
-    rgb_loss: typing.Optional[torch.Tensor]
-    lap_loss: typing.Optional[torch.Tensor]
-    normal_sim_loss: typing.Optional[torch.Tensor]
-    color_diff_loss: typing.Optional[torch.Tensor]
+    rgb_loss: float | torch.Tensor
+    lap_loss: float | torch.Tensor
+    normal_sim_loss: float | torch.Tensor
+    color_diff_loss: float | torch.Tensor
 
 
 @beartype
@@ -52,7 +52,7 @@ class Module(torch.nn.Module):
 
         self.gp_scales = torch.nn.Parameter(torch.ones(
             (faces_cnt, 3),
-            dtype=utils.FLOAT) * 10)
+            dtype=utils.FLOAT) * 0.01)
         # [F, 3]
 
         self.gp_colors = torch.nn.Parameter(torch.rand(
@@ -111,23 +111,23 @@ class Module(torch.nn.Module):
         )
         # [..., F, 4] wxyz
 
+        """
         utils.check_almost_zeros(
             face_coord_result.Ts[..., :3, :3].det() - 1,
             5e-3,
         )
+        """
 
-        gp_global_means = face_coord_result.Ts[..., :3, 3]
+        gp_global_means = (
+            vertex_positions_a +
+            vertex_positions_b +
+            vertex_positions_c
+        ) / 3
         # [..., F, 3]
 
-        gp_global_rot_qs = utils.quaternion_mul(
-            face_coord_rot_qs, self.gp_rot_qs,
-            order_1="WXYZ", order_2="WXYZ", order_out="WXYZ")
-        # [..., F, 4] wxyz
+        gp_global_rot_qs = self.gp_rot_qs
 
-        face_area = face_coord_result.face_area.unsqueeze(-1)
-        # [..., F, 1]
-
-        gp_global_scales = face_area * self.gp_scales
+        gp_global_scales = self.gp_scales
         # [..., F, 3]
 
         rendered_result = gaussian_utils.render_gaussian(
@@ -157,7 +157,7 @@ class Module(torch.nn.Module):
         mesh_data = avatar_model.mesh_data
 
         if not self.training:
-            rgb_loss = None
+            rgb_loss = 0.0
         else:
             mask_ = mask.unsqueeze(-3)
 
@@ -169,28 +169,33 @@ class Module(torch.nn.Module):
             rgb_loss = (rendered_img - masked_img).square().mean()
 
         if not self.training:
-            lap_loss = None
+            lap_loss = 0.0
         else:
-            lap_diff = mesh_data.calc_lap_diff(avatar_model.vertex_positions)
+            lap_diff = mesh_data.calc_lap_diffs(avatar_model.vertex_positions)
             # [..., V, 3]
 
             lap_loss = lap_diff.square().mean()
 
         if not self.training:
-            normal_sim_loss = None
+            normal_sim_loss = 0.0
         else:
+            normal_sim_loss = 0.0
+
+            """
             normal_sim = mesh_data.calc_face_cos_sim(
                 face_coord_result.Ts[..., :3, 2]
                 # the z axis of each face
             )
+
             # [..., FP]
 
-            normal_sim_loss = 1 - normal_sim.mean()
+            normal_sim_loss = 1 - normal_sim.mean()"
+            """
 
         if not self.training:
-            color_diff_loss = None
+            color_diff_loss = 0.0
         else:
-            color_diff = mesh_data.calc_face_cos_sim(self.gp_colors)
+            color_diff = mesh_data.calc_face_cos_sims(self.gp_colors)
             # [..., FP]
 
             color_diff_loss = color_diff.square().mean()

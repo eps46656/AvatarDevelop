@@ -1,4 +1,4 @@
-import dataclasses
+import copy
 import typing
 
 import torch
@@ -52,14 +52,13 @@ class StaticModelBuilder(ModelBuilder):
 class DeformableModelBuilder(ModelBuilder):
     def __init__(self, model_data: ModelData):
         super().__init__()
-        self.model_data = dataclasses.replace(model_data)
+        self.model_data = copy.copy(model_data)
 
-        vertex_positions = torch.nn.Parameter(
-            self.model_data.vertex_positions)
+        self.model_data.vertex_positions = torch.nn.Parameter(
+            self.model_data.vertex_positions.clone())
 
-        self.model_data.vertex_positions = vertex_positions
-
-        self.register_parameter("vertex_positions", vertex_positions)
+        self.register_parameter(
+            "vertex_positions", self.model_data.vertex_positions)
 
     def get_model_data(self) -> ModelData:
         return self.model_data

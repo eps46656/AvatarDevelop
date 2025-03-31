@@ -1,6 +1,6 @@
 import pathlib
+import time
 
-import lang_sam
 import numpy as np
 import torch
 import torchvision
@@ -13,28 +13,22 @@ DIR = FILE.parents[0]
 
 
 def main1():
-    config = DIR / "sam2_data/sam2.1_hiera_l.yaml"
-    checkpoint = DIR / "sam2_data/sam2.1_hiera_large.pt"
-
     video_path = DIR / "people_snapshot_public/female-3-sport/female-3-sport.mp4"
 
     video, fps = utils.read_video(video_path)
 
-    person_mask = utils.image_normalize(
-        utils.read_video(DIR / "out_video <the main person>.mp4")[0])
+    person_mask = utils.read_video(
+        DIR / "out_video <the main person>.mp4")[0].mean(1, keepdim=True)
 
-    bg = torch.ones(video.shape[1:]) * 255
+    bg = torch.ones(video.shape[1:])
 
     T = video.shape[0]
 
-    prompt = "upper garment of main person"
+    object_type = "top"
 
-    mask = LangSAMPredict(
-        ,
-        [prompt] * T
-    )
+    prompt = f"the {object_type} of main person"
 
-    mask = lang_sam_utils.Predict(
+    mask = lang_sam_utils.predict(
         lang_sam_utils.SAMType.LARGE,
         img=[
             bg * (1 - person_mask[frame_i]) +
@@ -51,12 +45,15 @@ def main1():
     for frame_i in range(T):
         out_video[frame_i] = mask[frame_i]
 
+    timestamp = int(time.time())
+
     utils.write_video(
-        DIR / f"out_video_{prompt.replace(" ", "_")}.mp4",
-        utils.image_denormalize(out_video).expand_as(video),
+        DIR / f"out_video_{timestamp}_{prompt.replace(" ", "_")}.mp4",
+        out_video,
         fps,
     )
 
 
 if __name__ == "__main__":
-    main1()
+    with utils.Timer():
+        main1()

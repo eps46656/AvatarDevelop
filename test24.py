@@ -8,7 +8,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (camera_utils, config, dataset_utils, gom_avatar_utils,
+from . import (camera_utils, config, dataset_utils, gom_utils,
                people_snapshot_utils, smplx_utils, training_utils,
                transform_utils, utils)
 
@@ -149,7 +149,7 @@ def main1():
         device=DEVICE,
     )
 
-    module = gom_avatar_utils.model.GoMAvatarModel(
+    module = gom_utils.model.GoMAvatarModel(
         avatar_blending_layer=smplx_model_builder,
         color_channels_cnt=3,
     ).train()

@@ -33,7 +33,7 @@ def make_view(
     )
 
     f_vec = utils.normalized(aim - origin, -1)
-    r_vec = utils.normalized(torch.linalg.cross(f_vec, quasi_u_dir, -1), -1)
+    r_vec = utils.normalized(torch.linalg.cross(f_vec, quasi_u_dir), -1)
     u_vec = torch.linalg.cross(r_vec, f_vec, -1)
 
     return transform_utils.ObjectTransform.from_matching(

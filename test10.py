@@ -6,7 +6,8 @@ import pickle
 
 import torch
 
-from . import smplx_utils, blending_utils, camera_utils, kin_utils, mesh_utils, utils
+from . import (blending_utils, camera_utils, config, kin_utils, mesh_utils,
+               smplx_utils, utils)
 from .smplx import smplx
 
 FILE = pathlib.Path(__file__)
@@ -158,23 +159,11 @@ def main4():
 
 
 def main5():
-    model_data_path = DIR / "smplx/models/smplx/SMPLX_NEUTRAL.pkl"
+    model_data_path = config.SMPLX_NEUTRAL_MODEL
 
-    body_shapes_cnt = 10
-    expr_shapes_cnt = 10
-    body_joints_cnt = 22
-    jaw_joints_cnt = 1
-    eye_joints_cnt = 1
-    hand_joints_cnt = 15
-
-    model_data: smplx_utils.Model = smplx_utils.ReadModelData(
+    model_data: smplx_utils.Model = smplx_utils.ModelData.from_file(
         model_data_path=model_data_path,
-        body_shapes_cnt=body_shapes_cnt,
-        expr_shapes_cnt=expr_shapes_cnt,
-        body_joints_cnt=body_joints_cnt,
-        jaw_joints_cnt=jaw_joints_cnt,
-        eye_joints_cnt=eye_joints_cnt,
-        hand_joints_cnt=hand_joints_cnt,
+        model_config=smplx_utils.smplx_model_config,
         device=DEVICE,
     )
 
@@ -196,10 +185,10 @@ def main5():
     face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
 
     with utils.Timer():
-        lap_diff = mesh_data.calc_lap_diff(vertex_positions)
+        lap_diff = mesh_data.calc_lap_diffs(vertex_positions)
 
     with utils.Timer():
-        lap_diff_naive = mesh_data.calc_lap_diff_naive(vertex_positions)
+        lap_diff_naive = mesh_data.calc_lap_diffs_naive(vertex_positions)
 
     lap_diff_diff_1 = lap_diff.square().mean()
     lap_diff_diff_2 = lap_diff_naive.square().mean()
@@ -212,10 +201,10 @@ def main5():
     print(f"{lap_diff_err=}")
 
     with utils.Timer():
-        normal_sim = mesh_data.GetNormalSim(face_normals)
+        normal_sim = mesh_data.calc_face_cos_sims(face_normals)
 
     with utils.Timer():
-        normal_sim_naive = mesh_data.GetNormalSimNaive(face_normals)
+        normal_sim_naive = mesh_data.calc_face_cos_sims_naive(face_normals)
 
     normal_sim_1 = normal_sim.square().mean()
     normal_sim_2 = normal_sim_naive.square().mean()

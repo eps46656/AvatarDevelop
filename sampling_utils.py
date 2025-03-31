@@ -1,36 +1,35 @@
 
 import enum
-import operator
 
 import torch
-from typeguard import typechecked
+from beartype import beartype
+
+from . import utils
 
 cubic_interp_coeff_mat = torch.tensor([
     [+0, +6, +0, +0],
     [-2, -3, +6, -1],
     [+3, -6, +3, +0],
     [-1, +3, -3, +1],
-], dtype=torch.float) / 6
+], dtype=utils.FLOAT) / 6
 
 
-def CubicInterp(ys, x):
-    cs = cubic_interp_coeff_mat.to(device=ys.device) @ ys.reshape((4, 1))
+@beartype
+def cubic_interp(
+    ys: torch.Tensor,  # [..., 4]
+    x: torch.Tensor,  # [...]
+):
+    utils.check_shapes(ys, (..., 4))
 
-    return (((cs[0, 3] * x) + cs[0, 2] + x) * cs[0, 1]) * x + cs[0, 0]
+    cs = (cubic_interp_coeff_mat.to(device=ys.device) @ ys.unsqueeze(-1)) \
+        .squeeze(-1)
+    # [..., 4]
 
+    x1 = x
+    x2 = x.square()
+    x3 = x1 * x2
 
-@typechecked
-def BatchCubicInterp(ys: torch.Tensor,
-                     x: torch.Tensor,):
-    B = x.shape[0]
-
-    assert ys.shape == (B, 4)
-    assert x.shape == (B,)
-
-    cs = cubic_interp_coeff_mat.reshape((1, 4, 4)) @ ys.reshape((B, 4, 1))
-    # B, 4, 1
-
-    return (((cs[:, 3, 0] * x) + cs[:, 2, 0]) * x + cs[:, 1, 0]) * x + cs[:, 0, 0]
+    return cs[:, 3] * x3 + cs[:, 2] + x2 * cs[:, 1] * x1 + cs[:, 0]
 
 
 class WrapModeEnum(enum.Enum):
@@ -44,20 +43,26 @@ class InterpModeEnum(enum.Enum):
     CUBIC = enum.auto()
 
 
-@typechecked
-def Wrap(x: torch.Tensor, size: int, mode: WrapModeEnum):
-    if mode == WrapModeEnum.REPEAT:
-        return x % size
+@beartype
+def wrap(
+    x: torch.Tensor,
+    size: int,
+    mode: WrapModeEnum,
+):
+    assert 0 < size
 
-    if mode == WrapModeEnum.MIRROR_REPEAT:
-        x = x % (size * 2)
+    match mode:
+        case WrapModeEnum.REPEAT:
+            return x % size
 
-        return torch.clamp(x, None, size) - torch.clamp(x - (size - 1), 0, None)
+        case WrapModeEnum.MIRROR_REPEAT:
+            x = x % (size * 2 - 2)
+            return torch.where(x < size, x, (size - 2) - x)
 
     assert False, "Unknown warp mode"
 
 
-@typechecked
+@beartype
 class TextureSampler:
     wrap_mode_table = {
         WrapModeEnum.MIRROR_REPEAT: "reflection",

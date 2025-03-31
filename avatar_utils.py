@@ -20,6 +20,7 @@ class AvatarModel:
 
         vertex_positions: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
         vertex_normals: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
+        vertex_rotations: typing.Optional[torch.Tensor] = None,  # [..., V, 4]
 
         texture_vertex_positions: typing.Optional[torch.Tensor] = None,
         # [..., TV, 2]
@@ -46,8 +47,11 @@ class AvatarModel:
         if vertex_normals is not None:
             utils.check_shapes(vertex_normals, (..., V, 3))
 
+        if vertex_rotations is not None:
+            utils.check_shapes(vertex_rotations, (..., V, 4))
+
         if texture_vertex_positions is not None:
-            utils.check_shapes(texture_vertex_positions, (..., TV, 3))
+            utils.check_shapes(texture_vertex_positions, (..., TV, 2))
 
         F = utils.check_shapes(faces, (..., -1, 3))
 
@@ -115,10 +119,10 @@ class AvatarModel:
 @beartype
 class AvatarBlender(torch.nn.Module):
     def __init__(self):
-        super(AvatarBlender, self).__init__()
+        super().__init__()
 
     def get_avatar_model() -> AvatarModel:
         raise utils.UnimplementationError()
 
     def forward(self, blending_param) -> AvatarModel:
-        assert False, "Unoverridden abstract method."
+        raise utils.UnimplementationError()

@@ -44,22 +44,10 @@ def main1():
         "neutral": config.SMPLX_NEUTRAL_MODEL,
     }
 
-    body_shapes_cnt = 10
-    expr_shapes_cnt = 0
-    body_joints_cnt = 24
-    jaw_joints_cnt = 0
-    eye_joints_cnt = 0
-    hand_joints_cnt = 0
-
     model_data_dict = {
-        key: smplx_utils.ReadModelData(
+        key: smplx_utils.ModelData.from_file(
             model_data_path=value,
-            body_shapes_cnt=body_shapes_cnt,
-            expr_shapes_cnt=expr_shapes_cnt,
-            body_joints_cnt=body_joints_cnt,
-            jaw_joints_cnt=jaw_joints_cnt,
-            eye_joints_cnt=eye_joints_cnt,
-            hand_joints_cnt=hand_joints_cnt,
+            model_config=smplx_utils.smpl_model_config,
             device=DEVICE,
         )
         for key, value in smpl_model_data_path_dict.items()
@@ -81,9 +69,12 @@ def main1():
 
     # ---
 
-    smplx_builder = smplx_utils.ModelBlender(
+    smplx_model_builder = smplx_utils.StaticModelBuilder(
         model_data=subject_data.model_data,
-        device=DEVICE,
+    )
+
+    smplx_model_blender = smplx_utils.ModelBlender(
+        model_builder=smplx_model_builder,
     )
 
     # ---
@@ -136,7 +127,7 @@ def main1():
 
     # ---
 
-    smplx_model: smplx_utils.Model = smplx_builder.forward(
+    smplx_model: smplx_utils.Model = smplx_model_blender.forward(
         subject_data.blending_param)
 
     print(f"{smplx_model.vertex_positions.shape}")

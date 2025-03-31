@@ -1,34 +1,23 @@
 
 import pathlib
-
-import numpy as np
-
-import AbstractMesh
-import utils
-import rendering_utils
 import typing
+
+import torch
+
+from . import rendering_utils, utils
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
-
-
-def IsUnique(x: typing.Iterable[object]):
-    ret = set()
-
-    for obj in x:
-        assert utils.set_add(ret, obj)
-
-    return ret
 
 
 def main1():
     H = 720
     W = 1280
 
-    img = np.zeros((H, W, 3), dtype=np.uint8)
+    img = torch.zeros((3, H, W), dtype=utils.FLOAT)
 
     for _ in range(10):
-        points = np.random.rand(2, 3)
+        points = torch.rand(3, 2)
 
         points[0, :] *= H
         points[1, :] *= W
@@ -37,24 +26,41 @@ def main1():
         timer_b = utils.Timer()
 
         with timer_a:
-            naive_pixels = IsUnique(
-                rendering_utils.NaiveRasterizeTriangle(points, (0, H), (0, W)))
+            it = rendering_utils.rasterize_triangle_naive(
+                points, (0, H), (0, W))
+
+            naive_bcs: dict[
+                tuple[int, int],
+                tuple[float, float, float]
+            ] = dict()
+
+            for naive_pixel, naive_bc in it:
+                assert naive_pixel not in naive_bcs
+                naive_bcs[naive_pixel] = naive_bc
 
         with timer_b:
-            pixels = IsUnique(
-                rendering_utils.RasterizeTriangle(points, (0, H), (0, W)))
+            it = rendering_utils.rasterize_triangle(points, (0, H), (0, W))
 
-        print(f"{timer_b.duration() / timer_a.duration() * 100=}")
+            bcs: dict[
+                tuple[int, int],
+                tuple[float, float, float]
+            ] = dict()
 
-        intersection_pixels = naive_pixels.intersection(pixels)
+            for pixel,  bc in it:
+                assert pixel not in bcs
+                bcs[pixel] = bc
+
+        print(f"{timer_b.duration / timer_a.duration * 100=}")
+
+        intersection_pixels = naive_bcs.keys() & bcs.keys()
 
         ratio = 1 - len(intersection_pixels) / (
-            len(naive_pixels) + len(pixels) - len(intersection_pixels))
+            len(naive_bcs) + len(bcs) - len(intersection_pixels))
 
         print(f"{ratio*100=}")
 
-        for pixel in pixels:
-            img[pixel[0], pixel[1], :] = (255, 0, 0)
+        for pixel in bcs:
+            img[0, pixel[0], pixel[1]] = 1
 
         assert ratio <= 0.04
 

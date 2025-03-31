@@ -26,9 +26,9 @@ class Sample:
         mask: typing.Optional[torch.Tensor],  # [..., H, W]
         blending_param: object,
     ):
-        C, H, W = -1, 2, -3
+        C, H, W = -1, -2, -3
 
-        utils.check_shapes(img, (..., C, H, W))
+        C, H, W = utils.check_shapes(img, (..., C, H, W))
 
         if mask is not None:
             utils.check_shapes(mask, (..., H, W))
@@ -47,7 +47,7 @@ class Sample:
         return utils.broadcast_shapes(
             self.camera_transform.shape,
             self.img.shape[:-3],
-            utils.try_get_batch_shape(self.mask.shape, -2),
+            utils.try_get_batch_shape(self.mask, -2),
             self.blending_param.shape,
         )
 

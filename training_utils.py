@@ -18,10 +18,10 @@ from . import dataset_utils, sqlite_utils, utils
 @dataclasses.dataclass
 class CheckpointMeta:
     id: int
-    prev: int
+    prv: int
     epochs_cnt: int
     message: typing.Optional[str]
-    deep_saved: bool
+    full: bool
     avg_loss: float
 
 
@@ -43,9 +43,9 @@ class LogDatabase:
                 CREATE TABLE CheckpointMeta(
                     id UNSIGNED BIGINT PRIMARY KEY NOT NULL,
 
-                    prev UNSIGNED BIGINT NULL,
+                    prv UNSIGNED BIGINT NULL,
 
-                    deep_saved INT NOT NULL,
+                    full INT NOT NULL,
 
                     epochs_cnt UNSIGNED INT,
 
@@ -53,7 +53,7 @@ class LogDatabase:
 
                     avg_loss REAL,
 
-                    FOREIGN KEY (prev) REFERENCES CheckpointMeta(id)
+                    FOREIGN KEY (prv) REFERENCES CheckpointMeta(id)
                         ON DELETE SET NULL
                 );
             """)
@@ -70,7 +70,7 @@ class LogDatabase:
                 "id": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
-                "prev": sqlite_utils.DataTableColAttr(
+                "prv": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: None if x == -1 else x,
                     deserialize=lambda x: -1 if x is None else x,),
                 "epochs_cnt": sqlite_utils.DataTableColAttr(
@@ -79,7 +79,7 @@ class LogDatabase:
                 "message": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
-                "deep_saved": sqlite_utils.DataTableColAttr(
+                "full": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: 1 if x else 0,
                     deserialize=lambda x: x != 0,),
                 "avg_loss": sqlite_utils.DataTableColAttr(
@@ -138,9 +138,9 @@ class TrainingResult:
 @dataclasses.dataclass
 class TrainingCore:
     module: typing.Optional[torch.nn.Module]
-    dataset: dataset_utils.Dataset
-    dataset_loader: dataset_utils.DatasetLoader
-    loss_func: typing.Callable
+    dataset: typing.Optional[dataset_utils.Dataset]
+    dataset_loader: typing.Optional[dataset_utils.DatasetLoader]
+    loss_func: typing.Optional[typing.Callable]
     optimizer: typing.Optional[torch.optim.Optimizer]
     scheduler: typing.Optional[object]
 
@@ -214,7 +214,7 @@ def make_cmd_parser():
     )
 
     save_parser.add_argument(
-        "--deep_saved",
+        "--full",
         action="store_true",
         help="save the total state",
     )
@@ -349,7 +349,7 @@ class Trainer:
 
         d = torch.load(ckpt_data_path)
 
-        if ckpt_meta.deep_saved:
+        if ckpt_meta.full:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name not in d:
                     continue
@@ -366,12 +366,16 @@ class Trainer:
                     continue
 
                 field_val = getattr(self.training_core, field_name)
-                assert field_val is not None
 
-                field_val.load_state_dict(d[field_name])
+                if field_val is not None:
+                    field_val.load_state_dict(d[field_name])
 
                 if field_name == "module":
                     field_val.to(device=self.__device)
+
+        self.__prv = ckpt_meta.prv
+        self.__epochs_cnt = 0
+        self.__avg_loss = ckpt_meta.avg_loss
 
     def load_latest(self):
         ckpt_meta = self.get_latest_ckpt_meta()
@@ -380,18 +384,20 @@ class Trainer:
     def save(
         self,
         message: str = None,
-        deep_saved: bool = False,
+        full: bool = False,
     ):
         assert self.training_core is not None
 
         id = int(time.time())
 
+        print(f"saving id={id}")
+
         self.__log_db.insert_ckpt_meta(CheckpointMeta(
             id=id,
-            prev=self.__prv,
+            prv=self.__prv,
             epochs_cnt=self.__epochs_cnt,
             message=message,
-            deep_saved=deep_saved,
+            full=full,
             avg_loss=self.__avg_loss,
         ))
 
@@ -400,20 +406,26 @@ class Trainer:
 
         d = dict()
 
-        if deep_saved:
+        if full:
+            print(f"full saved")
+
             d = {
                 field_name: getattr(self.training_core, field_name)
                 for field_name in {"module", "optimizer", "scheduler"}
             }
         else:
+            print(f"     saved")
+
             for field_name in {"module", "optimizer", "scheduler"}:
                 field_val = getattr(self.training_core, field_name)
 
-                d[field_name] = None if field_val is None else \
-                    field_val.state_dict()
+                d[field_name] = None if field_val is None else
+                field_val.state_dict()
 
         torch.save(
             d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
+
+        print(f"saved")
 
     def _train(self):
         training_result = self.training_core.train()
@@ -444,7 +456,11 @@ class Trainer:
 
             diff_time = cur_time - self.__prv
 
-            if 1 - 1e-3 <= diff_time_weight * diff_time + diff_epochs_cnt_weight + self.__diff_epochs_cnt:
+            print(f"{diff_time=}")
+            print(f"{self.__diff_epochs_cnt=}")
+
+            if 1 - 1e-3 <= diff_time_weight * diff_time + diff_epochs_cnt_weight * self.__diff_epochs_cnt:
+                print(f"auto save triggered")
                 self.save()
 
             if len(utils.read_file(cancel_token_path, "r")) != 0:
@@ -469,7 +485,7 @@ class Trainer:
                 self.load_latest()
 
             case "save":
-                self.save(args.message, args.deep_saved)
+                self.save(args.message, args.full)
 
             case "train":
                 self.train(

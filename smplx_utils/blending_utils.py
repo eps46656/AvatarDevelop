@@ -43,23 +43,39 @@ class BlendingParam:
 
         blending_vertex_normal: bool = False,
     ):
-        BS, ES, BJ_, JJ, EYEJ, HANDJ = -1, -2, -3, -4, -5, -6
+        if body_shapes is not None:
+            BS = utils.check_shapes(body_shapes, (..., -1))
 
-        BS, ES, BJ_, JJ, EYEJ, HANDJ = utils.check_shapes(
-            body_shapes, (..., BS),
-            expr_shapes, (..., ES),
+        if expr_shapes is not None:
+            ES = utils.check_shapes(expr_shapes, (..., -1))
 
-            global_transl, (..., 3),
-            global_rot, (..., 3),
+        if global_transl is not None:
+            utils.check_shapes(global_transl, (..., 3))
 
-            body_poses, (..., BJ_, 3),
-            jaw_poses, (..., JJ, 3),
-            leye_poses, (..., EYEJ, 3),
-            reye_poses, (..., EYEJ, 3),
+        if global_rot is not None:
+            utils.check_shapes(global_rot, (..., 3))
 
-            lhand_poses, (..., HANDJ, 3),
-            rhand_poses, (..., HANDJ, 3),
-        )
+        if body_poses is not None:
+            BJ = utils.check_shapes(body_poses, (..., -1, 3)) + 1
+
+        if jaw_poses is not None:
+            JJ = utils.check_shapes(jaw_poses, (..., -1, 3))
+
+        EYEJ = -1
+
+        if leye_poses is not None:
+            EYEJ = utils.check_shapes(leye_poses, (..., EYEJ, 3))
+
+        if reye_poses is not None:
+            EYEJ = utils.check_shapes(reye_poses, (..., EYEJ, 3))
+
+        HANDJ = -1
+
+        if lhand_poses is not None:
+            HANDJ = utils.check_shapes(lhand_poses, (..., HANDJ, 3))
+
+        if rhand_poses is not None:
+            HANDJ = utils.check_shapes(rhand_poses, (..., HANDJ, 3))
 
         # ---
 
@@ -272,22 +288,35 @@ def blending(
 
     vps = model_data.vertex_positions
 
+    assert vps.isfinite().all()
+
     if blending_param.body_shapes is not None:
+        assert model_data.body_shape_dirs.isfinite().all()
+        assert blending_param.body_shapes.isfinite().all()
+
         vps = vps + torch.einsum("...vxb,...b->...vx",
                                  model_data.body_shape_dirs,
                                  blending_param.body_shapes)
 
     if model_data.expr_shape_dirs is not None and \
        blending_param.expr_shapes is not None:
+        assert model_data.expr_shape_dirs.isfinite().all()
+        assert blending_param.expr_shapes.isfinite().all()
+
         vps = vps + torch.einsum("...vxb,...b->...vx",
                                  model_data.expr_shape_dirs,
                                  blending_param.expr_shapes)
 
     # [..., V, 3]
 
+    assert model_data.joint_ts_mean.isfinite().all()
+
     binding_joint_ts = model_data.joint_ts_mean.clone()
 
     if blending_param.body_shapes is not None:
+        assert model_data.body_shape_joint_regressor.isfinite().all()
+        assert blending_param.body_shapes.isfinite().all()
+
         binding_joint_ts = binding_joint_ts + torch.einsum(
             "...jxb,...b->...jx",
             model_data.body_shape_joint_regressor,
@@ -320,8 +349,25 @@ def blending(
         binding_pose_ts[..., u, :] = \
             binding_joint_ts[..., u, :] - binding_joint_ts[..., p, :]
 
+    target_pose_rs = utils.axis_angle_to_rot_mat(
+        blending_param.get_poses(model_data), out_shape=(3, 3))
+    # [..., J, 3, 3]
+
+    identity = torch.eye(
+        3, dtype=target_pose_rs.dtype, device=target_pose_rs.device)
+
+    pose_feature = \
+        (target_pose_rs[..., 1:, :, :] - identity).view((-1, (J - 1) * 3 * 3))
+    # [..., (J - 1) * 3 * 3]
+
+    vps = vps + torch.einsum(
+        "...vxp,...p->...vx",
+        model_data.pose_dirs,  # [..., V, 3, (J - 1) * 3 * 3]
+        pose_feature,  # [..., (J - 1) * 3 * 3]
+    )
+
     lbs_result = \
-        blending_utils.LBS(
+        blending_utils.lbs(
             kin_tree=model_data.kin_tree,
             lbs_weights=model_data.lbs_weights,
 
@@ -330,8 +376,7 @@ def blending(
 
             binding_pose_rs=binding_pose_rs,
             binding_pose_ts=binding_pose_ts,
-            target_pose_rs=utils.axis_angle_to_rot_mat(
-                blending_param.get_poses(model_data), out_shape=(3, 3)),
+            target_pose_rs=target_pose_rs,
             target_pose_ts=binding_pose_ts,
         )
 
@@ -346,11 +391,14 @@ def blending(
         kin_tree=model_data.kin_tree,
 
         vertices_cnt=model_data.vertex_positions.shape[-2],
-        texture_vertices_cnt=0,
+        texture_vertices_cnt=0 if model_data.texture_vertex_positions is None
+        else model_data.texture_vertex_positions.shape[-2],
 
         vertex_positions=vps,
-        vertex_normals=None if lbs_result.blended_vertex_directions is None else utils.normalized(
-            lbs_result.blended_vertex_directions),
+        vertex_normals=None if lbs_result.blended_vertex_directions is None
+        else utils.normalized(lbs_result.blended_vertex_directions),
+
+        vertex_rotations=None,
 
         texture_vertex_positions=model_data.texture_vertex_positions,
 

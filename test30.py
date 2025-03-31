@@ -1,3 +1,6 @@
+import copy
+import itertools
+import math
 import pathlib
 import time
 import typing
@@ -6,16 +9,16 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (config, dataset_utils, gom_avatar_utils, people_snapshot_utils,
-               smplx_utils, training_utils, utils)
+from . import (avatar_utils, camera_utils, config, dataset_utils, gom_utils,
+               people_snapshot_utils, smplx_utils, texture_utils,
+               training_utils, transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
-DEVICE = utils.CUDA_DEVICE
+DEVICE = torch.device("cpu")
 
 PROJ_DIR = DIR / "train_2025_0328"
-
 
 ALPHA_RGB = 1.0
 ALPHA_LAP = 1.0
@@ -51,10 +54,10 @@ class MyTrainingCore(training_utils.TrainingCore):
         for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
             batch_idxes: tuple[torch.Tensor, ...]
 
-            sample: gom_avatar_utils.Sample = \
+            sample: gom_utils.Sample = \
                 self.dataset.batch_get(batch_idxes)
 
-            result: gom_avatar_utils.ModuleForwardResult = self.module(
+            result: gom_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
                 img=sample.img,
@@ -95,7 +98,7 @@ class MyTrainingCore(training_utils.TrainingCore):
         )
 
     def eval(self):
-        self.dataset: gom_avatar_utils.Dataset
+        self.dataset: gom_utils.Dataset
 
         out_frames = torch.empty_like(
             self.dataset.sample.img,
@@ -120,10 +123,10 @@ class MyTrainingCore(training_utils.TrainingCore):
                     idxes.shape + (C, H, W))
                 # [K, C, H, W]
 
-                sample: gom_avatar_utils.Sample = \
+                sample: gom_utils.Sample = \
                     self.dataset.batch_get(batch_idxes)
 
-                result: gom_avatar_utils.ModuleForwardResult = self.module(
+                result: gom_utils.ModuleForwardResult = self.module(
                     camera_transform=sample.camera_transform,
                     camera_config=sample.camera_config,
                     img=sample.img,
@@ -151,6 +154,74 @@ class MyTrainingCore(training_utils.TrainingCore):
             video=utils.image_denormalize(out_frames),
             fps=25,
         )
+
+
+@beartype
+def map(
+    gom_module: gom_utils.Module,
+    mapping_blending_param: object,
+    img_h: int,
+    img_w: int,
+):
+    assert 0 < img_h
+    assert 0 < img_w
+
+    avatar_blender = gom_module.avatar_blender
+
+    avatar_model: avatar_utils.AvatarModel = avatar_blender(
+        mapping_blending_param)
+
+    vertex_positions = avatar_model.vertex_positions
+    # [V, 3]
+
+    texture_faces = avatar_model.texture_faces
+    # [F, 3]
+
+    texture_vertex_positions = avatar_model.texture_vertex_positions
+    # [TV, 2]
+
+    gp_colors = gom_module.gp_colors
+    # [F, C]
+
+    V, TV, F = -1, -2, -3
+
+    V, TV, F = utils.check_shapes(
+        vertex_positions, (V, 3),
+        texture_vertex_positions, (TV, 2),
+        texture_faces, (F, 3),
+    )
+
+    m = texture_utils.position_to_map(
+        vertex_positions,
+
+        texture_faces=texture_faces,
+        texture_vertex_positions=texture_vertex_positions,
+
+        img_h=img_h,
+        img_w=img_w,
+    )
+    # [img_h, img_w]
+
+    ret = torch.zeros((3, img_h, img_w), dtype=utils.FLOAT)
+
+    for pixel_i in range(img_h):
+        for pixel_j in range(img_w):
+            l = m[pixel_i][pixel_j]
+
+            if l is None:
+                continue
+
+            if 1 < len(l):
+                print(f"multi mapping at ({pixel_i}, {pixel_j})")
+
+            face_i, _ = l[0]
+
+            ret[:, pixel_i, pixel_j] = gp_colors[face_i, :]
+
+    utils.write_image(
+        DIR / " tex_map.ong",
+        ret
+    )
 
 
 def main1():
@@ -184,24 +255,9 @@ def main1():
     subject_data = people_snapshot_utils.read_subject(
         subject_dir, model_data_dict, DEVICE)
 
-    print(f"{subject_data.camera_transform.shape=}")
-    print(f"{subject_data.video.shape=}")
-    print(f"{subject_data.mask.shape=}")
-    print(f"{subject_data.blending_param.shape=}")
-    print(f"{subject_data.model_data.vertex_positions.shape=}")
+    dataset = None
 
-    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
-        camera_transform=subject_data.camera_transform,
-        camera_config=subject_data.camera_config,
-        img=subject_data.video,
-        mask=subject_data.mask,
-        blending_param=subject_data.blending_param,
-    )).to(device=DEVICE)
-
-    dataset_loader = dataset_utils.DatasetLoader(
-        dataset,
-        batch_size=4,
-    )
+    dataset_loader = None
 
     # ---
 
@@ -213,26 +269,14 @@ def main1():
         model_builder=smplx_model_builder,
     )
 
-    gom_avatar_module = gom_avatar_utils.Module(
+    gom_avatar_module = gom_utils.Module(
         avatar_blender=smplx_model_blender,
         color_channels_cnt=3,
     ).to(device=DEVICE).train()
 
-    optimizer = torch.optim.Adam(
-        gom_avatar_module.parameters(),
-        lr=1e-3,
-    )
+    optimizer = None
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=pow(0.1, 1/4),
-        patience=5,
-        threshold=0.05,
-        threshold_mode="rel",
-        cooldown=0,
-        min_lr=1e-7,
-    )
+    scheduler = None
 
     training_core = MyTrainingCore(
         module=gom_avatar_module,
@@ -250,24 +294,14 @@ def main1():
 
     trainer.set_training_core(training_core)
 
-    # trainer.load_latest()
+    trainer.load_latest()
 
-    trainer.enter_cli()
-
-    return
-
-    for epoch_i in range(10):
-        trainer.train(epochs_cnt=1)
-        trainer.save()
-        trainer.eval()
-
-    print(f"###")
-
-    for name, param in gom_avatar_module.named_parameters():
-        print(f"{name=}")
-        print(f"{param=}")
-
-    print(f"###")
+    map(
+        training_core.module,
+        smplx_utils.BlendingParam(),
+        1000,
+        1000,
+    )
 
 
 if __name__ == "__main__":
