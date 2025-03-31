@@ -10,8 +10,8 @@ import tqdm
 from beartype import beartype
 
 from . import (avatar_utils, camera_utils, config, dataset_utils, gom_utils,
-               people_snapshot_utils, smplx_utils, texture_utils,
-               training_utils, transform_utils, utils)
+               people_snapshot_utils, rendering_utils, smplx_utils,
+               texture_utils, training_utils, transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -99,7 +99,16 @@ class MyTrainingCore(training_utils.TrainingCore):
     def eval(self):
         self.dataset: gom_utils.Dataset
 
-        out_frames = torch.empty_like(
+        img_h, img_w = self.dataset.sample.img.shape[-2:]
+
+        rgb_frames = torch.empty_like(
+            self.dataset.sample.img,
+            dtype=utils.FLOAT,
+            device=utils.CPU_DEVICE,
+        )
+        # [T, C, H, W]
+
+        mesh_frames = torch.empty_like(
             self.dataset.sample.img,
             dtype=utils.FLOAT,
             device=utils.CPU_DEVICE,
@@ -107,6 +116,9 @@ class MyTrainingCore(training_utils.TrainingCore):
         # [T, C, H, W]
 
         T, C, H, W = self.dataset.sample.img.shape
+
+        zeros = torch.zeros((1, img_h, img_w), dtype=utils.FLOAT)
+        ones = torch.ones((1, img_h, img_w), dtype=utils.FLOAT)
 
         batch_shape = self.dataset.shape
 
@@ -122,11 +134,13 @@ class MyTrainingCore(training_utils.TrainingCore):
                     idxes.shape + (C, H, W))
                 # [K, C, H, W]
 
+                K = idxes.shape[0]
+
                 sample: gom_utils.Sample = self.dataset[batch_idxes]
 
                 result: gom_utils.ModuleForwardResult = self.module(
-                    camera_transform=sample.camera_transform,
                     camera_config=sample.camera_config,
+                    camera_transform=sample.camera_transform,
                     img=sample.img,
                     mask=sample.mask,
                     blending_param=sample.blending_param,
@@ -135,10 +149,10 @@ class MyTrainingCore(training_utils.TrainingCore):
                 rendered_img = result.rendered_img.reshape((-1, C, H, W))
                 # [K, C, H, W]
 
-                out_frames.scatter_(
+                rgb_frames.scatter_(
                     0,
-                    idxes.to(out_frames.device),
-                    rendered_img.to(out_frames.device))
+                    idxes.to(rgb_frames.device),
+                    rendered_img.to(rgb_frames.device))
 
                 """
 
@@ -147,9 +161,48 @@ class MyTrainingCore(training_utils.TrainingCore):
 
                 """
 
+                avatar_model: smplx_utils.Model = result.avatar_model
+
+                for k in range(K):
+                    vertex_positions = avatar_model.vertex_positions[k]
+
+                    camera_config = sample.camera_config
+
+                    camera_transform = sample.camera_transform[k]
+
+                    print(f"{camera_transform.trans.shape=}")
+
+                    mesh_ras_result = rendering_utils.rasterize_mesh(
+                        vertex_positions,
+                        avatar_model.faces,
+                        camera_config=camera_config,
+                        camera_transform=camera_transform,
+                        img_h=img_h,
+                        img_w=img_w,
+                        faces_per_pixel=1,
+                    )
+
+                    # d["pixel_to_faces"][img_h, img_w, 1]
+
+                    mesh_frames[idxes[k, 0, 0, 0]] = torch.where(
+                        (mesh_ras_result["pixel_to_faces"][:, :, 0] == -1)
+                        .to(mesh_frames.device),
+
+                        zeros,
+                        ones,
+                    )
+
+                    del mesh_ras_result
+
         utils.write_video(
-            path=PROJ_DIR / f"output_{int(time.time())}.mp4",
-            video=out_frames,
+            path=PROJ_DIR / f"rgb_{int(time.time())}.mp4",
+            video=rgb_frames,
+            fps=25,
+        )
+
+        utils.write_video(
+            path=PROJ_DIR / f"mesh_{int(time.time())}.mp4",
+            video=rgb_frames,
             fps=25,
         )
 
@@ -283,8 +336,8 @@ def main1():
         subject_dir, model_data_dict, DEVICE)
 
     dataset = gom_utils.Dataset(gom_utils.Sample(
-        camera_transform=subject_data.camera_transform,
         camera_config=subject_data.camera_config,
+        camera_transform=subject_data.camera_transform,
         img=subject_data.video,
         mask=subject_data.mask,
         blending_param=subject_data.blending_param,
@@ -342,16 +395,10 @@ def main1():
 
     trainer.set_training_core(training_core)
 
-    # trainer.load_latest()
+    trainer.load_latest()
+    trainer.eval()
 
     trainer.enter_cli()
-
-    map_to_texture(
-        trainer.training_core.module,
-        smplx_utils.BlendingParam(),
-        1000,
-        1000,
-    )
 
 
 if __name__ == "__main__":

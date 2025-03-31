@@ -12,6 +12,8 @@ from .utils import get_face_coord
 @beartype
 @dataclasses.dataclass
 class ModuleForwardResult:
+    avatar_model: avatar_utils.AvatarModel
+
     rendered_img: torch.Tensor  # [..., C, H, W]
 
     rgb_loss: float | torch.Tensor
@@ -55,12 +57,12 @@ class Module(torch.nn.Module):
             dtype=utils.FLOAT) * 0.01)
         # [F, 3]
 
-        self.gp_colors = torch.nn.Parameter(torch.rand(
+        self.gp_log_colors = torch.nn.Parameter(torch.rand(
             (faces_cnt, color_channels_cnt),
             dtype=utils.FLOAT))
         # [F, C]
 
-        self.gp_opacities = torch.nn.Parameter(torch.ones(
+        self.gp_log_opacities = torch.nn.Parameter(torch.zeros(
             (faces_cnt, 1),
             dtype=utils.FLOAT))
         # [F, 1]
@@ -74,15 +76,15 @@ class Module(torch.nn.Module):
 
     def forward(
         self,
-        camera_transform: transform_utils.ObjectTransform,
         camera_config: camera_utils.CameraConfig,
+        camera_transform: transform_utils.ObjectTransform,
         img: torch.Tensor,  # [..., C, H, W]
         mask: torch.Tensor,  # [..., H, W]
         blending_param: object,
     ):
         device = next(self.parameters()).device
 
-        color_channels_cnt = self.gp_colors.shape[-1]
+        color_channels_cnt = self.gp_log_colors.shape[-1]
 
         H, W = -1, -2
 
@@ -102,6 +104,7 @@ class Module(torch.nn.Module):
         vertex_positions_c = vertex_positions[..., faces[:, 2], :]
         # [..., F, 3]
 
+        """
         face_coord_result = get_face_coord(
             vertex_positions_a, vertex_positions_b, vertex_positions_c)
 
@@ -109,6 +112,7 @@ class Module(torch.nn.Module):
             face_coord_result.Ts[..., :3, :3],
             order="WXYZ",
         )
+        """
         # [..., F, 4] wxyz
 
         """
@@ -130,9 +134,11 @@ class Module(torch.nn.Module):
         gp_global_scales = self.gp_scales
         # [..., F, 3]
 
+        gp_colors = torch.exp(self.gp_log_colors)
+
         rendered_result = gaussian_utils.render_gaussian(
-            camera_transform=camera_transform,
             camera_config=camera_config,
+            camera_transform=camera_transform,
 
             sh_degree=0,
 
@@ -144,9 +150,9 @@ class Module(torch.nn.Module):
             gp_scales=gp_global_scales,
 
             gp_shs=None,
-            gp_colors=self.gp_colors,
+            gp_colors=gp_colors,
 
-            gp_opacities=self.gp_opacities,
+            gp_opacities=torch.exp(self.gp_log_opacities),
 
             device=device,
         )  # [...]
@@ -195,12 +201,13 @@ class Module(torch.nn.Module):
         if not self.training:
             color_diff_loss = 0.0
         else:
-            color_diff = mesh_data.calc_face_cos_sims(self.gp_colors)
+            color_diff = mesh_data.calc_face_cos_sims(gp_colors)
             # [..., FP]
 
             color_diff_loss = color_diff.square().mean()
 
         return ModuleForwardResult(
+            avatar_model=avatar_model,
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,
             lap_loss=lap_loss,

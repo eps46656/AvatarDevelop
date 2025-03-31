@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import enum
 import functools
 import itertools
@@ -11,9 +12,9 @@ import sys
 import time
 import types
 import typing
-import PIL
 
 import einops
+import PIL
 import torch
 import torchvision
 from beartype import beartype
@@ -43,6 +44,35 @@ class Empty:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(key, value)
+
+
+@beartype
+def print_pos(
+    time: datetime.datetime,
+    filename: str,
+    lineno: int,
+    funcname: str,
+):
+    timestr = serialize_datetime(time, True)
+    print(f"{timestr}\t{filename}:{lineno}\t\t{funcname}")
+
+
+@beartype
+def _print_cur_pos():
+    time = datetime.datetime.now()
+    frame = sys._getframe(2)
+
+    print_pos(
+        time,
+        frame.f_code.co_filename,
+        frame.f_lineno,
+        frame.f_code.co_name,
+    )
+
+
+@beartype
+def print_cur_pos():
+    _print_cur_pos()
 
 
 @beartype
@@ -97,6 +127,27 @@ def rand_int(lb: int, rb: int):
 def rand_float(lb: float, rb: float):
     assert lb <= rb
     return random.random() * (rb - lb) + lb
+
+
+@beartype
+def serialize_datetime(
+    dt: typing.Optional[datetime.datetime],
+    second_precision: bool,
+):
+    if dt is None:
+        dt = None
+
+    dt = dt.replace(tzinfo=datetime.timezone.utc)
+
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if second_precision else dt.strftime("%Y-%m-%d")
+
+
+@beartype
+def deserialize_datetime(
+    dt_str: typing.Optional[str],
+    second_precision: bool,
+):
+    return None if dt_str is None else datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S" if second_precision else "%Y-%m-%d")
 
 
 class UnimplementationError(Exception):
@@ -179,7 +230,7 @@ def allocate_id(lb: int, rb: int, s=None):
 
 
 @beartype
-def CreateFile(path: os.PathLike, mode: str = "w"):
+def create_file(path: os.PathLike, mode: str = "w"):
     path = pathlib.Path(path)
 
     os.makedirs(path.parents[0], exist_ok=True)
@@ -202,7 +253,7 @@ def write_file(
     mode: str,
     data,
 ):
-    with CreateFile(path, mode) as f:
+    with create_file(path, mode) as f:
         f.write(data)
 
 
@@ -233,7 +284,7 @@ def write_pickle(
 
 
 @beartype
-def image_normalize(
+def normalize_image(
     img: torch.Tensor,
     *,
     k: int = 255,
@@ -243,13 +294,13 @@ def image_normalize(
 
 
 @beartype
-def image_denormalize(
+def denormalize_image(
     img: torch.Tensor,
     *,
     k: int = 255,
     dtype: torch.dtype = torch.uint8,
 ) -> torch.Tensor:
-    return (img * k).round().clamp(0, k).to(dtype=dtype)
+    return (img * k).round().clamp(0, k).to(dtype)
 
 
 @beartype
@@ -258,7 +309,7 @@ def read_image(path: os.PathLike):
         path, torchvision.io.ImageReadMode.RGB)
     # [C, H, W]
 
-    return image_normalize(img)
+    return normalize_image(img)
 
 
 @beartype
@@ -272,15 +323,25 @@ def write_image(
 
     os.makedirs(path.parents[0], exist_ok=True)
 
-    img = image_denormalize(img)
+    print_cur_pos()
+
+    img = denormalize_image(img)
+
+    print_cur_pos()
 
     if path.suffix == ".png":
+        print_cur_pos()
         torchvision.io.write_png(img, path)
+        print_cur_pos()
         return
 
     if path.suffix == ".jpg" or path.suffix == ".jpeg":
+        print_cur_pos()
         torchvision.io.write_jpeg(img, path)
+        print_cur_pos()
         return
+
+    print_cur_pos()
 
     assert False, f"unknown extension: {path.suffix}"
 
@@ -301,7 +362,7 @@ def read_video(
 
     video_fps = int(d.get("video_fps", -1))
 
-    return image_normalize(video), video_fps
+    return normalize_image(video), video_fps
 
 
 @beartype
@@ -313,7 +374,7 @@ def write_video(
 ) -> None:
     torchvision.io.write_video(
         filename=path,
-        video_array=image_denormalize(
+        video_array=denormalize_image(
             einops.rearrange(video, "t c h w -> t h w c")),
         fps=fps,
         video_codec=codec,

@@ -1,4 +1,5 @@
 import random
+import typing
 
 import torch
 from beartype import beartype
@@ -12,7 +13,7 @@ class Dataset:
     def shape() -> torch.Size:
         raise utils.UnimplementationError()
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor, ...]):
+    def __getitem__(self, idx):
         raise utils.UnimplementationError()
 
 
@@ -40,7 +41,7 @@ class DatasetLoader:
         *,
         random_batch_size: bool = True,
         random_sample: bool = True,
-    ):
+    ) -> typing.Iterable[tuple[tuple[torch.Tensor], object]]:
         dataset_shape = self.dataset.shape
         dataset_size = dataset_shape.numel()
 
@@ -69,6 +70,6 @@ class DatasetLoader:
                 for d in range(len(dataset_shape))
             )
 
-            yield cur_batch_idxes, self.dataset.batch_get(cur_batch_idxes)
+            yield cur_batch_idxes, self.dataset[cur_batch_idxes]
 
             i = nxt_i

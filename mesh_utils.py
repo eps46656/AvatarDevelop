@@ -195,7 +195,7 @@ class MeshData:
     ) -> typing.Self:
         faces_cnt = utils.check_shapes(face_vertex_adj_list, (-1, 3))
 
-        face_vertex_adj_list = face_vertex_adj_list.to(device=utils.CPU_DEVICE)
+        face_vertex_adj_list = face_vertex_adj_list.to(utils.CPU_DEVICE)
 
         edge_to_face_d: collections.defaultdict[tuple[int, int],
                                                 list[int]] = \
@@ -227,8 +227,7 @@ class MeshData:
                 for j in range(i+1, l):
                     face_face_adj_rel_list.add(utils.min_max(fs[i], fs[j]))
 
-        face_vertex_adj_list = face_vertex_adj_list.to(
-            dtype=torch.long, device=device)
+        face_vertex_adj_list = face_vertex_adj_list.to(torch.long, device)
 
         vertex_vertex_adj_rel_list = torch.tensor(
             sorted(edge_to_face_d.keys()),
@@ -246,9 +245,9 @@ class MeshData:
             vertex_degrees == 0,
             0,
             1.0 / vertex_degrees,
-        ).to(dtype=utils.FLOAT, device=device)
+        ).to(utils.FLOAT, device)
 
-        vertex_degrees = vertex_degrees.to(device=device)
+        vertex_degrees = vertex_degrees.to(device)
 
         return MeshData(
             vertices_cnt=vertices_cnt,
@@ -363,8 +362,6 @@ class MeshData:
         vecs_0 = face_vecs[..., self.face_face_adj_rel_list[:, 0], :]
         vecs_1 = face_vecs[..., self.face_face_adj_rel_list[:, 1], :]
         # [..., FP, D]
-
-        print(vecs_0.shape)
 
         return utils.dot(vecs_0, vecs_1)
 

@@ -523,7 +523,7 @@ def make_proj_mat_with_config(
     device = camera_view_transform.device
 
     camera_std_transform = \
-        transform_utils.ObjectTransform.from_matching("LUF").to(device=device)
+        transform_utils.ObjectTransform.from_matching("LUF").to(device)
     # camera <-> std
 
     # camera_view_transform
@@ -537,7 +537,7 @@ def make_proj_mat_with_config(
     # [..., 4, 4]
 
     std_to_dst = camera_std_transform.get_trans_to(
-        proj_config.camera_proj_transform.to(device=device))
+        proj_config.camera_proj_transform.to(device))
     # std -> proj
     # [4, 4]
 
@@ -642,7 +642,7 @@ def make_proj_mat_with_config(
         case _:
             assert False, f"Unknown proj type {camera_config.proj_type}."
 
-    return (std_to_dst @ M.to(device=device)) @ src_to_std
+    return (std_to_dst @ M.to(device)) @ src_to_std
 
 
 @beartype

@@ -9,18 +9,11 @@ from .. import camera_utils, dataset_utils, transform_utils, utils
 
 @beartype
 class Sample:
-    camera_transform: transform_utils.ObjectTransform  # [...]
-    camera_config: camera_utils.CameraConfig
-
-    img: torch.Tensor  # [..., C, H, W]
-    mask: typing.Optional[torch.Tensor]  # [..., H, W]
-    blending_param: object
-
     def __init__(
         self,
         *,
-        camera_transform: transform_utils.ObjectTransform,  # [...]
         camera_config: camera_utils.CameraConfig,
+        camera_transform: transform_utils.ObjectTransform,  # [...]
 
         img: torch.Tensor,  # [..., C, H, W]
         mask: typing.Optional[torch.Tensor],  # [..., H, W]
@@ -35,8 +28,8 @@ class Sample:
 
         # ---
 
-        self.camera_transform = camera_transform
         self.camera_config = camera_config
+        self.camera_transform = camera_transform
 
         self.img = img
         self.mask = mask
@@ -57,30 +50,24 @@ class Sample:
 
     def to(self, *args, **kwargs) -> typing.Self:
         return Sample(
-            camera_transform=self.camera_transform.to(*args, **kwargs),
             camera_config=self.camera_config,
+            camera_transform=self.camera_transform.to(*args, **kwargs),
 
             img=self.img.to(*args, **kwargs),
             mask=None if self.mask is None else self.mask.to(*args, **kwargs),
             blending_param=self.blending_param.to(*args, **kwargs),
         )
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor]) -> typing.Self:
-        batch_shape = self.shape
-
-        assert len(batch_idxes) == len(batch_shape)
-
+    def __getitem__(self, idx) -> typing.Self:
         return Sample(
-            camera_transform=self.camera_transform.batch_get(
-                batch_idxes),
-
             camera_config=self.camera_config,
+            camera_transform=self.camera_transform[idx],
 
-            img=self.img[batch_idxes],
+            img=self.img[idx],
             mask=None if self.mask is None else
-            self.mask[batch_idxes],
+            self.mask[idx],
 
-            blending_param=self.blending_param.batch_get(batch_idxes)
+            blending_param=self.blending_param[idx],
         )
 
 
@@ -110,8 +97,8 @@ class Dataset(dataset_utils.Dataset):
         )
 
         self.sample = Sample(
-            camera_transform=sample.camera_transform.expand(batch_shape),
             camera_config=sample.camera_config,
+            camera_transform=sample.camera_transform.expand(batch_shape),
 
             img=sample.img.expand(batch_shape + (C, H, W)),
             mask=None if sample.mask is None else
@@ -132,5 +119,5 @@ class Dataset(dataset_utils.Dataset):
         self.sample = self.sample.to(*args, **kwargs)
         return self
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor]) -> Sample:
-        return self.sample.batch_get(batch_idxes)
+    def __getitem__(self, idx) -> Sample:
+        return self.sample[idx]

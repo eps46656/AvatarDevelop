@@ -71,7 +71,7 @@ def main1():
 
     # model_mat = utils.GetRotMat(Y_AXIS, 0*utils.DEG) @ model_mat
 
-    model_mat = model_mat.to(dtype=FLOAT, device=DEVICE)
+    model_mat = model_mat.to(FLOAT, DEVICE)
 
     with open(DIR / "smplx_param.json") as f:
         pose_params = json.load(f)

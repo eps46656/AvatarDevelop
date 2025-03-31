@@ -5,7 +5,7 @@ import pathlib
 import torch
 from beartype import beartype
 
-from . import (camera_utils, config, gom_avatar_utils, people_snapshot_utils,
+from . import (camera_utils, config, gom_utils, people_snapshot_utils,
                smplx_utils, transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
@@ -60,7 +60,7 @@ def main1():
         device=DEVICE,
     )
 
-    subject_data.video = utils.image_normalize(subject_data.video)
+    subject_data.video = utils.normalize_image(subject_data.video)
 
     camera_config = subject_data.camera_config
 
@@ -76,7 +76,7 @@ def main1():
         device=DEVICE,
     )
 
-    gom_avatar_module = gom_avatar_utils.Module(
+    gom_avatar_module = gom_utils.Module(
         avatar_blender=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
@@ -99,7 +99,7 @@ def main1():
 
             print(f"{epoch_i=}\t\t{frame_i=}")
 
-            result: gom_avatar_utils.ModuleForwardResult =\
+            result: gom_utils.ModuleForwardResult =\
                 gom_avatar_module(
                     subject_data.camera_transform,
                     subject_data.camera_config,
@@ -146,7 +146,7 @@ def main1():
 
         utils.write_video(
             path=DIR / f"output_{epoch_i}.mp4",
-            video=utils.image_denormalize(frames),
+            video=utils.denormalize_image(frames),
             fps=30,
         )
 

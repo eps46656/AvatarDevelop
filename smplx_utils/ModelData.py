@@ -27,7 +27,7 @@ class ModelData:
         # [..., TV, 2]
 
         faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
-        texture_faces: typing.Optional[torch.Tensor] = None,  # [TF, 3]
+        texture_faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
 
         body_shape_dirs: torch.Tensor,  # [..., V, 3, BS]
         expr_shape_dirs: typing.Optional[torch.Tensor] = None,
@@ -85,8 +85,8 @@ class ModelData:
 
         F = 0 if faces is None else utils.check_shapes(faces, (-1, 3))
 
-        TF = 0 if texture_faces is None else \
-            utils.check_shapes(texture_faces, (-1, 3))
+        if texture_faces is not None:
+            utils.check_shapes(texture_faces, (F, 3))
 
         utils.check_shapes(pose_dirs, (..., V, 3, (J - 1) * 3 * 3))
 
@@ -196,7 +196,7 @@ class ModelData:
         # ---
 
         vertex_positions = torch.from_numpy(model_data["v_template"]) \
-            .to(dtype=utils.FLOAT, device=device)
+            .to(utils.FLOAT, device)
         # [V, 3]
 
         V = utils.check_shapes(vertex_positions, (-1, 3))
@@ -204,21 +204,21 @@ class ModelData:
         # ---
 
         pose_dirs = torch.from_numpy(model_data["posedirs"]) \
-            .to(dtype=utils.FLOAT, device=device)
+            .to(utils.FLOAT, device)
 
         utils.check_shapes(pose_dirs, (V, 3, (J - 1) * 3 * 3))
 
         # ---
 
         lbs_weights = torch.from_numpy(model_data["weights"]) \
-            .to(dtype=utils.FLOAT, device=device)
+            .to(utils.FLOAT, device)
 
         utils.check_shapes(lbs_weights, (V, J))
 
         # ---
 
         joint_regressor = torch.from_numpy(model_data["J_regressor"]) \
-            .to(dtype=utils.FLOAT, device=device)
+            .to(utils.FLOAT, device)
 
         utils.check_shapes(joint_regressor, (J, V))
 
@@ -243,7 +243,7 @@ class ModelData:
                     0
                 )
 
-            return ret.to(dtype=utils.FLOAT, device=device)
+            return ret.to(utils.FLOAT, device)
 
         shape_dirs = torch.from_numpy(model_data["shapedirs"])
 
@@ -282,7 +282,7 @@ class ModelData:
 
         if "vt" in model_data:
             texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
-                .to(dtype=utils.FLOAT, device=device)
+                .to(utils.FLOAT, device)
 
             TV = utils.check_shapes(texture_vertex_positions, (..., -1, 2))
         else:
@@ -291,8 +291,7 @@ class ModelData:
 
         # ---
 
-        faces = torch.from_numpy(model_data["f"]) \
-            .to(dtype=torch.long, device=device)
+        faces = torch.from_numpy(model_data["f"]).to(torch.long, device)
 
         F = utils.check_shapes(faces, (..., -1, 3))
 
@@ -300,13 +299,11 @@ class ModelData:
 
         if "ft" in model_data:
             texture_faces = torch.from_numpy(model_data["ft"]) \
-                .to(dtype=torch.long, device=device)
+                .to(torch.long, device)
 
-            TF = utils.check_shapes(texture_faces, (..., -1, 3))
+            utils.check_shapes(texture_faces, (..., F, 3))
         else:
             texture_faces = None
-
-            TF = 0
 
         # ---
 
@@ -314,7 +311,7 @@ class ModelData:
             lhand_poses_mean = torch.from_numpy(
                 model_data["hands_meanl"]) \
                 .reshape((-1, 3))[-model_config.hand_joints_cnt:, :] \
-                .to(dtype=utils.FLOAT, device=device)
+                .to(utils.FLOAT, device)
         else:
             lhand_poses_mean = None
 
@@ -322,7 +319,7 @@ class ModelData:
             rhand_poses_mean = torch.from_numpy(
                 model_data["hands_meanr"]) \
                 .reshape((-1, 3))[-model_config.hand_joints_cnt:, :] \
-                .to(dtype=utils.FLOAT, device=device)
+                .to(utils.FLOAT, device)
         else:
             rhand_poses_mean = None
 
@@ -344,7 +341,7 @@ class ModelData:
             vertex_normals=mesh_utils.get_area_weighted_vertex_normals(
                 faces=faces,
                 vertex_positions=vertex_positions,
-            ).to(dtype=utils.FLOAT, device=device),
+            ).to(utils.FLOAT, device),
 
             texture_vertex_positions=texture_vertex_positions,
 

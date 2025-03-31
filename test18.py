@@ -228,7 +228,7 @@ def main1():
 
     utils.write_video(
         path=DIR / "output.mp4",
-        video=utils.image_denormalize(out_frames),
+        video=utils.denormalize_image(out_frames),
         fps=30,
     )
 

@@ -182,10 +182,11 @@ class ObjectTransform:
             self.inv_trans.expand(s),
         )
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor, ...]):
-        assert len(batch_idxes) == len(self.shape)
+    def __getitem__(self, idx):
+        if not isinstance(idx, tuple):
+            idx = (idx,)
 
         return ObjectTransform(
-            self.trans[batch_idxes],
-            self.inv_trans[batch_idxes],
+            self.trans[*idx, :, :],
+            self.inv_trans[*idx, :, :],
         )

@@ -277,14 +277,14 @@ class GaussRenderer(nn.Module):
             torch.arange(camera.image_width),
             torch.arange(camera.image_height),
             indexing='xy'
-        ), dim=-1).to(device=DEVICE)
+        ), dim=-1).to(DEVICE)
 
         self.render_color = torch.ones(
-            *pix_coord.shape[:2], 3).to(device=DEVICE)
+            *pix_coord.shape[:2], 3).to(DEVICE)
         self.render_depth = torch.zeros(
-            *pix_coord.shape[:2], 1).to(device=DEVICE)
+            *pix_coord.shape[:2], 1).to(DEVICE)
         self.render_alpha = torch.zeros(
-            *pix_coord.shape[:2], 1).to(device=DEVICE)
+            *pix_coord.shape[:2], 1).to(DEVICE)
 
         TILE_SIZE = 64
         for h in range(0, camera.image_height, TILE_SIZE):

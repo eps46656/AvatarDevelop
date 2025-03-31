@@ -27,7 +27,7 @@ class AvatarModel:
 
         faces: torch.Tensor,  # [..., F, 3]
 
-        texture_faces: typing.Optional[torch.Tensor] = None,  # [..., TF, 3]
+        texture_faces: typing.Optional[torch.Tensor] = None,  # [..., F, 3]
 
         joint_Ts: typing.Optional[torch.Tensor] = None,  # [..., J, 4, 4]
 
@@ -56,7 +56,7 @@ class AvatarModel:
         F = utils.check_shapes(faces, (..., -1, 3))
 
         if texture_faces is not None:
-            TF = utils.check_shapes(texture_faces, (..., -1, 3))
+            utils.check_shapes(texture_faces, (..., F, 3))
 
         if joint_Ts is not None:
             utils.check_shapes(joint_Ts, (..., J, 4, 4))

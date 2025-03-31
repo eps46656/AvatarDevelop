@@ -61,7 +61,7 @@ def main1():
 
     # model_mat = utils.GetRotMat(Y_AXIS, 0*utils.DEG) @ model_mat
 
-    model_mat = model_mat.to(dtype=utils.FLOAT, device=DEVICE)
+    model_mat = model_mat.to(utils.FLOAT, DEVICE)
 
     with open(DIR / "smplx_param.json") as f:
         pose_params = json.load(f)
@@ -119,7 +119,7 @@ def main1():
     # [V, 2]
 
     albedo_map = utils.read_image(DIR / "black_male.png", "hwc"
-                                  ).to(dtype=utils.FLOAT, device=DEVICE)
+                                  ).to(utils.FLOAT, DEVICE)
     print(f"{albedo_map.shape=}")
 
     albedo_texture = pytorch3d.renderer.TexturesUV(
@@ -150,7 +150,7 @@ def main1():
         view_axes="luf",
         dtype=utils.FLOAT,
         device=DEVICE,
-    ).to(dtype=utils.FLOAT, device=DEVICE)
+    ).to(utils.FLOAT, DEVICE)
 
     print(f"{view_mat=}")
 

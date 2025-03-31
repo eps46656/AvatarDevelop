@@ -59,8 +59,6 @@ def get_face_coord(
 
     min_edge_length = min(ab_norm.min(), bc_norm.min(), ca_norm.min())
 
-    print(f"{min_edge_length=}")
-
     axb = torch.linalg.cross(vpa, vpb)
     bxc = torch.linalg.cross(vpb, vpc)
     cxa = torch.linalg.cross(vpc, vpa)
@@ -71,8 +69,6 @@ def get_face_coord(
     min_double_face_area = double_face_area.min()
 
     assert 2e-4 <= min_double_face_area, f"{min_double_face_area=}"
-
-    print(f"{min_double_face_area=}")
 
     sa = vpa - s
 
@@ -87,12 +83,6 @@ def get_face_coord(
 
     Ts[..., :3, 1] = torch.linalg.cross(axis_z, axis_x)
     axis_y = Ts[..., :3, 1]
-
-    print(f"{s.shape=}")
-
-    print(f"{axis_x.shape=}")
-    print(f"{axis_y.shape=}")
-    print(f"{axis_z.shape=}")
 
     err = (axis_z * axis_x).sum(-1).abs().max()
     assert err <= 2e-3, err

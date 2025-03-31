@@ -19,13 +19,15 @@ def read_obj(obj_path: os.PathLike):
         for line in file:
             parts = line.split()
 
-            if parts and parts[0] == 'vt':
+            if not parts:
+                continue
+
+            if parts[0] == 'vt':
                 texture_vertex_position.append(list(map(float, parts[1:])))
 
-            if parts and parts[0] == "f":
+            if parts[0] == "f":
                 texture_faces.append(
-                    [int(part.split('/')[1]) - 1 for part in parts[1:]]
-                )
+                    [int(part.split('/')[1]) - 1 for part in parts[1:]])
 
     return texture_vertex_position, texture_faces
 
@@ -108,13 +110,21 @@ def main1():
 
     uv_map_path = DIR / f"smpl_uv_20200910/smpl_uv.obj"
 
-    texture_faces, texture_vertices = read_obj(uv_map_path)
+    texture_vertices, texture_faces = read_obj(uv_map_path)
 
-    smpl_texture_faces = np.array(texture_faces)
     smpl_texture_vertices = np.array(texture_vertices)
+    smpl_texture_faces = np.array(texture_faces)
+
+    print(f"{smpl_texture_vertices.shape}")
+    print(f"{smpl_texture_faces.shape}")
+
+    print(f"{smpl_texture_faces.min()}")
+    print(f"{smpl_texture_faces.max()}")
+
+    return
 
     for model_name in model_names:
-        F(model_name, smpl_texture_faces, smpl_texture_vertices)
+        F(model_name, smpl_texture_vertices, smpl_texture_faces)
 
 
 def main2():

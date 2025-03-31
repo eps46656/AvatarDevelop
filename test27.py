@@ -6,7 +6,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (config, dataset_utils, gom_avatar_utils, people_snapshot_utils,
+from . import (config, dataset_utils, gom_utils, people_snapshot_utils,
                smplx_utils, training_utils, utils)
 
 FILE = pathlib.Path(__file__)
@@ -51,10 +51,9 @@ class MyTrainingCore(training_utils.TrainingCore):
         for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
             batch_idxes: tuple[torch.Tensor, ...]
 
-            sample: gom_avatar_utils.Sample = \
-                self.dataset.batch_get(batch_idxes)
+            sample: gom_utils.Sample = self.dataset[batch_idxes]
 
-            result: gom_avatar_utils.ModuleForwardResult = self.module(
+            result: gom_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
                 img=sample.img,
@@ -95,7 +94,7 @@ class MyTrainingCore(training_utils.TrainingCore):
         )
 
     def eval(self):
-        self.dataset: gom_avatar_utils.Dataset
+        self.dataset: gom_utils.Dataset
 
         out_frames = torch.empty_like(
             self.dataset.sample.img,
@@ -120,10 +119,9 @@ class MyTrainingCore(training_utils.TrainingCore):
                     idxes.shape + (C, H, W))
                 # [K, C, H, W]
 
-                sample: gom_avatar_utils.Sample = \
-                    self.dataset.batch_get(batch_idxes)
+                sample: gom_utils.Sample = self.dataset[batch_idxes]
 
-                result: gom_avatar_utils.ModuleForwardResult = self.module(
+                result: gom_utils.ModuleForwardResult = self.module(
                     camera_transform=sample.camera_transform,
                     camera_config=sample.camera_config,
                     img=sample.img,
@@ -136,8 +134,8 @@ class MyTrainingCore(training_utils.TrainingCore):
 
                 out_frames.scatter_(
                     0,
-                    idxes.to(device=out_frames.device),
-                    rendered_img.to(device=out_frames.device))
+                    idxes.to(out_frames.device),
+                    rendered_img.to(out_frames.device))
 
                 """
 
@@ -148,7 +146,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         utils.write_video(
             path=PROJ_DIR / f"output_{int(time.time())}.mp4",
-            video=utils.image_denormalize(out_frames),
+            video=utils.denormalize_image(out_frames),
             fps=25,
         )
 
@@ -190,13 +188,13 @@ def main1():
     print(f"{subject_data.blending_param.shape=}")
     print(f"{subject_data.model_data.vertex_positions.shape=}")
 
-    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
+    dataset = gom_utils.Dataset(gom_utils.Sample(
         camera_transform=subject_data.camera_transform,
         camera_config=subject_data.camera_config,
         img=subject_data.video,
         mask=subject_data.mask,
         blending_param=subject_data.blending_param,
-    )).to(device=DEVICE)
+    )).to(DEVICE)
 
     dataset_loader = dataset_utils.DatasetLoader(
         dataset,
@@ -207,16 +205,16 @@ def main1():
 
     smplx_model_builder = smplx_utils.DeformableModelBuilder(
         model_data=subject_data.model_data,
-    ).to(device=DEVICE)
+    ).to(DEVICE)
 
     smplx_model_blender = smplx_utils.ModelBlender(
         model_builder=smplx_model_builder,
     )
 
-    gom_avatar_module = gom_avatar_utils.Module(
+    gom_avatar_module = gom_utils.Module(
         avatar_blender=smplx_model_blender,
         color_channels_cnt=3,
-    ).to(device=DEVICE).train()
+    ).to(DEVICE).train()
 
     optimizer = torch.optim.Adam(
         gom_avatar_module.parameters(),

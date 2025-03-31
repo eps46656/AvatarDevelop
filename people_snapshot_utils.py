@@ -18,8 +18,8 @@ class SubjectData:
     video: torch.Tensor  # [T, C, H, W]
     mask: torch.Tensor  # [T, H, W]
 
-    camera_transform: transform_utils.ObjectTransform
     camera_config: camera_utils.CameraConfig
+    camera_transform: transform_utils.ObjectTransform
 
     model_data: smplx_utils.ModelData
 
@@ -35,7 +35,7 @@ def _read_mask(
     mask_video_path = subject_dir / "masks.mp4"
 
     if mask_video_path.exists():
-        return utils.read_video(mask_video_path)[0].mean(1).to(device=device)
+        return utils.read_video(mask_video_path)[0].mean(1).to(device)
 
     f = h5py.File(subject_dir / "masks.hdf5")
 
@@ -59,8 +59,8 @@ def _read_camera(
     img_h: int,
     img_w: int,
 ) -> tuple[
-    transform_utils.ObjectTransform,  # camera <-> world
     camera_utils.CameraConfig,
+    transform_utils.ObjectTransform,  # camera <-> world
 ]:
     camera = utils.read_pickle(subject_dir / "camera.pkl")
 
@@ -91,7 +91,7 @@ def _read_camera(
         img_w=img_w,
     )
 
-    return camera_transform, camera_config
+    return camera_config, camera_transform
 
 
 @beartype
@@ -163,17 +163,14 @@ def _read_smpl_blending_param(
     # ---
 
     return smplx_utils.BlendingParam(
-        body_shapes=body_shapes[:frames_cnt]
-        .to(dtype=utils.FLOAT, device=device),
+        body_shapes=body_shapes[:frames_cnt].to(utils.FLOAT, device),
 
         global_transl=global_transl[:frames_cnt]
-        .to(dtype=utils.FLOAT, device=device),
+        .to(utils.FLOAT, device=device),
 
-        global_rot=global_rot[:frames_cnt]
-        .to(dtype=utils.FLOAT, device=device),
+        global_rot=global_rot[:frames_cnt].to(utils.FLOAT, device),
 
-        body_poses=body_poses[:frames_cnt]
-        .to(dtype=utils.FLOAT, device=device),
+        body_poses=body_poses[:frames_cnt].to(utils.FLOAT, device),
     )
 
 
@@ -204,7 +201,7 @@ def read_subject(
 
     img_h, img_w = video.shape[2:]
 
-    camera_transform, camera_config = \
+    camera_config, camera_transform = \
         _read_camera(subject_dir, img_h, img_w)
 
     blending_param = _read_smpl_blending_param(
@@ -215,8 +212,8 @@ def read_subject(
     ret = SubjectData(
         fps=fps,
         video=video,
-        camera_transform=camera_transform,
         camera_config=camera_config,
+        camera_transform=camera_transform,
         model_data=model_data,
         blending_param=blending_param,
         mask=mask,

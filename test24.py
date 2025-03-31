@@ -51,8 +51,7 @@ class MyTrainingCore(training_utils.TrainingCore):
         for idxes, sample in tqdm.tqdm(self.dataset_loader):
             idxes: torch.Tensor
 
-            sample: people_snapshot_utils.SubjectData = \
-                self.dataset.batch_get(idxes)
+            sample: people_snapshot_utils.SubjectData = self.dataset[idxes]
 
             result = self.module(
                 camera_transform=sample.camera_transform,

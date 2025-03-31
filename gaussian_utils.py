@@ -24,11 +24,11 @@ class RenderGaussianResult:
 
 @beartype
 def render_gaussian(
+    camera_config: camera_utils.CameraConfig,
+
     camera_transform: transform_utils.ObjectTransform,
     # camera <-> world
     # [...]
-
-    camera_config: camera_utils.CameraConfig,
 
     sh_degree: int,  # 0 ~ 2
 
@@ -46,10 +46,10 @@ def render_gaussian(
     device: torch.device,
 ):
     cur_camera_view_transform = camera_view_transform.to(
-        device=camera_transform.device)
+        camera_transform.device)
 
     cur_camera_ndc_transform = camera_ndc_transform.to(
-        device=camera_transform.device)
+        camera_transform.device)
 
     world_view_mat = camera_transform.get_trans_to(cur_camera_view_transform)
     # world -> view [..., 4, 4]
@@ -114,32 +114,30 @@ def render_gaussian(
 
     # ---
 
-    world_view_mat = world_view_mat.to(device=utils.CUDA_DEVICE).expand(
+    world_view_mat = world_view_mat.to(utils.CUDA_DEVICE).expand(
         batch_shape + (4, 4))
 
-    world_ndc_mat = world_ndc_mat.to(device=utils.CUDA_DEVICE).expand(
+    world_ndc_mat = world_ndc_mat.to(utils.CUDA_DEVICE).expand(
         batch_shape + (4, 4))
 
-    camera_pos = camera_transform.pos.to(device=utils.CUDA_DEVICE).expand(
+    camera_pos = camera_transform.pos.to(utils.CUDA_DEVICE).expand(
         batch_shape + (3,))
     # [..., 3]
 
-    bg_color = bg_color.to(device=utils.CUDA_DEVICE).expand(batch_shape + (C,))
-    gp_means = gp_means.to(device=utils.CUDA_DEVICE).expand(
-        batch_shape + (N, 3))
-    gp_rots = gp_rots.to(device=utils.CUDA_DEVICE).expand(batch_shape + (N, 4))
-    gp_scales = gp_scales.to(
-        device=utils.CUDA_DEVICE).expand(batch_shape + (N, 3))
-    gp_opacities = gp_opacities.to(
-        device=utils.CUDA_DEVICE).expand(batch_shape + (N, 1))
+    bg_color = bg_color.to(utils.CUDA_DEVICE).expand(batch_shape + (C,))
+    gp_means = gp_means.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 3))
+    gp_rots = gp_rots.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 4))
+    gp_scales = gp_scales.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 3))
+    gp_opacities = gp_opacities.to(utils.CUDA_DEVICE) \
+        .expand(batch_shape + (N, 1))
 
     if gp_shs is not None:
-        gp_shs = gp_shs.to(device=utils.CUDA_DEVICE).expand(
+        gp_shs = gp_shs.to(utils.CUDA_DEVICE).expand(
             batch_shape + (N, C))
 
     if gp_colors is not None:
-        gp_colors = gp_colors.to(
-            device=utils.CUDA_DEVICE).expand(batch_shape + (N, C))
+        gp_colors = gp_colors.to(utils.CUDA_DEVICE) \
+            .expand(batch_shape + (N, C))
 
     # ---
 

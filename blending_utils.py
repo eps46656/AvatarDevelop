@@ -78,11 +78,11 @@ def lbs(
     del_joint_Ts = target_joint_Ts @ inv_binding_joint_Ts
     # del_joint_rs[..., J, D+1, D+1]
 
-    del_joint_Ts = del_joint_Ts.to(device=device)
+    del_joint_Ts = del_joint_Ts.to(device)
 
     assert del_joint_Ts.isfinite().all()
 
-    lbs_weights = lbs_weights.to(device=device)
+    lbs_weights = lbs_weights.to(device)
 
     if vertex_positions is None:
         ret_vps = None

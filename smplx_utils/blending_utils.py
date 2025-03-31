@@ -187,10 +187,8 @@ class BlendingParam:
         return BlendingParam(
             **d, blending_vertex_normal=self.blending_vertex_normal)
 
-    def batch_get(self, batch_idxes: tuple[torch.Tensor, ...]):
+    def __getitem__(self, idx):
         batch_shape = self.shape
-
-        assert len(batch_shape) == len(batch_idxes)
 
         d = dict()
 
@@ -198,7 +196,7 @@ class BlendingParam:
             cur_val = getattr(self, key)
 
             d[key] = None if cur_val is None else \
-                cur_val.expand(batch_shape + cur_val.shape[val:])[batch_idxes]
+                cur_val.expand(batch_shape + cur_val.shape[val:])[idx]
 
         return BlendingParam(
             **d, blending_vertex_normal=self.blending_vertex_normal)

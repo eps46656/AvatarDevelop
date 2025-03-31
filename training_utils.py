@@ -93,9 +93,6 @@ class LogDatabase:
         conditions: typing.Optional[dict[str, object]],
     ):
         ckpt_meta = self.ckpt_meta_table.select_one(conditions)
-
-        print(f"{ckpt_meta=}")
-
         return None if ckpt_meta is None else CheckpointMeta(**ckpt_meta)
 
     def select_latest_ckpt_meta(self):
@@ -357,7 +354,7 @@ class Trainer:
                 val = d[field_name]
 
                 if field_name == "module":
-                    val = val.to(device=self.__device)
+                    val = val.to(self.__device)
 
                 setattr(self.training_core, field_name, val)
         else:
@@ -371,7 +368,7 @@ class Trainer:
                     field_val.load_state_dict(d[field_name])
 
                 if field_name == "module":
-                    field_val.to(device=self.__device)
+                    field_val.to(self.__device)
 
         self.__prv = ckpt_meta.prv
         self.__epochs_cnt = 0
@@ -419,8 +416,8 @@ class Trainer:
             for field_name in {"module", "optimizer", "scheduler"}:
                 field_val = getattr(self.training_core, field_name)
 
-                d[field_name] = None if field_val is None else
-                field_val.state_dict()
+                d[field_name] = None if field_val is None else \
+                    field_val.state_dict()
 
         torch.save(
             d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
@@ -511,6 +508,7 @@ class Trainer:
                     return
             except KeyboardInterrupt:
                 print(traceback.format_exc())
+                utils.exit()
                 break
             except:
                 print(traceback.format_exc())

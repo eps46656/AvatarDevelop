@@ -57,6 +57,9 @@ def main1():
         ratio = 1 - len(intersection_pixels) / (
             len(naive_bcs) + len(bcs) - len(intersection_pixels))
 
+        print(f"{len(naive_bcs)=}")
+        print(f"{len(bcs)=}")
+        print(f"{len(intersection_pixels)=}")
         print(f"{ratio*100=}")
 
         for pixel in bcs:

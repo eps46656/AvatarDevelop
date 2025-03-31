@@ -67,7 +67,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         vertices_cnt = model_data.vertex_positions.shape[-2]
 
-        texture_vertices_cnt = model_data.vertex_positions.shape[-2]
+        texture_vertices_cnt = model_data.texture_vertex_positions.shape[-2]
 
         texture_vertex_positions = model_data.texture_vertex_positions
 

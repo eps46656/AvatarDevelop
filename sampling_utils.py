@@ -21,7 +21,7 @@ def cubic_interp(
 ):
     utils.check_shapes(ys, (..., 4))
 
-    cs = (cubic_interp_coeff_mat.to(device=ys.device) @ ys.unsqueeze(-1)) \
+    cs = (cubic_interp_coeff_mat.to(ys.device) @ ys.unsqueeze(-1)) \
         .squeeze(-1)
     # [..., 4]
 
