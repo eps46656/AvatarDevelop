@@ -245,7 +245,7 @@ class MeshData:
             vertex_degrees == 0,
             0,
             1.0 / vertex_degrees,
-        ).to(utils.FLOAT, device)
+        ).to(device, utils.FLOAT)
 
         vertex_degrees = vertex_degrees.to(device)
 

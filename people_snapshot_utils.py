@@ -163,14 +163,10 @@ def _read_smpl_blending_param(
     # ---
 
     return smplx_utils.BlendingParam(
-        body_shapes=body_shapes[:frames_cnt].to(utils.FLOAT, device),
-
-        global_transl=global_transl[:frames_cnt]
-        .to(utils.FLOAT, device=device),
-
-        global_rot=global_rot[:frames_cnt].to(utils.FLOAT, device),
-
-        body_poses=body_poses[:frames_cnt].to(utils.FLOAT, device),
+        body_shapes=body_shapes[:frames_cnt].to(device, utils.FLOAT),
+        global_transl=global_transl[:frames_cnt].to(device, utils.FLOAT),
+        global_rot=global_rot[:frames_cnt].to(device, utils.FLOAT),
+        body_poses=body_poses[:frames_cnt].to(device, utils.FLOAT),
     )
 
 

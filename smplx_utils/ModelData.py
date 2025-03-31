@@ -196,7 +196,7 @@ class ModelData:
         # ---
 
         vertex_positions = torch.from_numpy(model_data["v_template"]) \
-            .to(utils.FLOAT, device)
+            .to(device, utils.FLOAT)
         # [V, 3]
 
         V = utils.check_shapes(vertex_positions, (-1, 3))
@@ -204,21 +204,21 @@ class ModelData:
         # ---
 
         pose_dirs = torch.from_numpy(model_data["posedirs"]) \
-            .to(utils.FLOAT, device)
+            .to(device, utils.FLOAT)
 
         utils.check_shapes(pose_dirs, (V, 3, (J - 1) * 3 * 3))
 
         # ---
 
         lbs_weights = torch.from_numpy(model_data["weights"]) \
-            .to(utils.FLOAT, device)
+            .to(device, utils.FLOAT)
 
         utils.check_shapes(lbs_weights, (V, J))
 
         # ---
 
         joint_regressor = torch.from_numpy(model_data["J_regressor"]) \
-            .to(utils.FLOAT, device)
+            .to(device, utils.FLOAT)
 
         utils.check_shapes(joint_regressor, (J, V))
 
@@ -243,7 +243,7 @@ class ModelData:
                     0
                 )
 
-            return ret.to(utils.FLOAT, device)
+            return ret.to(device, utils.FLOAT)
 
         shape_dirs = torch.from_numpy(model_data["shapedirs"])
 
@@ -282,7 +282,7 @@ class ModelData:
 
         if "vt" in model_data:
             texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
-                .to(utils.FLOAT, device)
+                .to(device, utils.FLOAT)
 
             TV = utils.check_shapes(texture_vertex_positions, (..., -1, 2))
         else:
@@ -311,7 +311,7 @@ class ModelData:
             lhand_poses_mean = torch.from_numpy(
                 model_data["hands_meanl"]) \
                 .reshape((-1, 3))[-model_config.hand_joints_cnt:, :] \
-                .to(utils.FLOAT, device)
+                .to(device, utils.FLOAT)
         else:
             lhand_poses_mean = None
 
@@ -319,7 +319,7 @@ class ModelData:
             rhand_poses_mean = torch.from_numpy(
                 model_data["hands_meanr"]) \
                 .reshape((-1, 3))[-model_config.hand_joints_cnt:, :] \
-                .to(utils.FLOAT, device)
+                .to(device, utils.FLOAT)
         else:
             rhand_poses_mean = None
 
@@ -341,7 +341,7 @@ class ModelData:
             vertex_normals=mesh_utils.get_area_weighted_vertex_normals(
                 faces=faces,
                 vertex_positions=vertex_positions,
-            ).to(utils.FLOAT, device),
+            ).to(device, utils.FLOAT),
 
             texture_vertex_positions=texture_vertex_positions,
 
