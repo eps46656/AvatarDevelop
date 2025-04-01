@@ -17,7 +17,7 @@ class ModuleForwardResult:
     rendered_img: torch.Tensor  # [..., C, H, W]
 
     rgb_loss: float | torch.Tensor
-    lap_loss: float | torch.Tensor
+    lap_smoothing_loss: float | torch.Tensor
     normal_sim_loss: float | torch.Tensor
     color_diff_loss: float | torch.Tensor
 
@@ -52,12 +52,12 @@ class Module(torch.nn.Module):
         self.gp_rot_qs = torch.nn.Parameter(gp_rot_qs)
         # [F, 4]
 
-        self.gp_scales = torch.nn.Parameter(torch.ones(
+        self.gp_log_scales = torch.nn.Parameter(torch.ones(
             (faces_cnt, 3),
-            dtype=utils.FLOAT) * 0.01)
+            dtype=utils.FLOAT))
         # [F, 3]
 
-        self.gp_log_colors = torch.nn.Parameter(torch.rand(
+        self.gp_colors = torch.nn.Parameter(torch.rand(
             (faces_cnt, color_channels_cnt),
             dtype=utils.FLOAT))
         # [F, C]
@@ -74,6 +74,21 @@ class Module(torch.nn.Module):
 
         return self
 
+    def get_param_groups(self, base_lr: float) -> list[dict]:
+        ret = utils.get_param_groups(self.avatar_blender, base_lr)
+
+        ret.append({
+            "params": [
+                self.gp_rot_qs,
+                self.gp_colors,
+                self.gp_log_scales,
+                self.gp_log_opacities,
+            ],
+            "lr": base_lr
+        })
+
+        return ret
+
     def forward(
         self,
         camera_config: camera_utils.CameraConfig,
@@ -84,7 +99,7 @@ class Module(torch.nn.Module):
     ):
         device = next(self.parameters()).device
 
-        color_channels_cnt = self.gp_log_colors.shape[-1]
+        color_channels_cnt = self.gp_colors.shape[-1]
 
         H, W = -1, -2
 
@@ -96,45 +111,59 @@ class Module(torch.nn.Module):
         faces = avatar_model.faces
         # [F, 3]
 
+        F = faces.shape[0]
+
         vertex_positions = avatar_model.vertex_positions
         # [..., V, 3]
 
-        vertex_positions_a = vertex_positions[..., faces[:, 0], :]
-        vertex_positions_b = vertex_positions[..., faces[:, 1], :]
-        vertex_positions_c = vertex_positions[..., faces[:, 2], :]
+        vps_a = vertex_positions[..., faces[:, 0], :]
+        vps_b = vertex_positions[..., faces[:, 1], :]
+        vps_c = vertex_positions[..., faces[:, 2], :]
         # [..., F, 3]
 
-        """
-        face_coord_result = get_face_coord(
-            vertex_positions_a, vertex_positions_b, vertex_positions_c)
+        face_rs, face_ts = get_face_coord(vps_a, vps_b, vps_c)
+        # face_rs[..., F, 3, 3]
+        # face_ts[..., F, 3]
 
-        face_coord_rot_qs = utils.rot_mat_to_quaternion(
-            face_coord_result.Ts[..., :3, :3],
+        gp_scales = torch.exp(self.gp_log_scales)
+        # [F, 3]
+
+        gp_rot_mats = utils.quaternion_to_rot_mat(
+            self.gp_rot_qs,
+            order="WXYZ",
+            out_shape=(3, 3),
+        )
+        # [F, 3, 3]
+
+        gp_rs = torch.stack([
+            gp_rot_mats[:, :, 0] * gp_scales[:, 0],
+            gp_rot_mats[:, :, 1] * gp_scales[:, 1],
+            gp_rot_mats[:, :, 2] * gp_scales[:, 2],
+        ], -2)
+
+        gp_ts = torch.zeros((3,), dtype=gp_rs.dtype, device=gp_rs.device)
+
+        global_gp_rs, global_gp_ts = utils.merge_rt(
+            face_rs, face_ts, gp_rs, gp_ts)
+        # global_gp_rs[..., F, 3, 3]
+        # global_gp_ts[..., F, 3]
+
+        global_gp_means = global_gp_ts
+        # [..., F, 3]
+
+        global_gp_scales = utils.vector_norm(global_gp_rs, -2)
+        # [..., F, 3, 3] -> [..., F, 1, 3] -> [..., F, 3]
+
+        global_gp_rot_mats = global_gp_rs / global_gp_scales.unsqueeze(-2)
+        # [..., F, 3, 3] * [..., F, 1, 3] -> [..., F, 3, 3]
+
+        global_gp_rot_qs = utils.rot_mat_to_quaternion(
+            global_gp_rot_mats,
             order="WXYZ",
         )
-        """
         # [..., F, 4] wxyz
 
-        """
-        utils.check_almost_zeros(
-            face_coord_result.Ts[..., :3, :3].det() - 1,
-            5e-3,
-        )
-        """
-
-        gp_global_means = (
-            vertex_positions_a +
-            vertex_positions_b +
-            vertex_positions_c
-        ) / 3
-        # [..., F, 3]
-
-        gp_global_rot_qs = self.gp_rot_qs
-
-        gp_global_scales = self.gp_scales
-        # [..., F, 3]
-
-        gp_colors = torch.exp(self.gp_log_colors)
+        gp_colors = self.gp_colors
 
         rendered_result = gaussian_utils.render_gaussian(
             camera_config=camera_config,
@@ -145,9 +174,9 @@ class Module(torch.nn.Module):
             bg_color=torch.ones((color_channels_cnt,),
                                 dtype=utils.FLOAT, device=device),
 
-            gp_means=gp_global_means,
-            gp_rots=gp_global_rot_qs,
-            gp_scales=gp_global_scales,
+            gp_means=global_gp_means,
+            gp_rots=global_gp_rot_qs,
+            gp_scales=global_gp_scales,
 
             gp_shs=None,
             gp_colors=gp_colors,
@@ -175,12 +204,10 @@ class Module(torch.nn.Module):
             rgb_loss = (rendered_img - masked_img).square().mean()
 
         if not self.training:
-            lap_loss = 0.0
+            lap_smoothing_loss = 0.0
         else:
-            lap_diff = mesh_data.calc_lap_diffs(avatar_model.vertex_positions)
-            # [..., V, 3]
-
-            lap_loss = lap_diff.square().mean()
+            lap_smoothing_loss = mesh_data.calc_lap_smoothing_loss(
+                avatar_model.vertex_positions)
 
         if not self.training:
             normal_sim_loss = 0.0
@@ -201,16 +228,20 @@ class Module(torch.nn.Module):
         if not self.training:
             color_diff_loss = 0.0
         else:
+            """
             color_diff = mesh_data.calc_face_cos_sims(gp_colors)
             # [..., FP]
 
             color_diff_loss = color_diff.square().mean()
+            """
+
+            color_diff_loss = 0.0
 
         return ModuleForwardResult(
             avatar_model=avatar_model,
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,
-            lap_loss=lap_loss,
+            lap_smoothing_loss=lap_smoothing_loss,
             normal_sim_loss=normal_sim_loss,
             color_diff_loss=color_diff_loss,
         )

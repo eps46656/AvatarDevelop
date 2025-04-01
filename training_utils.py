@@ -4,6 +4,7 @@ import os
 import pathlib
 import shlex
 import sqlite3
+import sys
 import time
 import traceback
 import typing
@@ -371,12 +372,15 @@ class Trainer:
                     field_val.to(self.__device)
 
         self.__prv = ckpt_meta.prv
-        self.__epochs_cnt = 0
+        self.__epochs_cnt = ckpt_meta.epochs_cnt
+        self.__diff_epochs_cnt = 0
         self.__avg_loss = ckpt_meta.avg_loss
 
     def load_latest(self):
         ckpt_meta = self.get_latest_ckpt_meta()
-        self.load(ckpt_meta.id)
+
+        if ckpt_meta is not None:
+            self.load(ckpt_meta.id)
 
     def save(
         self,
@@ -508,7 +512,7 @@ class Trainer:
                     return
             except KeyboardInterrupt:
                 print(traceback.format_exc())
-                utils.exit()
+                sys.exit(0)
                 break
             except:
                 print(traceback.format_exc())

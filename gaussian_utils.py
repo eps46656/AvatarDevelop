@@ -114,30 +114,26 @@ def render_gaussian(
 
     # ---
 
-    world_view_mat = world_view_mat.to(utils.CUDA_DEVICE).expand(
-        batch_shape + (4, 4))
+    p = (utils.CUDA_DEVICE, torch.float32)
 
-    world_ndc_mat = world_ndc_mat.to(utils.CUDA_DEVICE).expand(
-        batch_shape + (4, 4))
+    world_view_mat = world_view_mat.to(*p).expand(batch_shape + (4, 4))
 
-    camera_pos = camera_transform.pos.to(utils.CUDA_DEVICE).expand(
-        batch_shape + (3,))
+    world_ndc_mat = world_ndc_mat.to(*p).expand(batch_shape + (4, 4))
+
+    camera_pos = camera_transform.pos.to(*p).expand(batch_shape + (3,))
     # [..., 3]
 
-    bg_color = bg_color.to(utils.CUDA_DEVICE).expand(batch_shape + (C,))
-    gp_means = gp_means.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 3))
-    gp_rots = gp_rots.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 4))
-    gp_scales = gp_scales.to(utils.CUDA_DEVICE).expand(batch_shape + (N, 3))
-    gp_opacities = gp_opacities.to(utils.CUDA_DEVICE) \
-        .expand(batch_shape + (N, 1))
+    bg_color = bg_color.to(*p).expand(batch_shape + (C,))
+    gp_means = gp_means.to(*p).expand(batch_shape + (N, 3))
+    gp_rots = gp_rots.to(*p).expand(batch_shape + (N, 4))
+    gp_scales = gp_scales.to(*p).expand(batch_shape + (N, 3))
+    gp_opacities = gp_opacities.to(*p).expand(batch_shape + (N, 1))
 
     if gp_shs is not None:
-        gp_shs = gp_shs.to(utils.CUDA_DEVICE).expand(
-            batch_shape + (N, C))
+        gp_shs = gp_shs.to(*p).expand(batch_shape + (N, C))
 
     if gp_colors is not None:
-        gp_colors = gp_colors.to(utils.CUDA_DEVICE) \
-            .expand(batch_shape + (N, C))
+        gp_colors = gp_colors.to(*p).expand(batch_shape + (N, C))
 
     # ---
 
@@ -207,7 +203,7 @@ def query_gaussian(
 
     points: torch.Tensor,  # [..., 3]
 ):
-    device = utils.check_device(
+    device = utils.check_devices(
         gp_means,
         gp_rots,
         gp_scales,

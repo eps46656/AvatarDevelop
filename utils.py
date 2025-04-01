@@ -1,7 +1,7 @@
-import dataclasses
 import datetime
 import enum
 import functools
+import gc
 import itertools
 import math
 import os
@@ -73,11 +73,6 @@ def _print_cur_pos():
 @beartype
 def print_cur_pos():
     _print_cur_pos()
-
-
-@beartype
-def exit(code: int = 0):
-    sys.exit(code)
 
 
 @beartype
@@ -155,6 +150,12 @@ class UnimplementationError(Exception):
 
 
 @beartype
+def torch_cuda_sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+@beartype
 class Timer:
     def __init__(self):
         self.beg: typing.Optional[float] = None
@@ -170,8 +171,7 @@ class Timer:
             self.end - self.beg
 
     def start(self):
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        torch_cuda_sync()
 
         self.beg = time.time()
         self.end = None
@@ -179,8 +179,7 @@ class Timer:
     def stop(self):
         assert self.beg is not None
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        torch_cuda_sync()
 
         self.end = time.time()
 
@@ -288,7 +287,7 @@ def normalize_image(
     img: torch.Tensor,
     *,
     k: int = 255,
-    dtype: torch.dtype = FLOAT,
+    dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
     return torch.div(img, k, out=torch.empty_like(img, dtype=dtype))
 
@@ -353,6 +352,8 @@ def read_video(
     typing.Optional[torch.Tensor],  # video
     int,  # fps
 ]:
+    gc.collect()
+
     video, audio, d = torchvision.io.read_video(
         path,
         output_format="TCHW",
@@ -362,7 +363,11 @@ def read_video(
 
     video_fps = int(d.get("video_fps", -1))
 
-    return normalize_image(video), video_fps
+    video = normalize_image(video)
+
+    gc.collect()
+
+    return video, video_fps
 
 
 @beartype
@@ -372,6 +377,8 @@ def write_video(
     fps: int,
     codec: str = "h264",
 ) -> None:
+    gc.collect()
+
     torchvision.io.write_video(
         filename=path,
         video_array=denormalize_image(
@@ -380,6 +387,8 @@ def write_video(
         video_codec=codec,
     )
 
+    gc.collect()
+
 
 @beartype
 def to_pillow_image(
@@ -387,24 +396,6 @@ def to_pillow_image(
 ) -> list[PIL.Image.Image]:
     f = torchvision.transforms.ToPILImage()
     return [f(img * 255) for img in imgs]
-
-
-"""
-@beartype
-def DataclassStr(x):
-    field_names: list[str] = list()
-    field_vals = list()
-
-    for field in dataclasses.fields(x):
-        field_names.append(field.name)
-        field_vals.append(getattr(x, field.name))
-
-    k = max(len(field_name) for field_name in field_names)
-
-    return "\n" + "\n".join((
-        f"\t {field_name.rjust(k)} = {field_val}"
-        for field_name, field_val in zip(field_names, field_vals)
-    )) + "\n"""
 
 
 @beartype
@@ -416,31 +407,6 @@ def is_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> bool:
 def check_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> None:
     err = x.abs().max()
     assert err <= eps, f"{err=}"
-
-
-class Dir(enum.StrEnum):
-    F = "F"  # front
-    B = "B"  # back
-
-    U = "U"  # up
-    D = "D"  # down
-
-    L = "L"  # left
-    R = "R"  # right
-
-    @property
-    def invered(self):
-        match self:
-            case Dir.F: return Dir.B
-            case Dir.B: return Dir.F
-
-            case Dir.U: return Dir.D
-            case Dir.D: return Dir.U
-
-            case Dir.L: return Dir.R
-            case Dir.R: return Dir.L
-
-        assert False, f"Unknown value {self}."
 
 
 @beartype
@@ -679,23 +645,24 @@ def ravel_idxes(
 
 
 @beartype
-def promote_types(*args: torch.Tensor | torch.dtype) -> torch.dtype:
+def promote_types(*args: None | object) -> torch.dtype:
     return functools.reduce(
         torch.promote_types,
-        (arg if isinstance(arg, torch.dtype) else arg.dtype for arg in args),
+        (arg if isinstance(arg, torch.dtype) else arg.dtype
+         for arg in args if arg is not None),
         torch.bool,
     )
 
 
 @beartype
-def check_device(*args: None | torch.Tensor | torch.device) -> torch.device:
+def check_devices(*args: None | object) -> torch.device:
     ret = None
 
     for arg in args:
         if arg is None:
             continue
 
-        device = arg.device if isinstance(arg, torch.Tensor) else arg
+        device = arg if isinstance(arg, torch.device) else arg.device
 
         if ret is None:
             ret = device
@@ -703,6 +670,14 @@ def check_device(*args: None | torch.Tensor | torch.device) -> torch.device:
             assert ret == device
 
     return ret
+
+
+@beartype
+def get_param_groups(module: torch.nn.Module, base_lr: float):
+    if hasattr(module, "get_param_groups"):
+        return module.get_param_groups(base_lr)
+
+    return [{"params": list(module.parameters()), "lr": base_lr}]
 
 
 @beartype
@@ -1138,10 +1113,10 @@ def rot_mat_to_quaternion(
     a2 = a_mat[..., 2] = (tr_n + m11 * 2)
     a3 = a_mat[..., 3] = (tr_n + m22 * 2)
 
-    s0 = a0.sqrt() * 2
-    s1 = a1.sqrt() * 2
-    s2 = a2.sqrt() * 2
-    s3 = a3.sqrt() * 2
+    s0 = (1e-6 + a0).sqrt() * 2
+    s1 = (1e-6 + a1).sqrt() * 2
+    s2 = (1e-6 + a2).sqrt() * 2
+    s3 = (1e-6 + a3).sqrt() * 2
 
     q_mat = torch.empty(
         rot_mat.shape[:-2] + (4, 4),
@@ -1217,10 +1192,6 @@ def quaternion_mul(
     q1 = q1.expand(batch_shape)
     q2 = q2.expand(batch_shape)
 
-    if out is None:
-        out = torch.empty(
-            batch_shape, dtype=promote_types(q1, q2), device=check_device(q1, q2))
-
     q1w, q1x, q1y, q1z = get_quaternion_wxyz(q1, order_1)
     q2w, q2x, q2y, q2z = get_quaternion_wxyz(q2, order_2)
 
@@ -1230,9 +1201,7 @@ def quaternion_mul(
     out_z = q1w * q2z + q1x * q2y - q1y * q2x + q1z * q2w
 
     if out is None:
-        out = torch.empty(
-            batch_shape,
-            dtype=promote_types(q1, q2), device=check_device(q1, q2))
+        out = torch.empty(batch_shape, dtype=out_w.dtype, device=out_w.device)
 
     set_quaternion_wxyz(out_w, out_x, out_y, out_z, order_out, out)
 
@@ -1364,7 +1333,7 @@ def get_inv_rt(
         out_ts = torch.empty(
             ts.shape + (1,),
             dtype=promote_types(rs, ts),
-            device=check_device(out_rs, ts)
+            device=check_devices(out_rs, ts)
         )
 
     torch.inverse(rs, out=out_rs)

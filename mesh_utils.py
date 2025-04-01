@@ -1,10 +1,15 @@
 import collections
+import itertools
 import typing
-import trimesh
 
 import torch
 import tqdm
+import trimesh
 from beartype import beartype
+
+import pytorch3d
+import pytorch3d.loss
+import pytorch3d.structures
 
 from . import utils
 
@@ -104,15 +109,11 @@ def calc_adj_sums(
     index_1 = adj_rel_list[:, 1]
     # [P]
 
-    vals_0 = vals[..., index_0, :]
-    vals_1 = vals[..., index_1, :]
-    # [..., P, D]
-
     ret = torch.zeros_like(vals)
     # [..., V, D]
 
-    ret.index_add_(-2, index_0, vals_1)
-    ret.index_add_(-2, index_1, vals_0)
+    ret.index_add_(-2, index_0, vals[..., index_1, :])
+    ret.index_add_(-2, index_1, vals[..., index_0, :])
 
     # ret[..., index_0[i], :] += vals_1[..., i, :]
     # ret[..., index_1[i], :] += vals_0[..., i, :]
@@ -154,8 +155,6 @@ class MeshData:
     def __init__(
         self,
         *,
-        vertices_cnt: int,
-
         vertex_vertex_adj_rel_list: torch.Tensor,  # [VP, 2]
         face_vertex_adj_list: torch.Tensor,  # [F, 3]
         face_face_adj_rel_list: torch.Tensor,  # [FP, 2]
@@ -163,15 +162,9 @@ class MeshData:
         vertex_degrees: torch.Tensor,  # [V]
         inv_vertex_degrees: torch.Tensor,  # [V]
     ):
-        assert 0 <= vertices_cnt
+        V, F, VP, FP = -1, -2, -3, -4
 
-        self.vertices_cnt = vertices_cnt
-
-        V = self.vertices_cnt
-
-        VP, F, FP = -1, -2, -3
-
-        VP, F, FP = utils.check_shapes(
+        V, F, VP, FP = utils.check_shapes(
             vertex_vertex_adj_rel_list, (VP, 2),
             face_vertex_adj_list, (F, 3),
             face_face_adj_rel_list, (FP, 2),
@@ -198,8 +191,8 @@ class MeshData:
         face_vertex_adj_list = face_vertex_adj_list.to(utils.CPU_DEVICE)
 
         edge_to_face_d: collections.defaultdict[tuple[int, int],
-                                                list[int]] = \
-            collections.defaultdict(list)
+                                                set[int]] = \
+            collections.defaultdict(set)
 
         for f in range(faces_cnt):
             va, vb, vc = sorted(int(v) for v in face_vertex_adj_list[f, :])
@@ -209,25 +202,26 @@ class MeshData:
             assert vb < vc
             assert vc < vertices_cnt
 
-            edge_to_face_d[(vb, vc)].append(f)
-            edge_to_face_d[(va, vc)].append(f)
-            edge_to_face_d[(va, vb)].append(f)
+            edge_to_face_d[(vb, vc)].add(f)
+            edge_to_face_d[(va, vc)].add(f)
+            edge_to_face_d[(va, vb)].add(f)
 
         face_face_adj_rel_list: set[tuple[int, int]] = set()
 
         vertex_degrees = torch.zeros((vertices_cnt,), dtype=utils.INT)
 
         for (va, vb), fs in edge_to_face_d.items():
+            assert 0 <= va
+            assert va < vb
+            assert vb < vertices_cnt
+
             vertex_degrees[va] += 1
             vertex_degrees[vb] += 1
 
-            l = len(fs)
+            for fa, fb in itertools.combinations(fs, 2):
+                face_face_adj_rel_list.add(utils.min_max(fa, fb))
 
-            for i in range(l):
-                for j in range(i+1, l):
-                    face_face_adj_rel_list.add(utils.min_max(fs[i], fs[j]))
-
-        face_vertex_adj_list = face_vertex_adj_list.to(torch.long, device)
+        face_vertex_adj_list = face_vertex_adj_list.to(device, torch.long)
 
         vertex_vertex_adj_rel_list = torch.tensor(
             sorted(edge_to_face_d.keys()),
@@ -250,8 +244,6 @@ class MeshData:
         vertex_degrees = vertex_degrees.to(device)
 
         return MeshData(
-            vertices_cnt=vertices_cnt,
-
             vertex_vertex_adj_rel_list=vertex_vertex_adj_rel_list,
             face_vertex_adj_list=face_vertex_adj_list,
             face_face_adj_rel_list=face_face_adj_rel_list,
@@ -259,6 +251,10 @@ class MeshData:
             vertex_degrees=vertex_degrees,
             inv_vertex_degrees=inv_vertex_degrees,
         )
+
+    @property
+    def vertices_cnt(self) -> int:
+        return self.vertex_degrees.shape[0]
 
     @property
     def faces_cnt(self) -> int:
@@ -278,8 +274,6 @@ class MeshData:
 
     def to(self, *args, **kwargs) -> typing.Self:
         d = {
-            "vertices_cnt": self.vertices_cnt,
-
             "vertex_vertex_adj_rel_list": None,
             "face_vertex_adj_list": None,
             "face_face_adj_rel_list": None,
@@ -300,8 +294,7 @@ class MeshData:
         es: dict[tuple[int, int], int] = dict()
 
         V = self.vertices_cnt
-
-        VP = self.vertex_vertex_adj_rel_list.shape[0]
+        VP = self.adj_vertex_vertex_pairs_cnt
 
         for vp in range(VP):
             va, vb = self.vertex_vertex_adj_rel_list[vp]
@@ -309,7 +302,7 @@ class MeshData:
             es[(va, vb)] = V
             V += 1
 
-        F = self.face_vertex_adj_list.shape[0]
+        F = self.faces_cnt
 
         new_face_vertex_adj_list = torch.empty((F * 4, 3), dtype=torch.long)
 
@@ -341,46 +334,83 @@ class MeshData:
         return calc_adj_sums_naive(
             self.vertex_vertex_adj_rel_list, vertex_positions)
 
-    def calc_lap_diffs(
+    def calc_lap_smoothing_loss(
         self,
         vertex_positions: torch.Tensor,  # [..., V, D]
-    ) -> torch.Tensor:  # [..., V, D]
-        return self.calc_vertex_adj_sums(vertex_positions) * self.inv_vertex_degrees.unsqueeze(-1) - vertex_positions
+    ) -> torch.Tensor:  # []
+        vps = vertex_positions
 
-    def calc_lap_diffs_naive(
+        D = utils.check_shapes(vps, (..., self.vertices_cnt, -1))
+
+        return utils.vector_norm(
+            calc_adj_sums(self.vertex_vertex_adj_rel_list, vertex_positions) * self.inv_vertex_degrees.unsqueeze(-1) - vps).mean()
+
+    def calc_lap_smoothing_loss_pytorch3d(
+        self,
+        vertex_positions: torch.Tensor,  # [..., V, D]
+    ) -> torch.Tensor:  # []
+        utils.check_shapes(vertex_positions, (..., self.vertices_cnt, -1))
+
+        assert 0 <= self.face_vertex_adj_list.min()
+        assert self.face_vertex_adj_list.max() < self.vertices_cnt
+
+        mesh = pytorch3d.structures.Meshes(
+            verts=[vertex_positions],
+            faces=[self.face_vertex_adj_list],
+            textures=None,
+        ).to(vertex_positions.device)
+
+        utils.torch_cuda_sync()
+
+        return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="uniform")
+
+    def calc_lap_smoothing_loss_naive(
         self,
         vertex_positions: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # [..., V, D]
-        return self.calc_vertex_adj_sums_naive(vertex_positions) * self.inv_vertex_degrees.unsqueeze(-1) - vertex_positions
+
+        buffer = torch.zeros_like(vertex_positions)
+        # [..., V, D]
+
+        for vpi in range(self.adj_vertex_vertex_pairs_cnt):
+            va, vb = self.vertex_vertex_adj_rel_list[vpi]
+
+            vpa = vertex_positions[va]
+            vpb = vertex_positions[vb]
+
+            buffer[..., va, :] += self.inv_vertex_degrees[va] * (vpb - vpa)
+            buffer[..., vb, :] += self.inv_vertex_degrees[vb] * (vpa - vpb)
+
+        return utils.vector_norm(buffer).mean()
 
     def calc_face_cos_sims(
         self,
-        face_vecs: torch.Tensor,  # [..., F, D]
+        vecs: torch.Tensor,  # [..., F, D]
     ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
 
-        vecs_0 = face_vecs[..., self.face_face_adj_rel_list[:, 0], :]
-        vecs_1 = face_vecs[..., self.face_face_adj_rel_list[:, 1], :]
+        vecs_0 = vecs[..., self.face_face_adj_rel_list[:, 0], :]
+        vecs_1 = vecs[..., self.face_face_adj_rel_list[:, 1], :]
         # [..., FP, D]
 
         return utils.dot(vecs_0, vecs_1)
 
     def calc_face_cos_sims_naive(
         self,
-        face_vecs: torch.Tensor,  # [..., F, D]
+        vecs: torch.Tensor,  # [..., F, D]
     ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
+        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
 
-        FP = self.face_face_adj_rel_list.shape[0]
+        FP = self.adj_face_face_pairs_cnt
 
-        ret = torch.empty(face_vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
+        ret = torch.empty(vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
 
         for fp in range(FP):
 
             fa, fb = self.face_face_adj_rel_list[fp]
 
             ret[..., fp] = utils.dot(
-                face_vecs[..., fa, :], (face_vecs[..., fb, :]))
+                vecs[..., fa, :], (vecs[..., fb, :]))
 
         return ret
 
@@ -402,7 +432,7 @@ class MeshData:
     ) -> torch.Tensor:  # [..., FP]
         utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
-        FP = self.face_face_adj_rel_list.shape[1]
+        FP = self.adj_face_face_pairs_cnt
 
         ret = torch.empty(face_vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
 
@@ -620,9 +650,13 @@ class MeshData:
         vertex_positions: torch.Tensor,  # [V, 3]
         point_positions: torch.Tensor,  # [..., 3]
     ):
+        V = self.vertex_degrees.shape[0]
+
+        utils.check_shapes(vertex_positions, (V, 3))
+
         tm = trimesh.Trimesh(
-            vertices=vertex_positions,
-            faces=self.face_vertex_adj_list,
+            vertices=vertex_positions.to(utils.CPU_DEVICE),
+            faces=self.face_vertex_adj_list.to(utils.CPU_DEVICE),
             validate=True,
         )
 
@@ -633,3 +667,19 @@ class MeshData:
             ))
 
         return ret
+
+    def show(
+        self,
+        vertex_positions: torch.Tensor,  # [V, 3]
+    ):
+        V = self.vertex_degrees.shape[0]
+
+        utils.check_shapes(vertex_positions, (V, 3))
+
+        tm = trimesh.Trimesh(
+            vertices=vertex_positions.to(utils.CPU_DEVICE),
+            faces=self.face_vertex_adj_list.to(utils.CPU_DEVICE),
+            validate=True,
+        )
+
+        tm.show()

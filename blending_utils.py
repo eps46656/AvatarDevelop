@@ -56,15 +56,35 @@ def lbs(
     assert target_pose_rs.isfinite().all()
     assert target_pose_ts.isfinite().all()
 
+    device = utils.check_devices(
+        lbs_weights,
+        vertex_positions,
+        vertex_directions,
+        binding_pose_rs,
+        binding_pose_ts,
+        target_pose_rs,
+        target_pose_ts,
+    )
+
+    dtype = utils.promote_types(
+        lbs_weights,
+        vertex_positions,
+        vertex_directions,
+        binding_pose_rs,
+        binding_pose_ts,
+        target_pose_rs,
+        target_pose_ts,
+    )
+
     if vertex_positions is not None:
         utils.check_shapes(vertex_positions, (..., V, D))
         assert vertex_positions.isfinite().all()
+        vertex_positions = vertex_positions.to(device, dtype)
 
     if vertex_directions is not None:
         utils.check_shapes(vertex_directions, (..., V, D))
         assert vertex_directions.isfinite().all()
-
-    device = lbs_weights.device
+        vertex_directions = vertex_directions.to(device, dtype)
 
     binding_joint_Ts = kin_tree.get_joint_rts(binding_pose_rs, binding_pose_ts)
     # binding_joint_rs[..., J, D+1, D+1]
@@ -78,11 +98,11 @@ def lbs(
     del_joint_Ts = target_joint_Ts @ inv_binding_joint_Ts
     # del_joint_rs[..., J, D+1, D+1]
 
-    del_joint_Ts = del_joint_Ts.to(device)
+    del_joint_Ts = del_joint_Ts.to(device, dtype)
 
     assert del_joint_Ts.isfinite().all()
 
-    lbs_weights = lbs_weights.to(device)
+    lbs_weights = lbs_weights.to(device, dtype)
 
     if vertex_positions is None:
         ret_vps = None

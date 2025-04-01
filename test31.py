@@ -18,16 +18,18 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0331_2"
+PROJ_DIR = DIR / "train_2025_0401_19"
 
 ALPHA_RGB = 1.0
-ALPHA_LAP = 1.0
+ALPHA_LAP = 10.0
 ALPHA_NORMAL_SIM = 1.0
 ALPHA_COLOR_DIFF = 1.0
 
 
 @beartype
 def MyLossFunc(
+    avatar_model: avatar_utils.AvatarModel,
+
     rendered_img: torch.Tensor,  # [..., C, H, W]
 
     rgb_loss: float | torch.Tensor,
@@ -35,6 +37,11 @@ def MyLossFunc(
     normal_sim_loss: float | torch.Tensor,
     color_diff_loss: float | torch.Tensor,
 ):
+    print(f"{rgb_loss=}")
+    print(f"{lap_loss=}")
+    print(f"{normal_sim_loss=}")
+    print(f"{color_diff_loss=}")
+
     weighted_rgb_loss = ALPHA_RGB * rgb_loss
     weighted_lap_loss = ALPHA_LAP * lap_loss
     weighted_normal_sim_loss = ALPHA_NORMAL_SIM * normal_sim_loss
@@ -103,17 +110,19 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         rgb_frames = torch.empty_like(
             self.dataset.sample.img,
-            dtype=utils.FLOAT,
+            dtype=torch.float16,
             device=utils.CPU_DEVICE,
         )
         # [T, C, H, W]
 
+        """
         mesh_frames = torch.empty_like(
             self.dataset.sample.img,
-            dtype=utils.FLOAT,
+            dtype=torch.float16,
             device=utils.CPU_DEVICE,
         )
         # [T, C, H, W]
+        """
 
         T, C, H, W = self.dataset.sample.img.shape
 
@@ -122,7 +131,15 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         batch_shape = self.dataset.shape
 
+        self.module: gom_utils.Module
+
         with torch.no_grad():
+            if True:
+                avatar_model: smplx_utils.Model = \
+                    self.module.avatar_blender.get_avatar_model()
+
+                avatar_model.mesh_data.show(avatar_model.vertex_positions)
+
             for batch_idxes, sample in tqdm.tqdm(self.dataset_loader.load()):
                 batch_idxes: tuple[torch.Tensor, ...]
 
@@ -164,26 +181,17 @@ class MyTrainingCore(training_utils.TrainingCore):
                 avatar_model: smplx_utils.Model = result.avatar_model
 
                 for k in range(K):
-                    vertex_positions = avatar_model.vertex_positions[k]
-
-                    camera_config = sample.camera_config
-
-                    camera_transform = sample.camera_transform[k]
-
-                    print(f"{camera_transform.trans.shape=}")
-
                     mesh_ras_result = rendering_utils.rasterize_mesh(
-                        vertex_positions,
-                        avatar_model.faces,
-                        camera_config=camera_config,
-                        camera_transform=camera_transform,
-                        img_h=img_h,
-                        img_w=img_w,
+                        vertex_positions=avatar_model.vertex_positions[k],
+                        faces=avatar_model.faces,
+                        camera_config=sample.camera_config,
+                        camera_transform=sample.camera_transform[k],
                         faces_per_pixel=1,
                     )
 
                     # d["pixel_to_faces"][img_h, img_w, 1]
 
+                    """
                     mesh_frames[idxes[k, 0, 0, 0]] = torch.where(
                         (mesh_ras_result["pixel_to_faces"][:, :, 0] == -1)
                         .to(mesh_frames.device),
@@ -192,7 +200,16 @@ class MyTrainingCore(training_utils.TrainingCore):
                         ones,
                     )
 
-                    del mesh_ras_result
+                    del mesh_ras_result"
+                    """
+
+                    lap_smoothing_loss = avatar_model.mesh_data.calc_lap_smoothing_loss(
+                        avatar_model.vertex_positions[k])
+                    # [..., V, 3]
+
+                    lap_loss = lap_smoothing_loss
+
+                    print(f"{lap_loss=}")
 
         utils.write_video(
             path=PROJ_DIR / f"rgb_{int(time.time())}.mp4",
@@ -200,11 +217,13 @@ class MyTrainingCore(training_utils.TrainingCore):
             fps=25,
         )
 
+        """
         utils.write_video(
             path=PROJ_DIR / f"mesh_{int(time.time())}.mp4",
-            video=rgb_frames,
+            video=mesh_frames,
             fps=25,
         )
+        """
 
 
 @beartype
@@ -238,7 +257,7 @@ def map_to_texture(
         .reshape((-1, 3)).to(utils.CPU_DEVICE)
     # [F, 3]
 
-    gp_colors = torch.exp(gom_module.gp_log_colors) \
+    gp_colors = torch.exp(gom_module.gp_colors) \
         .to(utils.CPU_DEVICE)
     # [F, C]
 
@@ -305,6 +324,8 @@ def map_to_texture(
 
 
 def main1():
+    torch.autograd.set_detect_anomaly(True, True)
+
     smpl_model_data_path_dict = {
         "male": config.SMPL_MALE_MODEL,
         "female": config.SMPL_FEMALE_MODEL,
@@ -354,6 +375,8 @@ def main1():
         model_data=subject_data.model_data,
     ).to(DEVICE)
 
+    smplx_model_builder.unfreeze()
+
     smplx_model_blender = smplx_utils.ModelBlender(
         model_builder=smplx_model_builder,
     )
@@ -363,9 +386,15 @@ def main1():
         color_channels_cnt=3,
     ).to(DEVICE).train()
 
+    lr = 1e-4
+
+    param_groups = utils.get_param_groups(gom_avatar_module, lr)
+
+    print(param_groups)
+
     optimizer = torch.optim.Adam(
-        gom_avatar_module.parameters(),
-        lr=1e-3,
+        param_groups,
+        lr=lr,
     )
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -376,7 +405,7 @@ def main1():
         threshold=0.05,
         threshold_mode="rel",
         cooldown=0,
-        min_lr=1e-7,
+        min_lr=1e-8,
     )
 
     training_core = MyTrainingCore(
@@ -394,9 +423,6 @@ def main1():
     )
 
     trainer.set_training_core(training_core)
-
-    trainer.load_latest()
-    trainer.eval()
 
     trainer.enter_cli()
 

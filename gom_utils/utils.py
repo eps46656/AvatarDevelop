@@ -8,18 +8,14 @@ from .. import utils
 
 
 @beartype
-@dataclasses.dataclass
-class FaceCoordResult:
-    Ts: torch.Tensor  # [..., F, 4, 4]
-    face_area: torch.Tensor  # [..., F]
-
-
-@beartype
 def get_face_coord(
     vertex_positions_a: torch.Tensor,  # [..., 3]
     vertex_positions_b: torch.Tensor,  # [..., 3]
     vertex_positions_c: torch.Tensor,  # [..., 3]
-) -> FaceCoordResult:
+) -> tuple[
+    torch.Tensor,  # [..., 3, 3]
+    torch.Tensor,  # [..., 3]
+]:
     vpa = vertex_positions_a
     vpb = vertex_positions_b
     vpc = vertex_positions_c
@@ -34,7 +30,9 @@ def get_face_coord(
         vpc, (..., 3),
     )
 
-    device = utils.check_device(vpa, vpb, vpc)
+    device = utils.check_devices(vpa, vpb, vpc)
+
+    dtype = utils.promote_types(vpa, vpb, vpc)
 
     batch_shape = utils.broadcast_shapes(
         vpa.shape[:-1],
@@ -42,47 +40,25 @@ def get_face_coord(
         vpc.shape[:-1],
     )
 
-    vpa = vpa.expand(batch_shape + (3,))
-    vpb = vpb.expand(batch_shape + (3,))
-    vpc = vpc.expand(batch_shape + (3,))
+    vpa = vpa.to(device, dtype).expand(batch_shape + (3,))
+    vpb = vpb.to(device, dtype).expand(batch_shape + (3,))
+    vpc = vpc.to(device, dtype).expand(batch_shape + (3,))
 
-    s = (vpa + vpb + vpc) / 3
+    g = (vpa + vpb + vpc) / 3
     # [..., 3]
 
-    ab = vpb - vpa
-    bc = vpc - vpb
-    ca = vpa - vpc
+    f1 = vpc - g
+    f2 = (vpa - vpb) / math.sqrt(3)
 
-    ab_norm = utils.vector_norm(ab)
-    bc_norm = utils.vector_norm(ab)
-    ca_norm = utils.vector_norm(ab)
+    t0 = 0.5 * torch.atan2(2 * utils.dot(f1, f2), f1.square() - f2.square())
 
-    min_edge_length = min(ab_norm.min(), bc_norm.min(), ca_norm.min())
+    cos_t0 = torch.cos(t0)
+    sin_t0 = torch.sin(t0)
 
-    axb = torch.linalg.cross(vpa, vpb)
-    bxc = torch.linalg.cross(vpb, vpc)
-    cxa = torch.linalg.cross(vpc, vpa)
-
-    double_face_area_vec = axb + bxc + cxa
-    double_face_area = utils.vector_norm(double_face_area_vec)
-
-    min_double_face_area = double_face_area.min()
-
-    assert 2e-4 <= min_double_face_area, f"{min_double_face_area=}"
-
-    sa = vpa - s
-
-    Ts = torch.empty(
-        batch_shape + (4, 4), dtype=utils.FLOAT, device=device)
-
-    Ts[..., :3, 0] = utils.normalized(sa)
-    axis_x = Ts[..., :3, 0]
-
-    Ts[..., :3, 2] = double_face_area_vec / double_face_area.unsqueeze(-1)
-    axis_z = Ts[..., :3, 2]
-
-    Ts[..., :3, 1] = torch.linalg.cross(axis_z, axis_x)
-    axis_y = Ts[..., :3, 1]
+    axis_x = f1 * cos_t0 + f2 * sin_t0
+    axis_y = f2 * cos_t0 - f1 * sin_t0
+    axis_z = torch.cross(axis_x, axis_y)
+    # [..., 3]
 
     err = (axis_z * axis_x).sum(-1).abs().max()
     assert err <= 2e-3, err
@@ -93,13 +69,6 @@ def get_face_coord(
     err = (axis_y * axis_z).sum(-1).abs().max()
     assert err <= 2e-3, err
 
-    Ts[..., :3, 3] = s
-    Ts[..., 3, :3] = 0
-    Ts[..., 3, 3] = 1
+    rs = torch.stack([axis_x, axis_y, axis_z], -1)
 
-    ret = FaceCoordResult(
-        Ts=Ts,
-        face_area=double_face_area * 0.5,
-    )
-
-    return ret
+    return rs, g

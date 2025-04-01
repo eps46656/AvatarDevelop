@@ -1,14 +1,15 @@
 import pathlib
 
-import torch
 import einops
+import torch
+import tqdm
 
 import pytorch3d
 import pytorch3d.renderer
 import pytorch3d.structures
 
-from . import (config, people_snapshot_utils, smplx_utils, transform_utils,
-               utils, camera_utils)
+from . import (camera_utils, config, people_snapshot_utils, smplx_utils,
+               transform_utils, utils, rendering_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -114,6 +115,8 @@ def main1():
         dtype=utils.FLOAT,
     )
 
+    print(f"{camera_proj_mat=}")
+
     cameras = pytorch3d.renderer.PerspectiveCameras(
         R=world_to_view_mat[:3, :3].transpose(0, 1).unsqueeze(0),
         T=world_to_view_mat[:3, 3].unsqueeze(0),
@@ -141,48 +144,34 @@ def main1():
          subject_data.camera_config.img_h, subject_data.camera_config.img_w)
     )
 
-    for frame_i in range(T):
-        print(f"{frame_i=}")
+    zeros = torch.zeros(
+        (1, camera_config.img_h, camera_config.img_w), dtype=utils.FLOAT)
+    ones = torch.ones(
+        (1, camera_config.img_h, camera_config.img_w), dtype=utils.FLOAT)
 
+    for frame_i in tqdm.tqdm(range(T)):
         # smplx_model.vertex_positions[T, V, 3]
         # smplx_model.vertex_positions[F, 3]
 
         # smplx_model.vertex_positions[T, V, 3]
         V = smplx_model.vertex_positions.shape[1]
 
-        if False:
-            mesh = pytorch3d.structures.Meshes(
-                verts=[smplx_model.vertex_positions[frame_i, :, :]],
-                faces=[smplx_model.faces],
-            )
-
-            lights = pytorch3d.renderer.lighting.PointLights(
-                ambient_color=[[1.0, 1.0, 1.0]],
-                location=[[0.0, 0.0, 3.0]],
-                device=DEVICE,
-            )
-
-            raster_settings = pytorch3d.renderer.RasterizationSettings(
-                image_size=(camera_config.img_h, camera_config.img_w),
-                blur_radius=0.0,
+        if True:
+            mesh_ras_result = rendering_utils.rasterize_mesh(
+                vertex_positions=smplx_model.vertex_positions[frame_i],
+                faces=smplx_model.faces,
+                camera_config=camera_config,
+                camera_transform=subject_data.camera_transform.to(
+                    utils.CUDA_DEVICE),
                 faces_per_pixel=1,
             )
 
-            renderer = pytorch3d.renderer.MeshRenderer(
-                rasterizer=pytorch3d.renderer.MeshRasterizer(
-                    cameras=cameras,
-                    raster_settings=raster_settings,
-                ),
-                shader=pytorch3d.renderer.mesh.shader.SoftPhongShader(
-                    cameras=cameras,
-                    lights=lights,
-                    device=DEVICE,
-                ),
-            )
+            out_frames[frame_i] = torch.where(
+                (mesh_ras_result["pixel_to_faces"][:, :, 0] == -1)
+                .to(out_frames.device),
 
-            img = renderer(
-                mesh,
-                image_size=(camera_config.img_h, camera_config.img_w),
+                zeros,
+                ones,
             )
         else:
             point_cloud = pytorch3d.structures.Pointclouds(
@@ -219,17 +208,13 @@ def main1():
             img = renderer(point_cloud).squeeze(0)
             # 1 h w c
 
-        # ---
-
-        print(f"{img.shape=}")
-
-        out_frames[frame_i, :, :, :] = einops.rearrange(
-            img, "h w c -> c h w")
+            out_frames[frame_i, :, :, :] = einops.rearrange(
+                img, "h w c -> c h w")
 
     utils.write_video(
         path=DIR / "output.mp4",
-        video=utils.denormalize_image(out_frames),
-        fps=30,
+        video=out_frames,
+        fps=25,
     )
 
 

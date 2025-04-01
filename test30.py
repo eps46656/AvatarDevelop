@@ -185,7 +185,7 @@ def map_to_texture(
         .reshape((-1, 3)).to(utils.CPU_DEVICE)
     # [F, 3]
 
-    gp_colors = torch.exp(gom_module.gp_log_colors) \
+    gp_colors = torch.exp(gom_module.gp_colors) \
         .to(utils.CPU_DEVICE)
     # [F, C]
 

@@ -29,21 +29,26 @@ class ObjectTransform:
 
     @staticmethod
     def from_matching(
-        dirs: str | tuple[utils.Dir, utils.Dir, utils.Dir],
+        dirs: str,
         pos: torch.Tensor = utils.ORIGIN,  # [..., 3]
         vecs: tuple[torch.Tensor, torch.Tensor, torch.Tensor] = (
             utils.X_AXIS,
             utils.Y_AXIS,
             utils.Z_AXIS,
         ),  # [..., 3]
+        *,
+        device: torch.device = None,
+        dtype: torch.dtype = None,
     ):
-        if isinstance(dirs, str):
-            assert len(dirs) == 3
-            dirs = (utils.Dir[dirs[0]], utils.Dir[dirs[1]], utils.Dir[dirs[2]])
+        assert len(dirs) == 3
 
-        assert dirs.count(utils.Dir.F) + dirs.count(utils.Dir.B) == 1
-        assert dirs.count(utils.Dir.U) + dirs.count(utils.Dir.D) == 1
-        assert dirs.count(utils.Dir.L) + dirs.count(utils.Dir.R) == 1
+        dirs = dirs.upper()
+
+        assert dirs.count("F") + dirs.count("B") == 1
+        assert dirs.count("U") + dirs.count("D") == 1
+        assert dirs.count("L") + dirs.count("R") == 1
+
+        vec_a, vec_b, vec_c = vecs
 
         utils.check_shapes(
             pos, (..., 3),
@@ -59,26 +64,32 @@ class ObjectTransform:
             vecs[2].shape[:-1],
         )
 
+        if device is None:
+            device = utils.check_devices(pos, vec_a, vec_b, vec_c)
+
+        if dtype is None:
+            dtype = utils.promote_types(pos, vec_a, vec_b, vec_c)
+
         s = batch_shape + (3,)
 
         f_vec, u_vec, l_vec = None, None, None
 
         for dir, vec in zip(dirs, vecs):
             match dir:
-                case utils.Dir.F: f_vec = +vec
-                case utils.Dir.B: f_vec = -vec
-                case utils.Dir.U: u_vec = +vec
-                case utils.Dir.D: u_vec = -vec
-                case utils.Dir.L: l_vec = +vec
-                case utils.Dir.R: l_vec = -vec
+                case "F": f_vec = +vec
+                case "B": f_vec = -vec
+                case "U": u_vec = +vec
+                case "D": u_vec = -vec
+                case "L": l_vec = +vec
+                case "R": l_vec = -vec
 
         trans = torch.empty(batch_shape + (4, 4),
-                            dtype=pos.dtype, device=pos.device)
+                            dtype=dtype, device=device)
 
-        trans[..., :3, 0] = f_vec.expand(s)
-        trans[..., :3, 1] = u_vec.expand(s)
-        trans[..., :3, 2] = l_vec.expand(s)
-        trans[..., :3, 3] = pos.expand(s)
+        trans[..., :3, 0] = f_vec.to(device, dtype).expand(s)
+        trans[..., :3, 1] = u_vec.to(device, dtype).expand(s)
+        trans[..., :3, 2] = l_vec.to(device, dtype).expand(s)
+        trans[..., :3, 3] = pos.to(device, dtype).expand(s)
         trans[..., 3, :3] = 0
         trans[..., 3, 3] = 1
 
@@ -93,6 +104,10 @@ class ObjectTransform:
     @property
     def device(self) -> torch.device:
         return self.trans.device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self.trans.dtype
 
     def to(self, *args, **kwargs) -> typing.Self:
         return ObjectTransform(
@@ -115,14 +130,14 @@ class ObjectTransform:
     def pos(self) -> torch.Tensor:
         return self.trans[..., :3, 3]
 
-    def vec(self, dir: utils.Dir) -> torch.Tensor:  # [..., 3]
+    def vec(self, dir: str) -> torch.Tensor:  # [..., 3]
         match dir:
-            case utils.Dir.F: return self.vec_f
-            case utils.Dir.B: return self.vec_b
-            case utils.Dir.U: return self.vec_u
-            case utils.Dir.D: return self.vec_d
-            case utils.Dir.L: return self.vec_l
-            case utils.Dir.R: return self.vec_r
+            case "F": return self.vec_f
+            case "B": return self.vec_b
+            case "U": return self.vec_u
+            case "D": return self.vec_d
+            case "L": return self.vec_l
+            case "R": return self.vec_r
 
         assert False, f"Unknown direction {dir}."
 

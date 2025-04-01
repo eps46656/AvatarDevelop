@@ -126,7 +126,7 @@ def main1():
             frames[frame_i] = result.rendered_img.detach()
 
             mean_rgb_loss = result.rgb_loss.mean()
-            mean_lap_loss = result.lap_loss.mean()
+            mean_lap_loss = result.lap_smoothing_loss.mean()
             mean_normal_sim_loss = result.normal_sim_loss.mean()
             mean_color_diff_loss = result.color_diff_loss.mean()
 

@@ -69,6 +69,8 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         texture_vertices_cnt = model_data.texture_vertex_positions.shape[-2]
 
+        vertex_positions = model_data.vertex_positions
+
         texture_vertex_positions = model_data.texture_vertex_positions
 
         faces = model_data.faces
@@ -83,7 +85,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
             kin_tree=kin_tree,
             vertices_cnt=vertices_cnt,
             texture_vertices_cnt=texture_vertices_cnt,
-            vertex_positions=None,
+            vertex_positions=vertex_positions,
             vertex_normals=None,
             vertex_rotations=None,
             texture_vertex_positions=texture_vertex_positions,
@@ -121,6 +123,9 @@ class ModelBlender(avatar_utils.AvatarBlender):
             .to(*args, **kwargs)
 
         return self
+
+    def get_param_groups(self, base_lr: float) -> list[dict]:
+        return utils.get_param_groups(self.model_builder, base_lr)
 
     def forward(self, blending_param: BlendingParam):
         return blending(

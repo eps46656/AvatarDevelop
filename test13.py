@@ -4,11 +4,11 @@ import pathlib
 
 import torch
 
-import camera_utils
 import pytorch3d
 import pytorch3d.renderer
 import pytorch3d.structures
-import utils
+
+from . import camera_utils, transform_utils, utils
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -22,7 +22,7 @@ def main1():
 
 
 def main2():
-    img_h, img_w = 720.0, 1280.0
+    img_h, img_w = 720, 1280
 
     view_mat = torch.eye(4, dtype=utils.FLOAT)
 
@@ -39,27 +39,24 @@ def main2():
     view_mat = torch.eye(4, dtype=utils.FLOAT)
 
     view_mat[:3, :3] = utils.axis_angle_to_rot_mat(
-        utils.rand_rot_vec((3,), dtype=utils.FLOAT))
+        utils.rand_rot_vec((3,), dtype=utils.FLOAT), out_shape=(3, 3))
 
     view_mat[:3, 3] = torch.rand((3,), dtype=utils.FLOAT)
 
-    my_proto_camera = camera_utils.ProtoCamera(
-        view_volume=camera_utils.Volume.FromFovDiag(
-            img_h=img_h,
-            img_w=img_w,
-            fov_diag=fov_diag,
-            depth_near=near,
-            depth_far=far,
-        ),
+    camera_config = camera_utils.CameraConfig.from_fov_diag(
+        fov_diag=fov_diag,
+
+        depth_near=near,
+        depth_far=far,
 
         img_h=img_h,
         img_w=img_w,
-
-        proj_type=camera_utils.ProjType.PERS
     )
 
-    my_proj_mat = my_proto_camera.GetProj(
-        view_coord=utils.Dir3.FromStr("LUF"),
+    my_proj_mat = camera_utils.make_proj_mat(
+        camera_config=camera_config,
+        camera_view_transform=transform_utils.ObjectTransform
+        .from_matching("LUF"),
         convention=camera_utils.Convention.PyTorch3D,
         target_coord=camera_utils.Coord.NDC,
     )

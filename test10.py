@@ -8,7 +8,6 @@ import torch
 
 from . import (blending_utils, camera_utils, config, kin_utils, mesh_utils,
                smplx_utils, utils)
-from .smplx import smplx
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -159,11 +158,12 @@ def main4():
 
 
 def main5():
-    model_data_path = config.SMPLX_NEUTRAL_MODEL
+    model_data_path = config.SMPL_FEMALE_MODEL
+    model_config = smplx_utils.smpl_model_config
 
     model_data: smplx_utils.Model = smplx_utils.ModelData.from_file(
         model_data_path=model_data_path,
-        model_config=smplx_utils.smplx_model_config,
+        model_config=model_config,
         device=DEVICE,
     )
 
@@ -184,21 +184,32 @@ def main5():
     vertex_positions = torch.rand((vertices_cnt, 3), dtype=utils.FLOAT)
     face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
 
-    with utils.Timer():
-        lap_diff = mesh_data.calc_lap_diffs(vertex_positions)
+    vps_1 = vertex_positions.clone()
+    vps_2 = vertex_positions.clone()
+
+    vps_1.requires_grad = True
+    vps_2.requires_grad = True
 
     with utils.Timer():
-        lap_diff_naive = mesh_data.calc_lap_diffs_naive(vertex_positions)
+        loss_1 = mesh_data.calc_lap_smoothing_loss(vps_1)
 
-    lap_diff_diff_1 = lap_diff.square().mean()
-    lap_diff_diff_2 = lap_diff_naive.square().mean()
+    with utils.Timer():
+        loss_2 = mesh_data.calc_lap_smoothing_loss_pytorch3d(vps_2)
 
-    print(f"{lap_diff_diff_1=}")
-    print(f"{lap_diff_diff_2=}")
+    print(f"{loss_1=}")
+    print(f"{loss_2=}")
 
-    lap_diff_err = (lap_diff - lap_diff_naive).square().mean()
+    loss_1.backward()
+    loss_2.backward()
 
-    print(f"{lap_diff_err=}")
+    loss_diff_err = (loss_1 - loss_2).square().max()
+    print(f"{loss_diff_err=}")
+
+    grad_diff_err = (vps_1.grad - vps_2.grad).square().max()
+
+    print(f"{grad_diff_err=}")
+
+    return
 
     with utils.Timer():
         normal_sim = mesh_data.calc_face_cos_sims(face_normals)

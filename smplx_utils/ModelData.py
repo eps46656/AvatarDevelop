@@ -291,7 +291,7 @@ class ModelData:
 
         # ---
 
-        faces = torch.from_numpy(model_data["f"]).to(torch.long, device)
+        faces = torch.from_numpy(model_data["f"]).to(device, torch.long)
 
         F = utils.check_shapes(faces, (..., -1, 3))
 
@@ -299,7 +299,7 @@ class ModelData:
 
         if "ft" in model_data:
             texture_faces = torch.from_numpy(model_data["ft"]) \
-                .to(torch.long, device)
+                .to(device, torch.long)
 
             utils.check_shapes(texture_faces, (..., F, 3))
         else:
