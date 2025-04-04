@@ -75,8 +75,8 @@ def main1():
 
     model_data = copy.copy(subject_data.model_data)
 
-    model_data.vertex_positions = torch.nn.Parameter(
-        model_data.vertex_positions)
+    model_data.vert_pos = torch.nn.Parameter(
+        model_data.vert_pos)
 
     smplx_model_builder = smplx_utils.ModelBlender(
         model_data=model_data,

@@ -1,14 +1,11 @@
 
 import math
-
-import numpy as np
-
-import utils
+import typing
 
 import torch
+from beartype import beartype
 
-from typeguard import beartype
-
+from .. import utils
 
 """
 
@@ -24,7 +21,7 @@ det = (c_xy * x + c_y)**2 - 4 * (c_y2) * (c_x2 * x0**2 + c_x * x + c_1)
 
 
 @beartype
-def NaiveRasterizeEllipseWithCoeff(
+def naive_rasterize_ellipse_with_coeff(
     c_x2: float,
     c_xy: float,
     c_y2: float,
@@ -64,7 +61,7 @@ def NaiveRasterizeEllipseWithCoeff(
 
 
 @beartype
-def GetEllipseRange(
+def get_ellipse_range(
     c_x2: float,
     c_xy: float,
     c_y2: float,
@@ -88,7 +85,7 @@ def GetEllipseRange(
 
 
 @beartype
-def RasterizeEllipseWithCoeff(
+def rasterize_ellipse_with_coeff(
     c_x2: float,
     c_xy: float,
     c_y2: float,
@@ -97,17 +94,17 @@ def RasterizeEllipseWithCoeff(
     c_1: float,
     x_range: tuple[int, int],
     y_range: tuple[int, int],
-):
-    assert x_range[0] <= x_range[1]
-    assert y_range[0] <= y_range[1]
+) -> typing.Generator[tuple[int, int], None, None]:
+    assert x_range[0] < x_range[1]
+    assert y_range[0] < y_range[1]
 
     if x_range[1] <= x_range[0] or y_range[1] <= y_range[0]:
         return
 
     assert c_xy**2 - 4 * c_x2 * c_y2 < 0
 
-    cur_x_min, cur_x_max = GetEllipseRange(c_x2, c_xy, c_y2, c_x, c_y, c_1)
-    cur_y_min, cur_y_max = GetEllipseRange(c_y2, c_xy, c_x2, c_y, c_x, c_1)
+    cur_x_min, cur_x_max = get_ellipse_range(c_x2, c_xy, c_y2, c_x, c_y, c_1)
+    cur_y_min, cur_y_max = get_ellipse_range(c_y2, c_xy, c_x2, c_y, c_x, c_1)
 
     x_min = utils.clamp(cur_x_min, x_range[0], x_range[1] - 1)
     x_max = utils.clamp(cur_x_max, x_range[0], x_range[1] - 1)
@@ -163,10 +160,10 @@ def RasterizeEllipseWithCoeff(
 
 
 @beartype
-def TransEllipseAxisToCoeff(
-    center: np.ndarray,
-    axis_u: np.ndarray,
-    axis_v: np.ndarray,
+def trans_ellipse_axis_to_coeff(
+    center: torch.Tensor,
+    axis_u: torch.Tensor,
+    axis_v: torch.Tensor,
 ):
     assert center.shape == (2,)
     assert axis_u.shape == (2,)
@@ -177,12 +174,12 @@ def TransEllipseAxisToCoeff(
     aux, auy = float(axis_u[0]), float(axis_u[1])
     avx, avy = float(axis_v[0]), float(axis_v[1])
 
-    A = np.linalg.inv(np.array([
+    A = torch.tensor([
         [aux, avx],
         [auy, avy],
-    ], dtype=float))
+    ], dtype=float).inverse()
 
-    b = A @ np.array([[-cx], [-cy]], dtype=float)
+    b = A @ torch.tensor([[-cx], [-cy]], dtype=float)
 
     ux, uy, uc = A[0, 0], A[0, 1], b[0, 0]
     vx, vy, vc = A[1, 0], A[1, 1], b[1, 0]
@@ -198,17 +195,17 @@ def TransEllipseAxisToCoeff(
 
 
 @beartype
-def RasterizeEllipseWithAxis(
-    center: np.ndarray,
-    axis_u: np.ndarray,
-    axis_v: np.ndarray,
+def rasterize_ellipse_with_axis(
+    center: torch.Tensor,  # [2]
+    axis_u: torch.Tensor,  # [2]
+    axis_v: torch.Tensor,  # [2]
     x_range: tuple[int, int],
     y_range: tuple[int, int],
 ):
-    A, b, c_x2, c_xy, c_y2, c_x, c_y, c_1 = TransEllipseAxisToCoeff(
+    A, b, c_x2, c_xy, c_y2, c_x, c_y, c_1 = trans_ellipse_axis_to_coeff(
         center, axis_u, axis_v)
 
-    gen = RasterizeEllipseWithCoeff(
+    gen = rasterize_ellipse_with_coeff(
         c_x2, c_xy, c_y2, c_x, c_y, c_1, x_range, y_range)
 
     for x, y in gen:
@@ -219,17 +216,17 @@ def RasterizeEllipseWithAxis(
 
 
 @beartype
-def NaiveRasterizeEllipseWithAxis(
-    center: np.ndarray,
-    axis_u: np.ndarray,
-    axis_v: np.ndarray,
+def naive_rasterize_ellipse_with_axis(
+    center: torch.Tensor,
+    axis_u: torch.Tensor,
+    axis_v: torch.Tensor,
     x_range: tuple[int, int],
     y_range: tuple[int, int],
 ):
-    A, b, c_x2, c_xy, c_y2, c_x, c_y, c_1 = TransEllipseAxisToCoeff(
+    A, b, c_x2, c_xy, c_y2, c_x, c_y, c_1 = trans_ellipse_axis_to_coeff(
         center, axis_u, axis_v)
 
-    gen = NaiveRasterizeEllipseWithCoeff(
+    gen = naive_rasterize_ellipse_with_coeff(
         c_x2, c_xy, c_y2, c_x, c_y, c_1, x_range, y_range)
 
     for x, y in gen:

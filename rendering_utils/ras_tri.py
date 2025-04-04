@@ -14,7 +14,7 @@ def rasterize_triangle(
     x_range: tuple[int, int],  # [x_min, x_max]
     y_range: tuple[int, int],  # [y_min, y_max]
 ) -> typing.Iterable[tuple[
-    tuple[int, int],  # pixel position
+    tuple[int, int],  # pixel pos
     tuple[float, float, float],  # barycentric coordinate
 ]]:
     assert x_range[0] <= x_range[1]
@@ -122,7 +122,7 @@ def rasterize_triangle_naive(
     x_range: tuple[int, int],  # [x_min, x_max]
     y_range: tuple[int, int],  # [y_min, y_max]
 ) -> typing.Iterable[tuple[
-    tuple[int, int],  # pixel position
+    tuple[int, int],  # pixel pos
     tuple[float, float, float],  # barycentric coordinate
 ]]:
     assert x_range[0] <= x_range[1]

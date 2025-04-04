@@ -68,7 +68,7 @@ class ObjectTransform:
             device = utils.check_devices(pos, vec_a, vec_b, vec_c)
 
         if dtype is None:
-            dtype = utils.promote_types(pos, vec_a, vec_b, vec_c)
+            dtype = utils.promote_dtypes(pos, vec_a, vec_b, vec_c)
 
         s = batch_shape + (3,)
 
@@ -138,8 +138,7 @@ class ObjectTransform:
             case "D": return self.vec_d
             case "L": return self.vec_l
             case "R": return self.vec_r
-
-        assert False, f"Unknown direction {dir}."
+            case _: raise utils.MismatchException()
 
     @property
     def vec_f(self) -> torch.Tensor:  # [..., 3]

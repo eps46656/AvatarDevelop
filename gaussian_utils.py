@@ -114,26 +114,26 @@ def render_gaussian(
 
     # ---
 
-    p = (utils.CUDA_DEVICE, torch.float32)
+    dd = (utils.CUDA_DEVICE, torch.float32)
 
-    world_view_mat = world_view_mat.to(*p).expand(batch_shape + (4, 4))
+    world_view_mat = world_view_mat.to(*dd).expand(batch_shape + (4, 4))
 
-    world_ndc_mat = world_ndc_mat.to(*p).expand(batch_shape + (4, 4))
+    world_ndc_mat = world_ndc_mat.to(*dd).expand(batch_shape + (4, 4))
 
-    camera_pos = camera_transform.pos.to(*p).expand(batch_shape + (3,))
+    camera_pos = camera_transform.pos.to(*dd).expand(batch_shape + (3,))
     # [..., 3]
 
-    bg_color = bg_color.to(*p).expand(batch_shape + (C,))
-    gp_means = gp_means.to(*p).expand(batch_shape + (N, 3))
-    gp_rots = gp_rots.to(*p).expand(batch_shape + (N, 4))
-    gp_scales = gp_scales.to(*p).expand(batch_shape + (N, 3))
-    gp_opacities = gp_opacities.to(*p).expand(batch_shape + (N, 1))
+    bg_color = bg_color.to(*dd).expand(batch_shape + (C,))
+    gp_means = gp_means.to(*dd).expand(batch_shape + (N, 3))
+    gp_rots = gp_rots.to(*dd).expand(batch_shape + (N, 4))
+    gp_scales = gp_scales.to(*dd).expand(batch_shape + (N, 3))
+    gp_opacities = gp_opacities.to(*dd).expand(batch_shape + (N, 1))
 
     if gp_shs is not None:
-        gp_shs = gp_shs.to(*p).expand(batch_shape + (N, C))
+        gp_shs = gp_shs.to(*dd).expand(batch_shape + (N, C))
 
     if gp_colors is not None:
-        gp_colors = gp_colors.to(*p).expand(batch_shape + (N, C))
+        gp_colors = gp_colors.to(*dd).expand(batch_shape + (N, C))
 
     # ---
 

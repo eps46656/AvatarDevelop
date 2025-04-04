@@ -57,42 +57,24 @@ class ModelBlender(avatar_utils.AvatarBlender):
             rhand_poses=torch.zeros(
                 (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
-            blending_vertex_normal=False,
+            blending_vert_nor=False,
         )
 
     def get_avatar_model(self) -> avatar_utils.AvatarModel:
         model_data = self.model_builder.get_model_data()
 
-        kin_tree = model_data.kin_tree
-
-        vertices_cnt = model_data.vertex_positions.shape[-2]
-
-        texture_vertices_cnt = model_data.texture_vertex_positions.shape[-2]
-
-        vertex_positions = model_data.vertex_positions
-
-        texture_vertex_positions = model_data.texture_vertex_positions
-
-        faces = model_data.faces
-
-        texture_faces = model_data.texture_faces
-
-        joint_Ts = None
-
-        mesh_data = model_data.mesh_data
-
         return Model(
-            kin_tree=kin_tree,
-            vertices_cnt=vertices_cnt,
-            texture_vertices_cnt=texture_vertices_cnt,
-            vertex_positions=vertex_positions,
-            vertex_normals=None,
-            vertex_rotations=None,
-            texture_vertex_positions=texture_vertex_positions,
-            faces=faces,
-            texture_faces=texture_faces,
-            joint_Ts=joint_Ts,
-            mesh_data=mesh_data,
+            kin_tree=model_data.kin_tree,
+
+            mesh_data=model_data.mesh_data,
+            tex_mesh_data=model_data.tex_mesh_data,
+
+            vert_pos=model_data.vert_pos,
+            vert_nor=None,
+
+            tex_vert_pos=model_data.tex_vert_pos,
+
+            joint_Ts=None,
         )
 
     @property

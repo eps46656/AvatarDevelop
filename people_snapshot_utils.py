@@ -107,13 +107,13 @@ def _read_smpl_blending_param(
 
     d = h5py.File(subject_dir / "reconstructed_poses.hdf5")
 
-    body_shapes = torch.tensor(d["betas"], dtype=utils.FLOAT)
+    body_shapes = torch.from_numpy(d["betas"][...]).to(utils.FLOAT)
     # [?]
 
-    global_transl = torch.tensor(d["trans"], dtype=utils.FLOAT)
+    global_transl = torch.from_numpy(d["trans"][...]).to(utils.FLOAT)
     # [T, 3]
 
-    poses = torch.tensor(d["pose"], dtype=utils.FLOAT)
+    poses = torch.from_numpy(d["pose"][...]).to(utils.FLOAT)
     # [T, ? * 3]
 
     # ---

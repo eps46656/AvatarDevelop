@@ -54,13 +54,13 @@ class DeformableModelBuilder(ModelBuilder):
         super().__init__()
         self.model_data = copy.copy(model_data)
 
-        self.model_data.vertex_positions = torch.nn.Parameter(
-            self.model_data.vertex_positions.to(
+        self.model_data.vert_pos = torch.nn.Parameter(
+            self.model_data.vert_pos.to(
                 dtype=torch.float64, copy=True,
             ))
 
         self.register_parameter(
-            "vertex_positions", self.model_data.vertex_positions)
+            "vert_pos", self.model_data.vert_pos)
 
     def get_model_data(self) -> ModelData:
         return self.model_data
@@ -74,17 +74,17 @@ class DeformableModelBuilder(ModelBuilder):
         return self
 
     def freeze(self):
-        self.model_data.vertex_positions.requires_grad = False
+        self.model_data.vert_pos.requires_grad = False
 
     def unfreeze(self):
-        self.model_data.vertex_positions.requires_grad = True
+        self.model_data.vert_pos.requires_grad = True
 
     def get_param_groups(self, base_lr: float):
         ret = list()
 
-        if self.model_data.vertex_positions.requires_grad:
+        if self.model_data.vert_pos.requires_grad:
             ret.append({
-                "params": [self.model_data.vertex_positions],
+                "params": [self.model_data.vert_pos],
                 "lr": min(1e-7, base_lr * 1e-2),
             })
 

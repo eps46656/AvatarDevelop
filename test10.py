@@ -28,7 +28,7 @@ def main1():
     )
 
     face_vertex_adj_mat = mesh_utils.GetFaceVertexAdjMat(
-        model_data.vertex_positions.shape[-2],
+        model_data.vert_pos.shape[-2],
         model_data.faces
     )  # [F, V]
 
@@ -167,12 +167,12 @@ def main5():
         device=DEVICE,
     )
 
-    V = model_data.vertex_positions.shape[-2]
+    V = model_data.vert_pos.shape[-2]
     F = model_data.faces.shape[-2]
 
     D = 3
 
-    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_face_vertex_adj_list(
+    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_face_vert_adj_list(
         V,
         model_data.faces,
         DEVICE

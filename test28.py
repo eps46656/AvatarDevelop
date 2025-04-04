@@ -26,13 +26,13 @@ def main1():
 
     result: smplx_utils.Model = model_blender(smplx_utils.BlendingParam())
 
-    vertex_positions = result.vertex_positions
+    vert_pos = result.vert_pos
     # [V, 3]
 
-    V = utils.check_shapes(vertex_positions, (-1, 3))
+    V = utils.check_shapes(vert_pos, (-1, 3))
 
-    min_x, min_y, min_z = vertex_positions.min(0)[0]
-    max_x, max_y, max_z = vertex_positions.max(0)[0]
+    min_x, min_y, min_z = vert_pos.min(0)[0]
+    max_x, max_y, max_z = vert_pos.max(0)[0]
 
     print(f"{min_x=}, {min_y=}, {min_z=}")
     print(f"{max_x=}, {max_y=}, {max_z=}")
@@ -48,11 +48,11 @@ def main1():
 
     with utils.Timer():
         sd_a = model_data.mesh_data.calc_signed_dist(
-            vertex_positions, p)
+            vert_pos, p)
 
     with utils.Timer():
         sd_b = model_data.mesh_data.calc_signed_dist_trimesh(
-            vertex_positions, p)
+            vert_pos, p)
 
     # print(f"{sd_a=}")
     # print(f"{sd_b=}")

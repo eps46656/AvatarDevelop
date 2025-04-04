@@ -12,8 +12,8 @@ DIR = FILE.parents[0]
 
 
 def read_obj(obj_path: os.PathLike):
-    texture_vertex_position = []
-    texture_faces = []
+    tex_vert_pos = []
+    tex_faces = []
 
     with open(obj_path, "r") as file:
         for line in file:
@@ -23,16 +23,16 @@ def read_obj(obj_path: os.PathLike):
                 continue
 
             if parts[0] == 'vt':
-                texture_vertex_position.append(list(map(float, parts[1:])))
+                tex_vert_pos.append(list(map(float, parts[1:])))
 
             if parts[0] == "f":
-                texture_faces.append(
+                tex_faces.append(
                     [int(part.split('/')[1]) - 1 for part in parts[1:]])
 
-    return texture_vertex_position, texture_faces
+    return tex_vert_pos, tex_faces
 
 
-def F(model_name: str, texture_faces, texture_vertex_position):
+def F(model_name: str, tex_faces, tex_vert_pos):
     model_data_path = DIR / f"SMPL_python_v.1.1.0/smpl/models/{model_name}.pkl"
 
     uv_map_path = DIR / f"smpl_uv_20200910/smpl_uv.obj"
@@ -77,8 +77,8 @@ def F(model_name: str, texture_faces, texture_vertex_position):
     assert "ft" not in dst_model_data
     assert "vt" not in dst_model_data
 
-    dst_model_data["ft"] = texture_faces
-    dst_model_data["vt"] = texture_vertex_position
+    dst_model_data["ft"] = tex_faces
+    dst_model_data["vt"] = tex_vert_pos
 
     with open(dst_model_data_path, mode="wb+") as f:
         pickle.dump(dst_model_data, f)
@@ -110,21 +110,21 @@ def main1():
 
     uv_map_path = DIR / f"smpl_uv_20200910/smpl_uv.obj"
 
-    texture_vertices, texture_faces = read_obj(uv_map_path)
+    tex_verts, tex_faces = read_obj(uv_map_path)
 
-    smpl_texture_vertices = np.array(texture_vertices)
-    smpl_texture_faces = np.array(texture_faces)
+    smpl_tex_verts = np.array(tex_verts)
+    smpl_tex_faces = np.array(tex_faces)
 
-    print(f"{smpl_texture_vertices.shape}")
-    print(f"{smpl_texture_faces.shape}")
+    print(f"{smpl_tex_verts.shape}")
+    print(f"{smpl_tex_faces.shape}")
 
-    print(f"{smpl_texture_faces.min()}")
-    print(f"{smpl_texture_faces.max()}")
+    print(f"{smpl_tex_faces.min()}")
+    print(f"{smpl_tex_faces.max()}")
 
     return
 
     for model_name in model_names:
-        F(model_name, smpl_texture_vertices, smpl_texture_faces)
+        F(model_name, smpl_tex_verts, smpl_tex_faces)
 
 
 def main2():
@@ -155,15 +155,6 @@ def main3():
     )
 
     print(model_data)
-
-
-def main4():
-    uv_map_path = DIR / f"smpl_uv_20200910/smpl_uv.obj"
-
-    texture_faces, texture_vertices = read_obj(uv_map_path)
-
-    print("Texture Faces:", texture_faces)
-    print("Texture Vertices:", texture_vertices)
 
 
 if __name__ == "__main__":

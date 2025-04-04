@@ -1,6 +1,7 @@
 import dataclasses
 import enum
 import math
+import typing
 
 import torch
 from beartype import beartype
@@ -25,16 +26,16 @@ def make_view(
     origin: torch.Tensor,  # [..., 3]
     aim: torch.Tensor,  # [..., 3]
     quasi_u_dir: torch.Tensor,  # [..., 3]
-):
+) -> transform_utils.ObjectTransform:
     utils.check_shapes(
         origin, (..., 3),
         aim, (..., 3),
         quasi_u_dir, (..., 3),
     )
 
-    f_vec = utils.normalized(aim - origin, -1)
-    r_vec = utils.normalized(torch.linalg.cross(f_vec, quasi_u_dir), -1)
-    u_vec = torch.linalg.cross(r_vec, f_vec, -1)
+    f_vec = utils.vec_normed(aim - origin)
+    r_vec = utils.vec_normed(utils.vec_cross(f_vec, quasi_u_dir))
+    u_vec = utils.vec_cross(r_vec, f_vec)
 
     return transform_utils.ObjectTransform.from_matching(
         dirs="FRU",
@@ -44,7 +45,8 @@ def make_view(
 
 
 @beartype
-def make_focal_length_by_fov_diag(img_h: int, img_w: int, fov_diag: float):
+def make_focal_length_by_fov_diag(img_h: int, img_w: int, fov_diag: float) \
+        -> float:
     assert 0 < img_h
     assert 0 < img_w
 
@@ -94,7 +96,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         assert 0 < fov_diag < 180 * utils.DEG
 
         focal_length = make_focal_length_by_fov_diag(img_h, img_w, fov_diag)
@@ -119,7 +121,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         assert 0 < fov_h < 180 * utils.DEG
         assert 0 < fov_w < 180 * utils.DEG
 
@@ -145,7 +147,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         assert -90 * utils.DEG < fov_u < 90 * utils.DEG
         assert -90 * utils.DEG < fov_d < 90 * utils.DEG
         assert -90 * utils.DEG < fov_l < 90 * utils.DEG
@@ -170,7 +172,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         return CameraConfig(
             ProjType.PERS,
             slope_u, slope_d,
@@ -188,7 +190,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         foc_ud = delta_h / 2
         foc_lr = delta_w / 2
 
@@ -211,7 +213,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ):
+    ) -> typing.Self:
         return CameraConfig(
             ProjType.ORTH,
             delta_u, delta_d,
@@ -221,21 +223,21 @@ class CameraConfig:
         )
 
     @property
-    def fov_h(self):
+    def fov_h(self) -> float:
         assert self.proj_type == ProjType.PERS
         return math.atan(self.foc_u) + math.atan(self.foc_d)
 
     @property
-    def fov_w(self):
+    def fov_w(self) -> float:
         assert self.proj_type == ProjType.PERS
         return math.atan(self.foc_l) + math.atan(self.foc_r)
 
     @property
-    def pixel_h(self):
+    def pixel_h(self) -> float:
         return (self.foc_u + self.foc_d) / self.img_h
 
     @property
-    def pixel_w(self):
+    def pixel_w(self) -> float:
         return (self.foc_l + self.foc_r) / self.img_w
 
 
@@ -257,7 +259,7 @@ class ProjConfig:
 class Convention(enum.StrEnum):
     OpenGL = "OpenGL"
     OpenCV = "OpenCV"
-    PyTorch3D = "Pytorch3D"
+    PyTorch3D = "PyTorch3D"
     Unity = "Unity"
     Blender = "Blender"
 
@@ -303,7 +305,8 @@ def make_proj_config_OpenGL(
 
             return proj_config
 
-    assert False, f"Unknown target coord {target_coord}."
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype
@@ -347,11 +350,12 @@ def MakeProjConfig_OpenCV(
 
             return proj_config
 
-    assert False, f"Unknown target coord {target_coord}."
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype
-def make_proj_config_Pytorch3D(
+def make_proj_config_PyTorch3D(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -396,7 +400,8 @@ def make_proj_config_Pytorch3D(
 
             return proj_config
 
-    assert False, f"Unknown target coord {target_coord}."
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype
@@ -440,53 +445,8 @@ def MakeProjConfig_Unity(
 
             return proj_config
 
-    assert False, f"Unknown target coord {target_coord}."
-
-
-"""
-@beartype
-def MakeProjConfig_Blender(
-    *,
-    camera_config: CameraConfig,
-    target_coord: Coord,
-) -> ProjConfig:
-    match target_coord:
-        case Coord.NDC:
-            proj_config = ProjConfig(
-                camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUB"),
-
-                delta_u=1.0,
-                delta_d=1.0,
-
-                delta_l=1.0,
-                delta_r=1.0
-
-                delta_f=1.0,
-                delta_b=1.0,
-            )
-
-            return proj_config
-
-        case Coord.Screen:
-            proj_config = ProjConfig(
-                camera_proj_transform=transform_utils.ObjectTransform.
-                FromMatching("RUB"),
-
-                delta_u=0.0,
-                delta_d=camera_config.img_h * 1.0,
-
-                delta_l=0.0,
-                delta_r=camera_config.img_w * 1.0,
-
-                delta_f=1.0,
-                delta_b=1.0,
-            )
-
-            return proj_config
-
-    assert False, f"Unknown target coord {target_coord}."
-"""
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype
@@ -504,12 +464,13 @@ def make_proj_config(
             )
 
         case Convention.PyTorch3D:
-            return make_proj_config_Pytorch3D(
+            return make_proj_config_PyTorch3D(
                 camera_config=camera_config,
                 target_coord=target_coord,
             )
 
-    assert False, f"Unknown convention {convention}."
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype
@@ -601,12 +562,6 @@ def make_proj_mat_with_config(
 
             M[3, 3] = 1
 
-            re_std_dst_points = (M @ std_src_points.unsqueeze(-1)).squeeze(-1)
-
-            err = utils.get_l2_rms(re_std_dst_points - std_dst_points)
-
-            assert err <= 1e-4, f"{err=}"
-
         case ProjType.PERS:
             std_src_points = torch.tensor([
                 [src_l * src_n, 0, src_n, 1],
@@ -633,14 +588,14 @@ def make_proj_mat_with_config(
 
             M[3, 2] = 1
 
-            re_std_dst_points = utils.do_homo(M, std_src_points)
-
-            err = utils.get_l2_rms(re_std_dst_points - std_dst_points)
-
-            assert err <= 1e-4, f"{err=}"
-
         case _:
-            assert False, f"Unknown proj type {camera_config.proj_type}."
+            raise utils.MismatchException()
+
+    re_std_dst_points = utils.do_homo(M, std_src_points)
+
+    err = utils.get_l2_rms(re_std_dst_points - std_dst_points)
+
+    assert err <= 1e-4, f"{err=}"
 
     return (std_to_dst @ M.to(device)) @ src_to_std
 

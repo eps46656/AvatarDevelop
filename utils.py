@@ -149,10 +149,38 @@ class UnimplementationError(Exception):
     pass
 
 
+class MismatchException(Exception):
+    pass
+
+
 @beartype
 def torch_cuda_sync():
     if torch.cuda.is_available():
         torch.cuda.synchronize()
+
+
+@beartype
+def _mem_clear() -> None:
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+@beartype
+def mem_clear(func: typing.Optional[typing.Callable] = None):
+    if func is None:
+        _mem_clear()
+        return
+
+    @functools.wraps(func)
+    def f(*args, **kwargs):
+        _mem_clear()
+        ret = func(*args, **kwargs)
+        _mem_clear()
+        return ret
+
+    return f
 
 
 @beartype
@@ -322,27 +350,19 @@ def write_image(
 
     os.makedirs(path.parents[0], exist_ok=True)
 
-    print_cur_pos()
+    img = img.to(CPU_DEVICE)
 
     img = denormalize_image(img)
 
-    print_cur_pos()
-
     if path.suffix == ".png":
-        print_cur_pos()
         torchvision.io.write_png(img, path)
-        print_cur_pos()
         return
 
     if path.suffix == ".jpg" or path.suffix == ".jpeg":
-        print_cur_pos()
         torchvision.io.write_jpeg(img, path)
-        print_cur_pos()
         return
 
-    print_cur_pos()
-
-    assert False, f"unknown extension: {path.suffix}"
+    raise MismatchException()
 
 
 @beartype
@@ -352,7 +372,7 @@ def read_video(
     typing.Optional[torch.Tensor],  # video
     int,  # fps
 ]:
-    gc.collect()
+    _mem_clear()
 
     video, audio, d = torchvision.io.read_video(
         path,
@@ -365,7 +385,7 @@ def read_video(
 
     video = normalize_image(video)
 
-    gc.collect()
+    _mem_clear()
 
     return video, video_fps
 
@@ -377,7 +397,9 @@ def write_video(
     fps: int,
     codec: str = "h264",
 ) -> None:
-    gc.collect()
+    _mem_clear()
+
+    video = video.to(CPU_DEVICE)
 
     torchvision.io.write_video(
         filename=path,
@@ -387,7 +409,7 @@ def write_video(
         video_codec=codec,
     )
 
-    gc.collect()
+    _mem_clear()
 
 
 @beartype
@@ -579,7 +601,7 @@ def cart_to_sph(x: float, y: float, z: float) \
 
 
 @beartype
-def NormalizedIdx(idx: int, length: int) -> int:
+def normed_idx(idx: int, length: int) -> int:
     assert -length <= idx
     assert idx < length
 
@@ -620,8 +642,51 @@ def try_get_batch_shape(x: typing.Optional[torch.Tensor],  dim: int):
 
 
 @beartype
-def try_batch_expand(x: typing.Optional[torch.Tensor], shape, dim: int):
-    return None if x is None else x.expand(tuple(shape) + x.shape[dim:])
+def try_batch_expand(x: typing.Optional[torch.Tensor], batch_shape, dim: int):
+    return None if x is None else x.expand(tuple(batch_shape) + x.shape[dim:])
+
+
+@beartype
+def try_batch_index(x: typing.Optional[torch.Tensor], dim: int, idx):
+    if x is None:
+        return None
+
+    dim = normed_idx(dim, x.dim())
+
+    data_idx = tuple(slice(None) for _ in range(x.dim() - dim))
+
+    if not isinstance(idx, tuple):
+        idx = (idx,)
+
+    return x[idx + data_idx]
+
+
+@beartype
+def unbatch_expand(x: typing.Optional[torch.Tensor], dim: int):
+    dim = normed_idx(dim, x.dim())
+
+    idx = [None for _ in range(x.dim())]
+
+    is_first = True
+
+    for i in range(x.dim()):
+        if dim <= i or x.shape[i] == 0 or x.stride(i) != 0:
+            is_first = False
+            idx[i] = slice(None)
+        else:
+            idx[i] = 0 if is_first else slice(0, 1)
+
+    return x[*idx]
+
+
+@beartype
+def try_batch_indexing(
+    x: typing.Optional[torch.Tensor],
+    batch_shape: torch.Size,
+    dim: int,
+    idx,
+) -> typing.Optional[torch.Tensor]:
+    return None if x is None else unbatch_expand(x.expand(batch_shape + x.shape[:dim])[idx], dim)
 
 
 @beartype
@@ -645,7 +710,7 @@ def ravel_idxes(
 
 
 @beartype
-def promote_types(*args: None | object) -> torch.dtype:
+def promote_dtypes(*args: object) -> torch.dtype:
     return functools.reduce(
         torch.promote_types,
         (arg if isinstance(arg, torch.dtype) else arg.dtype
@@ -655,7 +720,13 @@ def promote_types(*args: None | object) -> torch.dtype:
 
 
 @beartype
-def check_devices(*args: None | object) -> torch.device:
+def to_promoted_dtype(*args: object) -> tuple[object]:
+    t = promote_dtypes(*args)
+    return tuple(None if arg is None else arg.to(t) for arg in args)
+
+
+@beartype
+def check_devices(*args: object) -> torch.device:
     ret = None
 
     for arg in args:
@@ -694,6 +765,21 @@ def batch_eye(
 
 
 @beartype
+def idx_grid(
+    shape: typing.Iterable[int],
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+):
+    shape = tuple(shape)
+
+    return torch.cartesian_prod(*(
+        torch.arange(s, dtype=dtype, device=device)
+        for s in shape
+    )).reshape(shape + (len(shape),))
+
+
+@beartype
 def rand_unit(
     size,  # [..., D]
     *,
@@ -701,7 +787,7 @@ def rand_unit(
     device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:  # [..., D]
     v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
-    return v / (EPS + vector_norm(v, -1, True))
+    return v / (EPS + vec_norm(v, -1, True))
 
 
 @beartype
@@ -726,17 +812,7 @@ def rand_rot_vec(
 
 
 @beartype
-def dot(
-    x: torch.Tensor,  # [...]
-    y: torch.Tensor,  # [...]
-    dim: int = -1,
-    keepdim: bool = False,
-) -> torch.Tensor:  # [...]
-    return (x * y).sum(dim, keepdim)
-
-
-@beartype
-def vector_norm(
+def vec_norm(
     x: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
@@ -745,13 +821,37 @@ def vector_norm(
 
 
 @beartype
-def normalized(
+def vec_dot(
+    x: torch.Tensor,  # [...]
+    y: torch.Tensor,  # [...]
+    dim: int = -1,
+    keepdim: bool = False,
+) -> torch.Tensor:  # [...]
+    ret = torch.linalg.vecdot(x, y, dim=dim)
+
+    if keepdim:
+        ret = ret.unsqueeze(dim)
+
+    return ret
+
+
+@beartype
+def vec_cross(
+    x: torch.Tensor,  # [...]
+    y: torch.Tensor,  # [...]
+    dim: int = -1,
+) -> torch.Tensor:  # [...]
+    return torch.linalg.cross(x, y)
+
+
+@beartype
+def vec_normed(
     x: torch.Tensor,  # [...]
     dim: int = -1,
     length: typing.Optional[int | float | torch.Tensor] = None,
 ) -> torch.Tensor:  # [...]
-    norm = (EPS + vector_norm(x, dim, True))
-    return x / norm if length is None else x * (length / norm)
+    x_norm = (EPS + vec_norm(x, dim, True))
+    return x / x_norm if length is None else x * (length / x_norm)
 
 
 @beartype
@@ -761,7 +861,7 @@ def get_diff(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
-    return vector_norm(x - y, dim, keepdim)
+    return vec_norm(x - y, dim, keepdim)
 
 
 @beartype
@@ -771,10 +871,10 @@ def get_cos_angle(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...] or [..., 1]
-    x_norm = vector_norm(x, dim, keepdim)
-    y_norm = vector_norm(y, dim, keepdim)
+    x_norm = vec_norm(x, dim, keepdim)
+    y_norm = vec_norm(y, dim, keepdim)
 
-    return dot(x, y, dim, keepdim) / (EPS + x_norm * y_norm)
+    return vec_dot(x, y, dim, keepdim) / (EPS + x_norm * y_norm)
 
 
 @beartype
@@ -798,12 +898,12 @@ def axis_angle_to_quaternion(
 
     order = check_quaternion_order(order)
 
-    norm = vector_norm(axis)
+    axis_norm = vec_norm(axis)
 
     if angle is None:
-        angle = norm
+        angle = axis_norm
 
-    unit_axis = axis / (EPS + norm.unsqueeze(-1))
+    unit_axis = axis / (EPS + axis_norm.unsqueeze(-1))
 
     half_angle = angle / 2
 
@@ -838,7 +938,7 @@ def quaternion_to_axis_angle(
 
     w, x, y, z = get_quaternion_wxyz(quaternion, order)
 
-    k = 1 / vector_norm(quaternion)
+    k = 1 / vec_norm(quaternion)
 
     w = w * k
     x = x * k
@@ -867,12 +967,12 @@ def _axis_angle_to_rot_mat(
 ):
     check_shapes(axis, (..., 3))
 
-    norm = vector_norm(axis)
+    axis_norm = vec_norm(axis)
 
     if angle is None:
-        angle = norm
+        angle = axis_norm
 
-    unit_axis = axis / (EPS + norm.unsqueeze(-1))
+    unit_axis = axis / (EPS + axis_norm.unsqueeze(-1))
 
     c = angle.cos()
     s = angle.sin()
@@ -964,7 +1064,7 @@ def rot_mat_to_axis_angle(
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
-    k = 0.5 * (4 - (tr - 1).square()).clamp(min=EPS).rsqrt()
+    k = 0.5 * (4 - (tr - 1).square()).clamp(1e-6, None).rsqrt()
 
     axis = torch.empty(rot_mat.shape[:-1],
                        dtype=rot_mat.dtype, device=rot_mat.device)
@@ -989,7 +1089,7 @@ def quaternion_to_rot_mat_(
 
     w, x, y, z = get_quaternion_wxyz(quaternion, order)
 
-    k = math.sqrt(2) / vector_norm(quaternion)
+    k = math.sqrt(2) / vec_norm(quaternion)
 
     w = w * k
     x = x * k
@@ -1113,10 +1213,10 @@ def rot_mat_to_quaternion(
     a2 = a_mat[..., 2] = (tr_n + m11 * 2)
     a3 = a_mat[..., 3] = (tr_n + m22 * 2)
 
-    s0 = (1e-6 + a0).sqrt() * 2
-    s1 = (1e-6 + a1).sqrt() * 2
-    s2 = (1e-6 + a2).sqrt() * 2
-    s3 = (1e-6 + a3).sqrt() * 2
+    s0 = a0.clamp(1e-6, None).sqrt() * 2
+    s1 = a1.clamp(1e-6, None).sqrt() * 2
+    s2 = a2.clamp(1e-6, None).sqrt() * 2
+    s3 = a3.clamp(1e-6, None).sqrt() * 2
 
     q_mat = torch.empty(
         rot_mat.shape[:-2] + (4, 4),
@@ -1213,7 +1313,7 @@ def make_homo(
     x: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
-    dim = NormalizedIdx(dim, x.dim())
+    dim = normed_idx(dim, x.dim())
 
     shape = list(x.shape)
     shape[dim] += 1
@@ -1236,7 +1336,7 @@ def homo_normalize(
     x: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
-    dim = NormalizedIdx(dim, x.dim())
+    dim = normed_idx(dim, x.dim())
 
     idxes = [slice(None)] * x.dim()
     idxes[dim] = slice(-1, None)
@@ -1292,6 +1392,13 @@ def merge_rt(
         b_ts, (..., Q),
     )
 
+    dtype = promote_dtypes(a_rs, a_ts, b_rs, b_ts)
+
+    a_rs = a_rs.to(dtype)
+    a_ts = a_ts.to(dtype)
+    b_rs = b_rs.to(dtype)
+    b_ts = b_ts.to(dtype)
+
     if out_rs is None:
         out_rs = a_rs @ b_rs
     else:
@@ -1332,7 +1439,7 @@ def get_inv_rt(
     if out_ts is None:
         out_ts = torch.empty(
             ts.shape + (1,),
-            dtype=promote_types(rs, ts),
+            dtype=promote_dtypes(rs, ts),
             device=check_devices(out_rs, ts)
         )
 
@@ -1389,7 +1496,7 @@ def dlt(
         mean = points.mean(0, True)
         # [1, D]
 
-        odist = vector_norm(points - mean).mean()
+        odist = vec_norm(points - mean).mean()
 
         k = dist / odist
 

@@ -1,30 +1,16 @@
-import numpy as np
-import utils
-import pickle
+
 
 import torch
-import sampling_utils
-
-import pathlib
-
-import json
-
-FILE = pathlib.Path(__file__)
-DIR = FILE.parents[0]
 
 
 def main1():
-    with open(DIR / "smplx_param.json") as f:
-        data = json.load(f)
+    axis_x = torch.tensor([0, 1, 2])
+    axis_y = torch.tensor([3, 4, 5])
+    axis_z = torch.tensor([6, 7, 8])
 
-    print(data)
+    m = torch.stack([axis_x, axis_y, axis_z], -1)
 
-    print(len(data["body_pose"]))  # 63
-    print(len(data["lhand_pose"]))  # 45
-    print(len(data["rhand_pose"]))  # 45
-    print(len(data["shape"]))  # 10
-
-    pass
+    print(f"{m=}")
 
 
 if __name__ == "__main__":

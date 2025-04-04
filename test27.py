@@ -186,7 +186,7 @@ def main1():
     print(f"{subject_data.video.shape=}")
     print(f"{subject_data.mask.shape=}")
     print(f"{subject_data.blending_param.shape=}")
-    print(f"{subject_data.model_data.vertex_positions.shape=}")
+    print(f"{subject_data.model_data.vert_pos.shape=}")
 
     dataset = gom_utils.Dataset(gom_utils.Sample(
         camera_transform=subject_data.camera_transform,

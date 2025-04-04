@@ -6,7 +6,18 @@ from beartype import beartype
 
 from .. import (avatar_utils, camera_utils, gaussian_utils, transform_utils,
                 utils)
-from .utils import get_face_coord
+from .utils import FaceCoordResult, get_face_coord
+
+
+@beartype
+@dataclasses.dataclass
+class GPResult:
+    face_coord_result: FaceCoordResult
+    gp_means: torch.Tensor  # [..., F, 3]
+    gp_rot_qs: torch.Tensor  # [..., F, 4]
+    gp_scales: torch.Tensor  # [..., F, 3]
+    gp_colors: torch.Tensor  # [..., F, 3]
+    gp_opacities: torch.Tensor  # [..., F, 1]
 
 
 @beartype
@@ -18,7 +29,7 @@ class ModuleForwardResult:
 
     rgb_loss: float | torch.Tensor
     lap_smoothing_loss: float | torch.Tensor
-    normal_sim_loss: float | torch.Tensor
+    nor_sim_loss: float | torch.Tensor
     color_diff_loss: float | torch.Tensor
 
 
@@ -52,7 +63,7 @@ class Module(torch.nn.Module):
         self.gp_rot_qs = torch.nn.Parameter(gp_rot_qs)
         # [F, 4]
 
-        self.gp_log_scales = torch.nn.Parameter(torch.ones(
+        self.gp_scales = torch.nn.Parameter(torch.ones(
             (faces_cnt, 3),
             dtype=utils.FLOAT))
         # [F, 3]
@@ -80,14 +91,70 @@ class Module(torch.nn.Module):
         ret.append({
             "params": [
                 self.gp_rot_qs,
+                self.gp_scales,
                 self.gp_colors,
-                self.gp_log_scales,
                 self.gp_log_opacities,
             ],
             "lr": base_lr
         })
 
         return ret
+
+    @property
+    def faces_cnt(self) -> int:
+        return self.gp_rot_qs.shape[0]
+
+    def get_world_gp(
+        self,
+        vert_pos_a: torch.Tensor,  # [..., F, 3]
+        vert_pos_b: torch.Tensor,  # [..., F, 3]
+        vert_pos_c: torch.Tensor,  # [..., F, 3]
+    ) -> GPResult:
+        F = self.faces_cnt
+
+        utils.check_shapes(
+            vert_pos_a, (..., F, 3),
+            vert_pos_b, (..., F, 3),
+            vert_pos_c, (..., F, 3),
+        )
+
+        face_coord_result = get_face_coord(vert_pos_a, vert_pos_b, vert_pos_c)
+        # face_coord_result.rs[..., F, 3, 3]
+        # face_coord_result.ts[..., F, 3]
+        # face_coord_result.areas[..., F]
+
+        face_coord_rot_qs = utils.rot_mat_to_quaternion(
+            face_coord_result.rs, order="WXYZ")
+
+        world_gp_means = face_coord_result.ts
+        # [..., F, 3]
+
+        world_gp_rot_qs = utils.quaternion_mul(
+            face_coord_rot_qs, self.gp_rot_qs,
+            order_1="WXYZ",
+            order_2="WXYZ",
+            order_out="WXYZ",
+        )
+        # [..., F, 4] wxyz
+
+        k = face_coord_result.areas.sqrt()
+        # [..., F]
+
+        world_gp_scales = torch.empty(
+            k.shape[:-1] + (F, 3), dtype=k.dtype, device=k.device)
+
+        world_gp_scales[..., :, 0] = k * self.gp_scales[:, 0]
+        world_gp_scales[..., :, 1] = k * self.gp_scales[:, 1]
+        world_gp_scales[..., :, 2] = k * self.gp_scales[:, 2] * 1e-2
+
+        return GPResult(
+            face_coord_result=face_coord_result,
+            gp_means=world_gp_means,
+            gp_rot_qs=world_gp_rot_qs,
+            gp_scales=world_gp_scales,
+            gp_colors=self.gp_colors,
+            gp_opacities=torch.exp(self.gp_log_opacities),
+        )
 
     def forward(
         self,
@@ -108,62 +175,17 @@ class Module(torch.nn.Module):
         avatar_model: avatar_utils.AvatarModel = \
             self.avatar_blender(blending_param)
 
-        faces = avatar_model.faces
+        faces = avatar_model.mesh_data.face_vert_adj_list
         # [F, 3]
 
-        F = faces.shape[0]
-
-        vertex_positions = avatar_model.vertex_positions
+        vp = avatar_model.vert_pos
         # [..., V, 3]
 
-        vps_a = vertex_positions[..., faces[:, 0], :]
-        vps_b = vertex_positions[..., faces[:, 1], :]
-        vps_c = vertex_positions[..., faces[:, 2], :]
-        # [..., F, 3]
-
-        face_rs, face_ts = get_face_coord(vps_a, vps_b, vps_c)
-        # face_rs[..., F, 3, 3]
-        # face_ts[..., F, 3]
-
-        gp_scales = torch.exp(self.gp_log_scales)
-        # [F, 3]
-
-        gp_rot_mats = utils.quaternion_to_rot_mat(
-            self.gp_rot_qs,
-            order="WXYZ",
-            out_shape=(3, 3),
+        world_gp_result = self.get_world_gp(
+            vp[..., faces[:, 0], :],
+            vp[..., faces[:, 1], :],
+            vp[..., faces[:, 2], :],
         )
-        # [F, 3, 3]
-
-        gp_rs = torch.stack([
-            gp_rot_mats[:, :, 0] * gp_scales[:, 0],
-            gp_rot_mats[:, :, 1] * gp_scales[:, 1],
-            gp_rot_mats[:, :, 2] * gp_scales[:, 2],
-        ], -2)
-
-        gp_ts = torch.zeros((3,), dtype=gp_rs.dtype, device=gp_rs.device)
-
-        global_gp_rs, global_gp_ts = utils.merge_rt(
-            face_rs, face_ts, gp_rs, gp_ts)
-        # global_gp_rs[..., F, 3, 3]
-        # global_gp_ts[..., F, 3]
-
-        global_gp_means = global_gp_ts
-        # [..., F, 3]
-
-        global_gp_scales = utils.vector_norm(global_gp_rs, -2)
-        # [..., F, 3, 3] -> [..., F, 1, 3] -> [..., F, 3]
-
-        global_gp_rot_mats = global_gp_rs / global_gp_scales.unsqueeze(-2)
-        # [..., F, 3, 3] * [..., F, 1, 3] -> [..., F, 3, 3]
-
-        global_gp_rot_qs = utils.rot_mat_to_quaternion(
-            global_gp_rot_mats,
-            order="WXYZ",
-        )
-        # [..., F, 4] wxyz
-
-        gp_colors = self.gp_colors
 
         rendered_result = gaussian_utils.render_gaussian(
             camera_config=camera_config,
@@ -172,16 +194,16 @@ class Module(torch.nn.Module):
             sh_degree=0,
 
             bg_color=torch.ones((color_channels_cnt,),
-                                dtype=utils.FLOAT, device=device),
+                                dtype=world_gp_result.gp_colors.dtype),
 
-            gp_means=global_gp_means,
-            gp_rots=global_gp_rot_qs,
-            gp_scales=global_gp_scales,
+            gp_means=world_gp_result.gp_means,
+            gp_rots=world_gp_result.gp_rot_qs,
+            gp_scales=world_gp_result.gp_scales,
 
             gp_shs=None,
-            gp_colors=gp_colors,
+            gp_colors=world_gp_result.gp_colors,
 
-            gp_opacities=torch.exp(self.gp_log_opacities),
+            gp_opacities=world_gp_result.gp_opacities,
 
             device=device,
         )  # [...]
@@ -207,23 +229,21 @@ class Module(torch.nn.Module):
             lap_smoothing_loss = 0.0
         else:
             lap_smoothing_loss = mesh_data.calc_lap_smoothing_loss(
-                avatar_model.vertex_positions)
+                avatar_model.vert_pos)
 
         if not self.training:
-            normal_sim_loss = 0.0
+            nor_sim_loss = 0.0
         else:
-            normal_sim_loss = 0.0
+            nor_sim_loss = 0.0
 
-            """
-            normal_sim = mesh_data.calc_face_cos_sim(
-                face_coord_result.Ts[..., :3, 2]
+            nor_sim = mesh_data.calc_face_cos_sims(
+                world_gp_result.face_coord_result.rs[..., :, :3, 2]
                 # the z axis of each face
             )
 
             # [..., FP]
 
-            normal_sim_loss = 1 - normal_sim.mean()"
-            """
+            nor_sim_loss = 1 - nor_sim.mean()
 
         if not self.training:
             color_diff_loss = 0.0
@@ -242,6 +262,6 @@ class Module(torch.nn.Module):
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,
             lap_smoothing_loss=lap_smoothing_loss,
-            normal_sim_loss=normal_sim_loss,
+            nor_sim_loss=nor_sim_loss,
             color_diff_loss=color_diff_loss,
         )

@@ -12,7 +12,7 @@ import typing
 import torch
 from beartype import beartype
 
-from . import dataset_utils, sqlite_utils, utils
+from . import sqlite_utils, utils
 
 
 @beartype
@@ -133,14 +133,36 @@ class TrainingResult:
 
 
 @beartype
-@dataclasses.dataclass
 class TrainingCore:
-    module: typing.Optional[torch.nn.Module]
-    dataset: typing.Optional[dataset_utils.Dataset]
-    dataset_loader: typing.Optional[dataset_utils.DatasetLoader]
-    loss_func: typing.Optional[typing.Callable]
-    optimizer: typing.Optional[torch.optim.Optimizer]
-    scheduler: typing.Optional[object]
+    @property
+    def module(self) -> typing.Optional[torch.nn.Module]:
+        raise utils.UnimplementationError()
+
+    @module.setter
+    def module(self, module: typing.Optional[torch.nn.Module]):
+        raise utils.UnimplementationError()
+
+    # ---
+
+    @property
+    def optimizer(self) -> typing.Optional[torch.optim.Optimizer]:
+        raise utils.UnimplementationError()
+
+    @optimizer.setter
+    def optimizer(self, optimizer: typing.Optional[torch.optim.Optimizer]):
+        raise utils.UnimplementationError()
+
+    # ---
+
+    @property
+    def scheduler(self) -> object:
+        raise utils.UnimplementationError()
+
+    @optimizer.setter
+    def scheduler(self, scheduler: object):
+        raise utils.UnimplementationError()
+
+    # ---
 
     def train(self) -> TrainingResult:
         raise utils.UnimplementationError()
@@ -256,6 +278,24 @@ def make_cmd_parser():
     eval_parser = subparser.add_parser(
         "eval",
         help="eval the module",
+    )
+
+    # ---
+
+    call_parser = subparser.add_parser(
+        "call",
+    )
+
+    call_parser.add_argument(
+        "func_name",
+        type=str,
+        help="The function name to call.",
+    )
+
+    call_parser.add_argument(
+        "kwargs",
+        nargs=argparse.REMAINDER,
+        help="Function keyword arguments.",
     )
 
     # ---
@@ -470,6 +510,9 @@ class Trainer:
     def eval(self):
         self.training_core.eval()
 
+    def call(self, func_name: str, kwargs: dict[str, object]):
+        getattr(self.training_core, func_name)(**kwargs)
+
     def _cli_handler(self, cmd_parser):
         cmd = shlex.split(input("trainer> "))
 
@@ -497,6 +540,18 @@ class Trainer:
 
             case "eval":
                 self.eval()
+
+            case "call":
+                kwargs: dict[str, object] = dict()
+
+                for kwarg in args.kwargs:
+                    kwarg: str
+
+                    if "=" in kwarg:
+                        key, value = kwarg.split("=", 1)
+                        kwargs[key.strip().strip("-")] = eval(value)
+
+                self.call(args.func_name, kwargs)
 
             case "exit":
                 return False

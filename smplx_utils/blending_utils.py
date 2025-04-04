@@ -41,7 +41,7 @@ class BlendingParam:
         lhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
         rhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
 
-        blending_vertex_normal: bool = False,
+        blending_vert_nor: bool = False,
     ):
         if body_shapes is not None:
             BS = utils.check_shapes(body_shapes, (..., -1))
@@ -93,7 +93,7 @@ class BlendingParam:
         self.lhand_poses = lhand_poses
         self.rhand_poses = rhand_poses
 
-        self.blending_vertex_normal = blending_vertex_normal
+        self.blending_vert_nor = blending_vert_nor
 
     def check(
         self,
@@ -161,7 +161,7 @@ class BlendingParam:
             d[key] = None if cur_val is None else cur_val.to(*args, **kwargs)
 
         return BlendingParam(
-            **d, blending_vertex_normal=self.blending_vertex_normal)
+            **d, blending_vert_nor=self.blending_vert_nor)
 
     def expand(self, shape) -> typing.Self:
         shape = tuple(shape)
@@ -172,7 +172,7 @@ class BlendingParam:
             d[key] = utils.try_batch_expand(getattr(self, key), shape, val)
 
         return BlendingParam(
-            **d, blending_vertex_normal=self.blending_vertex_normal)
+            **d, blending_vert_nor=self.blending_vert_nor)
 
     def flatten(self) -> typing.Self:
         batch_shape = self.shape
@@ -185,7 +185,7 @@ class BlendingParam:
                 self.body_shapes, batch_shape, val).flatten(end_dim=val)
 
         return BlendingParam(
-            **d, blending_vertex_normal=self.blending_vertex_normal)
+            **d, blending_vert_nor=self.blending_vert_nor)
 
     def __getitem__(self, idx):
         batch_shape = self.shape
@@ -199,7 +199,7 @@ class BlendingParam:
                 cur_val.expand(batch_shape + cur_val.shape[val:])[idx]
 
         return BlendingParam(
-            **d, blending_vertex_normal=self.blending_vertex_normal)
+            **d, blending_vert_nor=self.blending_vert_nor)
 
     def get_poses(self, model_data: ModelData) -> torch.Tensor:
         self.check(model_data, False)
@@ -284,26 +284,26 @@ def blending(
 ) -> Model:
     blending_param.check(model_data, False)
 
-    vps = model_data.vertex_positions
+    vp = model_data.vert_pos
 
-    assert vps.isfinite().all()
+    assert vp.isfinite().all()
 
     if blending_param.body_shapes is not None:
         assert model_data.body_shape_dirs.isfinite().all()
         assert blending_param.body_shapes.isfinite().all()
 
-        vps = vps + torch.einsum("...vxb,...b->...vx",
-                                 model_data.body_shape_dirs,
-                                 blending_param.body_shapes)
+        vp = vp + torch.einsum("...vxb,...b->...vx",
+                               model_data.body_shape_dirs,
+                               blending_param.body_shapes)
 
     if model_data.expr_shape_dirs is not None and \
        blending_param.expr_shapes is not None:
         assert model_data.expr_shape_dirs.isfinite().all()
         assert blending_param.expr_shapes.isfinite().all()
 
-        vps = vps + torch.einsum("...vxb,...b->...vx",
-                                 model_data.expr_shape_dirs,
-                                 blending_param.expr_shapes)
+        vp = vp + torch.einsum("...vxb,...b->...vx",
+                               model_data.expr_shape_dirs,
+                               blending_param.expr_shapes)
 
     # [..., V, 3]
 
@@ -358,7 +358,7 @@ def blending(
         (target_pose_rs[..., 1:, :, :] - identity).view((-1, (J - 1) * 3 * 3))
     # [..., (J - 1) * 3 * 3]
 
-    vps = vps + torch.einsum(
+    vp = vp + torch.einsum(
         "...vxp,...p->...vx",
         model_data.pose_dirs,  # [..., V, 3, (J - 1) * 3 * 3]
         pose_feature,  # [..., (J - 1) * 3 * 3]
@@ -369,8 +369,8 @@ def blending(
             kin_tree=model_data.kin_tree,
             lbs_weights=model_data.lbs_weights,
 
-            vertex_positions=vps,
-            vertex_directions=model_data.vertex_normals if blending_param.blending_vertex_normal else None,
+            vert_pos=vp,
+            vert_dir=model_data.vert_nor if blending_param.blending_vert_nor else None,
 
             binding_pose_rs=binding_pose_rs,
             binding_pose_ts=binding_pose_ts,
@@ -382,29 +382,20 @@ def blending(
         lbs_result.target_joint_Ts[..., :, :3, 3] += \
             blending_param.global_transl.unsqueeze(-2)
 
-        vps = blending_param.global_transl.unsqueeze(-2) + \
-            lbs_result.blended_vertex_positions
+        vp = blending_param.global_transl.unsqueeze(-2) + \
+            lbs_result.blended_vert_pos
 
     return Model(
         kin_tree=model_data.kin_tree,
 
-        vertices_cnt=model_data.vertex_positions.shape[-2],
-        texture_vertices_cnt=0 if model_data.texture_vertex_positions is None
-        else model_data.texture_vertex_positions.shape[-2],
+        mesh_data=model_data.mesh_data,
+        tex_mesh_data=model_data.tex_mesh_data,
 
-        vertex_positions=vps,
-        vertex_normals=None if lbs_result.blended_vertex_directions is None
-        else utils.normalized(lbs_result.blended_vertex_directions),
+        vert_pos=vp,
+        vert_nor=None if lbs_result.blended_vert_dir is None
+        else utils.vec_normed(lbs_result.blended_vert_dir),
 
-        vertex_rotations=None,
-
-        texture_vertex_positions=model_data.texture_vertex_positions,
-
-        faces=model_data.faces,
-
-        texture_faces=model_data.texture_faces,
+        tex_vert_pos=model_data.tex_vert_pos,
 
         joint_Ts=lbs_result.target_joint_Ts,
-
-        mesh_data=model_data.mesh_data,
     )

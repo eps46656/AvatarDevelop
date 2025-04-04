@@ -15,105 +15,110 @@ class AvatarModel:
 
         kin_tree: kin_utils.KinTree,
 
-        vertices_cnt: int,  # V
-        texture_vertices_cnt: int,  # TV
+        mesh_data: mesh_utils.MeshData,
+        tex_mesh_data: typing.Optional[mesh_utils.MeshData] = None,
 
-        vertex_positions: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
-        vertex_normals: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
-        vertex_rotations: typing.Optional[torch.Tensor] = None,  # [..., V, 4]
+        vert_pos: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
+        vert_nor: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
 
-        texture_vertex_positions: typing.Optional[torch.Tensor] = None,
+        tex_vert_pos: typing.Optional[torch.Tensor] = None,
         # [..., TV, 2]
 
-        faces: torch.Tensor,  # [..., F, 3]
-
-        texture_faces: typing.Optional[torch.Tensor] = None,  # [..., F, 3]
-
         joint_Ts: typing.Optional[torch.Tensor] = None,  # [..., J, 4, 4]
-
-        mesh_data: mesh_utils.MeshData,
     ):
         J = kin_tree.joints_cnt
 
-        assert 0 <= vertices_cnt
-        assert 0 <= texture_vertices_cnt
+        V = mesh_data.vertices_cnt
 
-        V = vertices_cnt
-        TV = texture_vertices_cnt
+        TV = 0 if tex_mesh_data is None else tex_mesh_data.vertices_cnt
 
-        if vertex_positions is not None:
-            utils.check_shapes(vertex_positions, (..., V, 3))
+        F = mesh_data.faces_cnt
+        assert tex_mesh_data.faces_cnt == F
 
-        if vertex_normals is not None:
-            utils.check_shapes(vertex_normals, (..., V, 3))
+        if vert_pos is not None:
+            utils.check_shapes(vert_pos, (..., V, 3))
 
-        if vertex_rotations is not None:
-            utils.check_shapes(vertex_rotations, (..., V, 4))
+        if vert_nor is not None:
+            utils.check_shapes(vert_nor, (..., V, 3))
 
-        if texture_vertex_positions is not None:
-            utils.check_shapes(texture_vertex_positions, (..., TV, 2))
-
-        F = utils.check_shapes(faces, (..., -1, 3))
-
-        if texture_faces is not None:
-            utils.check_shapes(texture_faces, (..., F, 3))
+        if tex_vert_pos is not None:
+            utils.check_shapes(tex_vert_pos, (..., TV, 2))
 
         if joint_Ts is not None:
             utils.check_shapes(joint_Ts, (..., J, 4, 4))
 
-        assert mesh_data.vertices_cnt == V
-        assert mesh_data.faces_cnt == F
+        batch_shape = utils.broadcast_shapes(
+            utils.try_get_batch_shape(vert_pos, -2),
+            utils.try_get_batch_shape(vert_nor, -2),
+            utils.try_get_batch_shape(tex_vert_pos, -2),
+            utils.try_get_batch_shape(joint_Ts, -3),
+        )
+
+        vert_pos = utils.try_batch_expand(
+            vert_pos, batch_shape, -2)
+
+        vert_nor = utils.try_batch_expand(
+            vert_nor, batch_shape, -2)
+
+        tex_vert_pos = utils.try_batch_expand(
+            tex_vert_pos, batch_shape, -2)
+
+        joint_Ts = utils.try_batch_expand(
+            joint_Ts, batch_shape, -3)
 
         # ---
 
         self.kin_tree = kin_tree
 
-        self.vertices_cnt = vertices_cnt
-        self.texture_vertices_cnt = texture_vertices_cnt
+        self.mesh_data = mesh_data
+        self.tex_mesh_data = tex_mesh_data
 
-        self.vertex_positions = vertex_positions
-        self.vertex_normals = vertex_normals
+        self.vert_pos = vert_pos
+        self.vert_nor = vert_nor
 
-        self.texture_vertex_positions = texture_vertex_positions
-
-        self.faces = faces
-
-        self.texture_faces = texture_faces
+        self.tex_vert_pos = tex_vert_pos
 
         self.joint_Ts = joint_Ts
-
-        self.mesh_data = mesh_data
-
-    @property
-    def faces_cnt(self) -> int:
-        return self.faces.shape[-2]
 
     @property
     def joints_cnt(self) -> int:
         return self.kin_tree.joints_cnt
 
     @property
+    def verts_cnt(self) -> int:
+        return self.mesh_data.vertices_cnt
+
+    @property
+    def tex_verts_cnt(self) -> int:
+        return self.tex_mesh_data.vertices_cnt
+
+    @property
+    def faces_cnt(self) -> int:
+        return self.mesh_data.faces_cnt
+
+    @property
     def shape(self) -> torch.Size:
-        batch_dim_table = {
-            "vertex_positions": -2,
-            "vertex_normals": -2,
-            "texture_vertex_positions": -2,
-            "faces": -2,
-            "texture_faces": -2,
-            "joint_Ts": -3,
-        }
+        return self.vert_pos.shape[:-2]
 
-        l = list()
+    def __getitem__(self, idx):
+        vert_pos = utils.try_batch_index(self.vert_pos, -2, idx)
+        vert_nor = utils.try_batch_index(self.vert_nor, -2, idx)
+        tex_vert_pos = utils.try_batch_index(self.tex_vert_pos, -2, idx)
+        joint_Ts = utils.try_batch_index(self.joint_Ts, -2, idx)
 
-        for key, val in batch_dim_table.items():
-            field_val = getattr(self, key)
+        return AvatarModel(
+            kin_tree=self.kin_tree,
 
-            if field_val is None:
-                continue
+            mesh_data=self.mesh_data,
+            tex_mesh_data=self.tex_mesh_data,
 
-            l.append(field_val.shape[:val])
+            vert_pos=vert_pos,
+            vert_nor=vert_nor,
 
-        return utils.broadcast_shapes(*l)
+            tex_vert_pos=tex_vert_pos,
+
+            joint_Ts=joint_Ts,
+        )
 
 
 @beartype

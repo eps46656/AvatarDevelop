@@ -24,8 +24,8 @@ class KinTree:
         J = len(links)
 
         root = -1
-        parents = [-1 for _ in range(J)]
-        indegrees = [0 for _ in range(J)]
+        parents = [-1] * J
+        indegrees = [0] * J
 
         for p, u in links:
             assert 0 <= u and u < J
@@ -97,6 +97,8 @@ class KinTree:
             pose_ts, (..., J, -1),
         )
 
+        device = utils.check_devices(pose_rs, pose_ts)
+
         batch_shape = utils.broadcast_shapes(
             pose_rs.shape[:-3],
             pose_ts.shape[:-2],
@@ -105,15 +107,14 @@ class KinTree:
         joint_Ts = torch.empty(
             batch_shape + (J, D+1, D+1),
             dtype=torch.promote_types(pose_rs.dtype, pose_ts.dtype),
-            device=pose_rs.device,
+            device=device,
         )
         # [..., J, D+1, D+1]
 
         joint_Ts[..., :, D, :D] = 0
         joint_Ts[..., :, D, D] = 1
 
-        joint_Ts[..., self.root, :D,
-                 :D] = pose_rs[..., self.root, :, :]
+        joint_Ts[..., self.root, :D, :D] = pose_rs[..., self.root, :, :]
         joint_Ts[..., self.root, :D, D] = pose_ts[..., self.root, :]
 
         for u in self.joints_tp[1:]:

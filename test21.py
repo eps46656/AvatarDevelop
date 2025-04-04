@@ -68,8 +68,8 @@ def main1():
 
     model_data = subject_data.model_data
 
-    model_data.vertex_positions = torch.nn.Parameter(
-        model_data.vertex_positions)
+    model_data.vert_pos = torch.nn.Parameter(
+        model_data.vert_pos)
 
     smplx_model_builder = smplx_utils.ModelBlender(
         model_data=model_data,
@@ -127,7 +127,7 @@ def main1():
 
             mean_rgb_loss = result.rgb_loss.mean()
             mean_lap_loss = result.lap_smoothing_loss.mean()
-            mean_normal_sim_loss = result.normal_sim_loss.mean()
+            mean_normal_sim_loss = result.nor_sim_loss.mean()
             mean_color_diff_loss = result.color_diff_loss.mean()
 
             print(f"{mean_rgb_loss=}")

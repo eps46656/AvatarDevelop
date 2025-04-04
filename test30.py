@@ -169,7 +169,7 @@ def map_to_texture(
     avatar_model: avatar_utils.AvatarModel = avatar_blender(
         mapping_blending_param)
 
-    vertex_positions = avatar_model.vertex_positions \
+    vertex_positions = avatar_model.vert_pos \
         .reshape((-1, 3)).to(utils.CPU_DEVICE)
     # [V, 3]
 
@@ -177,7 +177,7 @@ def map_to_texture(
         .reshape((-1, 3)).to(utils.CPU_DEVICE)
     # [F, 3]
 
-    texture_vertex_positions = avatar_model.texture_vertex_positions \
+    texture_vertex_positions = avatar_model.tex_vert_pos \
         .reshape((-1, 2)).to(utils.CPU_DEVICE)
     # [TV, 2]
 
@@ -204,11 +204,11 @@ def map_to_texture(
     )
 
     m = texture_utils.position_to_map(
-        vertex_positions=vertex_positions,
+        vert_pos=vertex_positions,
         faces=faces,
 
-        texture_vertex_positions=texture_vertex_positions,
-        texture_faces=texture_faces,
+        tex_vert_pos=texture_vertex_positions,
+        tex_faces=texture_faces,
 
         img_h=img_h,
         img_w=img_w,

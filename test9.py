@@ -237,7 +237,7 @@ def main3():
                 lhand_poses=lhand_poses,
                 rhand_poses=rhand_poses,
 
-                blending_vertex_normal=False,
+                blending_vert_nor=False,
             )
         )
 

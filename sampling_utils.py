@@ -59,7 +59,8 @@ def wrap(
             x = x % (size * 2 - 2)
             return torch.where(x < size, x, (size - 2) - x)
 
-    assert False, "Unknown warp mode"
+        case _:
+            raise utils.MismatchException()
 
 
 @beartype

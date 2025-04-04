@@ -59,13 +59,14 @@ class Sample:
         )
 
     def __getitem__(self, idx) -> typing.Self:
+        batch_shape = self.shape
+
         return Sample(
             camera_config=self.camera_config,
             camera_transform=self.camera_transform[idx],
 
             img=self.img[idx],
-            mask=None if self.mask is None else
-            self.mask[idx],
+            mask=utils.try_batch_indexing(self.mask, batch_shape, -2, idx),
 
             blending_param=self.blending_param[idx],
         )

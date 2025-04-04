@@ -16,18 +16,18 @@ class ModelData:
         *,
         kin_tree: kin_utils.KinTree,
 
+        mesh_data: mesh_utils.MeshData,
+        tex_mesh_data: mesh_utils.MeshData,
+
         body_joints_cnt: int,  # BJ
         jaw_joints_cnt: int,  # JJ
         eye_joints_cnt: int,  # EYEJ
 
-        vertex_positions: torch.Tensor,  # [..., V, 3]
-        vertex_normals: torch.Tensor,  # [..., V, 3]
+        vert_pos: torch.Tensor,  # [..., V, 3]
+        vert_nor: torch.Tensor,  # [..., V, 3]
 
-        texture_vertex_positions: typing.Optional[torch.Tensor] = None,
+        tex_vert_pos: torch.Tensor = None,
         # [..., TV, 2]
-
-        faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
-        texture_faces: typing.Optional[torch.Tensor] = None,  # [F, 3]
 
         body_shape_dirs: torch.Tensor,  # [..., V, 3, BS]
         expr_shape_dirs: typing.Optional[torch.Tensor] = None,
@@ -49,15 +49,11 @@ class ModelData:
 
         rhand_poses_mean: typing.Optional[torch.Tensor] = None,
         # [..., HANDJ, 3]
-
-        mesh_data: mesh_utils.MeshData,
     ):
-        device = utils.check_device(
-            vertex_positions,
-            vertex_normals,
-            texture_vertex_positions,
-            faces,
-            texture_faces,
+        device = utils.check_devices(
+            vert_pos,
+            vert_nor,
+            tex_vert_pos,
             body_shape_dirs,
             expr_shape_dirs,
             body_shape_joint_regressor,
@@ -75,18 +71,18 @@ class ModelData:
         JJ = jaw_joints_cnt
         EJ = eye_joints_cnt
 
-        V = utils.check_shapes(
-            vertex_positions, (..., -1, 3),
-            vertex_normals, (..., -1, 3),
+        V = mesh_data.vertices_cnt
+        TV = tex_mesh_data.vertices_cnt
+
+        F = mesh_data.faces_cnt
+        assert tex_mesh_data.faces_cnt == F
+
+        utils.check_shapes(
+            vert_pos, (..., V, 3),
+            vert_nor, (..., V, 3),
         )
 
-        TV = 0 if texture_vertex_positions is None else \
-            utils.check_shapes(texture_vertex_positions, (..., -1, 2))
-
-        F = 0 if faces is None else utils.check_shapes(faces, (-1, 3))
-
-        if texture_faces is not None:
-            utils.check_shapes(texture_faces, (F, 3))
+        utils.check_shapes(tex_vert_pos, (..., TV, 2))
 
         utils.check_shapes(pose_dirs, (..., V, 3, (J - 1) * 3 * 3))
 
@@ -121,17 +117,17 @@ class ModelData:
 
         self.kin_tree = kin_tree
 
+        self.mesh_data = mesh_data
+        self.tex_mesh_data = tex_mesh_data
+
         self.body_joints_cnt = body_joints_cnt
         self.jaw_joints_cnt = jaw_joints_cnt
         self.eye_joints_cnt = eye_joints_cnt
 
-        self.vertex_positions = vertex_positions
-        self.vertex_normals = vertex_normals
+        self.vert_pos = vert_pos
+        self.vert_nor = vert_nor
 
-        self.texture_vertex_positions = texture_vertex_positions
-
-        self.faces = faces
-        self.texture_faces = texture_faces
+        self.tex_vert_pos = tex_vert_pos
 
         self.body_shape_dirs = body_shape_dirs
         self.expr_shape_dirs = expr_shape_dirs
@@ -147,8 +143,6 @@ class ModelData:
 
         self.lhand_poses_mean = lhand_poses_mean
         self.rhand_poses_mean = rhand_poses_mean
-
-        self.mesh_data = mesh_data
 
     @property
     def body_shapes_cnt(self) -> int:
@@ -195,11 +189,11 @@ class ModelData:
 
         # ---
 
-        vertex_positions = torch.from_numpy(model_data["v_template"]) \
+        vert_pos = torch.from_numpy(model_data["v_template"]) \
             .to(device, utils.FLOAT)
         # [V, 3]
 
-        V = utils.check_shapes(vertex_positions, (-1, 3))
+        V = utils.check_shapes(vert_pos, (-1, 3))
 
         # ---
 
@@ -260,7 +254,7 @@ class ModelData:
         joint_ts_mean = torch.einsum(
             "...jv,...vx->...jx",
             joint_regressor,
-            vertex_positions,
+            vert_pos,
         )
 
         body_shape_joint_regressor = torch.einsum(
@@ -280,14 +274,10 @@ class ModelData:
 
         # ---
 
-        if "vt" in model_data:
-            texture_vertex_positions = torch.from_numpy(model_data["vt"]) \
-                .to(device, utils.FLOAT)
+        tex_vert_pos = torch.from_numpy(model_data["vt"]) \
+            .to(device, utils.FLOAT)
 
-            TV = utils.check_shapes(texture_vertex_positions, (..., -1, 2))
-        else:
-            texture_vertex_positions = None
-            TV = 0
+        TV = utils.check_shapes(tex_vert_pos, (..., -1, 2))
 
         # ---
 
@@ -298,12 +288,12 @@ class ModelData:
         # ---
 
         if "ft" in model_data:
-            texture_faces = torch.from_numpy(model_data["ft"]) \
+            tex_faces = torch.from_numpy(model_data["ft"]) \
                 .to(device, torch.long)
 
-            utils.check_shapes(texture_faces, (..., F, 3))
+            utils.check_shapes(tex_faces, (..., F, 3))
         else:
-            texture_faces = None
+            tex_faces = None
 
         # ---
 
@@ -325,28 +315,31 @@ class ModelData:
 
         # ---
 
-        mesh_data = mesh_utils.MeshData.from_face_vertex_adj_list(
+        mesh_data = mesh_utils.MeshData.from_face_vert_adj_list(
             V, faces, device)
+
+        tex_mesh_data = mesh_utils.MeshData.from_face_vert_adj_list(
+            TV, tex_faces, device)
 
         # ---
 
         return ModelData(
             kin_tree=kin_tree,
 
+            mesh_data=mesh_data,
+            tex_mesh_data=tex_mesh_data,
+
             body_joints_cnt=model_config.body_joints_cnt,
             jaw_joints_cnt=model_config.jaw_joints_cnt,
             eye_joints_cnt=model_config.eye_joints_cnt,
 
-            vertex_positions=vertex_positions,
-            vertex_normals=mesh_utils.get_area_weighted_vertex_normals(
+            vert_pos=vert_pos,
+            vert_nor=mesh_utils.get_area_weighted_vert_nor(
                 faces=faces,
-                vertex_positions=vertex_positions,
+                vert_pos=vert_pos,
             ).to(device, utils.FLOAT),
 
-            texture_vertex_positions=texture_vertex_positions,
-
-            faces=faces,
-            texture_faces=texture_faces,
+            tex_vert_pos=tex_vert_pos,
 
             body_shape_dirs=body_shape_dirs,
             expr_shape_dirs=expr_shape_dirs,
@@ -361,25 +354,23 @@ class ModelData:
 
             lhand_poses_mean=lhand_poses_mean,
             rhand_poses_mean=rhand_poses_mean,
-
-            mesh_data=mesh_data,
         )
 
     @property
     def device(self):
-        return self.vertex_positions.device
+        return self.vert_pos.device
 
     def to(self, *args, **kwargs) -> typing.Self:
         d = {
             "kin_tree": self.kin_tree,
 
-            "vertex_positions": None,
-            "vertex_normals": None,
+            "mesh_data": None,
+            "tex_mesh_data": None,
 
-            "texture_vertex_positions": None,
+            "vert_pos": None,
+            "vert_nor": None,
 
-            "faces": None,
-            "texture_faces": None,
+            "tex_vert_pos": None,
 
             "body_shape_dirs": None,
             "expr_shape_dirs": None,
@@ -399,8 +390,6 @@ class ModelData:
 
             "lhand_poses_mean": None,
             "rhand_poses_mean": None,
-
-            "mesh_data": None,
         }
 
         for key, val in d.items():

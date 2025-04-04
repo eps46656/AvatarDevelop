@@ -133,11 +133,11 @@ def main1():
     smplx_model: smplx_utils.Model = smplx_model_blender.forward(
         subject_data.blending_param)
 
-    print(f"{smplx_model.vertex_positions.shape}")
+    print(f"{smplx_model.vert_pos.shape}")
 
     # smplx_model.joint_Ts[T, J, 4, 4]
 
-    T = smplx_model.vertex_positions.shape[0]
+    T = smplx_model.vert_pos.shape[0]
 
     out_frames = torch.empty(
         (T, 3,
@@ -154,11 +154,11 @@ def main1():
         # smplx_model.vertex_positions[F, 3]
 
         # smplx_model.vertex_positions[T, V, 3]
-        V = smplx_model.vertex_positions.shape[1]
+        V = smplx_model.vert_pos.shape[1]
 
         if True:
             mesh_ras_result = rendering_utils.rasterize_mesh(
-                vertex_positions=smplx_model.vertex_positions[frame_i],
+                vert_pos=smplx_model.vert_pos[frame_i],
                 faces=smplx_model.faces,
                 camera_config=camera_config,
                 camera_transform=subject_data.camera_transform.to(
@@ -176,7 +176,7 @@ def main1():
         else:
             point_cloud = pytorch3d.structures.Pointclouds(
                 points=[
-                    smplx_model.vertex_positions[frame_i, :, :]
+                    smplx_model.vert_pos[frame_i, :, :]
                 ],
 
                 features=[
