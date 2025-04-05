@@ -1,7 +1,8 @@
 
 
+from __future__ import annotations
+
 import dataclasses
-import typing
 
 import torch
 from beartype import beartype
@@ -44,7 +45,7 @@ class Dataset(dataset_utils.Dataset):
     def device(self) -> torch.device:
         return self.vert_pos.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> Dataset:
         self.vert_pos = self.vert_pos.to(*args, **kwargs)
         return self
 
@@ -54,11 +55,12 @@ class Dataset(dataset_utils.Dataset):
         point_positions = torch.empty(
             (N, 3),
             dtype=self.vert_pos.dtype,
-            dtype=self.vert_pos.device,
+            device=self.vert_pos.device,
         )
 
         for d in range(3):
-            torch.normal(self.mean[d], self.std[d], out=point_positions[:, d])
+            torch.normal(self.mean[d], self.std[d], (N,),
+                         out=point_positions[:, d])
 
         signed_dists = self.mesh_data.calc_signed_dists(
             self.vert_pos,

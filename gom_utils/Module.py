@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import dataclasses
-import typing
 
 import torch
 from beartype import beartype
@@ -7,30 +8,6 @@ from beartype import beartype
 from .. import (avatar_utils, camera_utils, gaussian_utils, transform_utils,
                 utils)
 from .utils import FaceCoordResult, get_face_coord
-
-
-@beartype
-@dataclasses.dataclass
-class GPResult:
-    face_coord_result: FaceCoordResult
-    gp_means: torch.Tensor  # [..., F, 3]
-    gp_rot_qs: torch.Tensor  # [..., F, 4]
-    gp_scales: torch.Tensor  # [..., F, 3]
-    gp_colors: torch.Tensor  # [..., F, 3]
-    gp_opacities: torch.Tensor  # [..., F, 1]
-
-
-@beartype
-@dataclasses.dataclass
-class ModuleForwardResult:
-    avatar_model: avatar_utils.AvatarModel
-
-    rendered_img: torch.Tensor  # [..., C, H, W]
-
-    rgb_loss: float | torch.Tensor
-    lap_smoothing_loss: float | torch.Tensor
-    nor_sim_loss: float | torch.Tensor
-    color_diff_loss: float | torch.Tensor
 
 
 @beartype
@@ -78,7 +55,7 @@ class Module(torch.nn.Module):
             dtype=utils.FLOAT))
         # [F, 1]
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> Module:
         super().to(*args, **kwargs)
 
         self.avatar_blender = self.avatar_blender.to(*args, **kwargs)
@@ -104,12 +81,22 @@ class Module(torch.nn.Module):
     def faces_cnt(self) -> int:
         return self.gp_rot_qs.shape[0]
 
+    @beartype
+    @dataclasses.dataclass
+    class WorldGPResult:
+        face_coord_result: FaceCoordResult
+        gp_means: torch.Tensor  # [..., F, 3]
+        gp_rot_qs: torch.Tensor  # [..., F, 4]
+        gp_scales: torch.Tensor  # [..., F, 3]
+        gp_colors: torch.Tensor  # [..., F, 3]
+        gp_opacities: torch.Tensor  # [..., F, 1]
+
     def get_world_gp(
         self,
         vert_pos_a: torch.Tensor,  # [..., F, 3]
         vert_pos_b: torch.Tensor,  # [..., F, 3]
         vert_pos_c: torch.Tensor,  # [..., F, 3]
-    ) -> GPResult:
+    ) -> WorldGPResult:
         F = self.faces_cnt
 
         utils.check_shapes(
@@ -147,7 +134,7 @@ class Module(torch.nn.Module):
         world_gp_scales[..., :, 1] = k * self.gp_scales[:, 1]
         world_gp_scales[..., :, 2] = k * self.gp_scales[:, 2] * 1e-2
 
-        return GPResult(
+        return Module.WorldGPResult(
             face_coord_result=face_coord_result,
             gp_means=world_gp_means,
             gp_rot_qs=world_gp_rot_qs,
@@ -155,6 +142,18 @@ class Module(torch.nn.Module):
             gp_colors=self.gp_colors,
             gp_opacities=torch.exp(self.gp_log_opacities),
         )
+
+    @beartype
+    @dataclasses.dataclass
+    class ForwardResult:
+        avatar_model: avatar_utils.AvatarModel
+
+        rendered_img: torch.Tensor  # [..., C, H, W]
+
+        rgb_loss: float | torch.Tensor
+        lap_smoothing_loss: float | torch.Tensor
+        nor_sim_loss: float | torch.Tensor
+        color_diff_loss: float | torch.Tensor
 
     def forward(
         self,
@@ -175,7 +174,7 @@ class Module(torch.nn.Module):
         avatar_model: avatar_utils.AvatarModel = \
             self.avatar_blender(blending_param)
 
-        faces = avatar_model.mesh_data.face_vert_adj_list
+        faces = avatar_model.mesh_data.f_to_vvv
         # [F, 3]
 
         vp = avatar_model.vert_pos
@@ -257,7 +256,7 @@ class Module(torch.nn.Module):
 
             color_diff_loss = 0.0
 
-        return ModuleForwardResult(
+        return Module.ForwardResult(
             avatar_model=avatar_model,
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,

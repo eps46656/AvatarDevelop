@@ -101,7 +101,7 @@ def _read_smpl_blending_param(
     frames_cnt: int,
     device: torch.device,
 ) -> smplx_utils.BlendingParam:
-    body_shapes_cnt = smplx_model_data.body_shape_dirs.shape[-1]
+    body_shapes_cnt = smplx_model_data.body_shape_vert_dir.shape[-1]
     poses_cnt = smplx_model_data.body_joints_cnt
     # global_rot + smplx_utils.BODY_POSES_CNT
 
@@ -166,7 +166,7 @@ def _read_smpl_blending_param(
         body_shapes=body_shapes[:frames_cnt].to(device, utils.FLOAT),
         global_transl=global_transl[:frames_cnt].to(device, utils.FLOAT),
         global_rot=global_rot[:frames_cnt].to(device, utils.FLOAT),
-        body_poses=body_poses[:frames_cnt].to(device, utils.FLOAT),
+        body_pose=body_poses[:frames_cnt].to(device, utils.FLOAT),
     )
 
 

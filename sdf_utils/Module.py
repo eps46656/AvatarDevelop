@@ -28,19 +28,19 @@ class Module(torch.nn.Module):
         assert range_min[1] < range_max[1]
         assert range_min[2] < range_max[2]
 
-        self.mean = ((l + r) / 2 for l, r in zip(range_min, range_max))
-        self.std = ((r - l) / 2 for l, r in zip(range_min, range_max))
+        self.mean = tuple((l + r) / 2 for l, r in zip(range_min, range_max))
+        self.std = tuple((r - l) / 2 for l, r in zip(range_min, range_max))
 
         layers: list[torch.nn.Module] = list()
 
-        layers.append(torch.nn.Linear(3, 64))
+        layers.append(torch.nn.Linear(3, 128))
         layers.append(torch.nn.LeakyReLU(0.05))
 
         for _ in range(12):
-            layers.append(torch.nn.Linear(64, 64))
+            layers.append(torch.nn.Linear(128, 128))
             layers.append(torch.nn.LeakyReLU(0.05))
 
-        layers.append(torch.nn.Linear(64, 1))
+        layers.append(torch.nn.Linear(128, 1))
 
         self.module = torch.nn.Sequential(*layers)
 
@@ -51,7 +51,7 @@ class Module(torch.nn.Module):
     ) -> ModuleForwardResult:
         utils.check_shapes(
             point_pos, (..., 3),
-            signed_dist, (...),
+            signed_dist, (...,),
         )
 
         buffer = torch.empty_like(point_pos)

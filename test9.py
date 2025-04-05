@@ -230,12 +230,12 @@ def main3():
                 global_transl=global_transl,
                 global_rot=global_rot,
 
-                body_poses=body_poses,
-                jaw_poses=jaw_poses,
-                leye_poses=leye_poses,
-                reye_poses=reye_poses,
-                lhand_poses=lhand_poses,
-                rhand_poses=rhand_poses,
+                body_pose=body_poses,
+                jaw_pose=jaw_poses,
+                leye_pose=leye_poses,
+                reye_pose=reye_poses,
+                lhand_pose=lhand_poses,
+                rhand_pose=rhand_poses,
 
                 blending_vert_nor=False,
             )

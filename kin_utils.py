@@ -1,4 +1,5 @@
 import heapq
+import typing
 
 import torch
 from beartype import beartype
@@ -20,7 +21,7 @@ class KinTree:
         self.joints_tp = joints_tp
 
     @staticmethod
-    def from_links(links, null_value=-1):
+    def from_links(links: typing.Sequence[int], null_value=-1):
         J = len(links)
 
         root = -1
@@ -76,7 +77,7 @@ class KinTree:
         )
 
     @staticmethod
-    def from_parents(parents: list[int], null_value=-1):
+    def from_parents(parents: typing.Iterable[int], null_value=-1):
         return KinTree.from_links(
             ((p, u) for u, p in enumerate(parents)),
             null_value)
@@ -85,51 +86,51 @@ class KinTree:
     def joints_cnt(self) -> int:
         return len(self.parents)
 
-    def get_joint_rts(
+    def get_joint_rt(
         self,
-        pose_rs: torch.Tensor,  # [..., J, D, D]
-        pose_ts: torch.Tensor,  # [..., J, D]
-    ) -> torch.Tensor:  # joint_Ts[..., J, D+1, D+1]:
+        pose_r: torch.Tensor,  # [..., J, D, D]
+        pose_t: torch.Tensor,  # [..., J, D]
+    ) -> torch.Tensor:  # joint_T[..., J, D+1, D+1]:
         J = self.joints_cnt
 
         D = utils.check_shapes(
-            pose_rs, (..., J, -1, -1),
-            pose_ts, (..., J, -1),
+            pose_r, (..., J, -1, -1),
+            pose_t, (..., J, -1),
         )
 
-        device = utils.check_devices(pose_rs, pose_ts)
+        device = utils.check_devices(pose_r, pose_t)
 
         batch_shape = utils.broadcast_shapes(
-            pose_rs.shape[:-3],
-            pose_ts.shape[:-2],
+            pose_r.shape[:-3],
+            pose_t.shape[:-2],
         )
 
-        joint_Ts = torch.empty(
+        joint_T = torch.empty(
             batch_shape + (J, D+1, D+1),
-            dtype=torch.promote_types(pose_rs.dtype, pose_ts.dtype),
+            dtype=torch.promote_types(pose_r.dtype, pose_t.dtype),
             device=device,
         )
         # [..., J, D+1, D+1]
 
-        joint_Ts[..., :, D, :D] = 0
-        joint_Ts[..., :, D, D] = 1
+        joint_T[..., :, D, :D] = 0
+        joint_T[..., :, D, D] = 1
 
-        joint_Ts[..., self.root, :D, :D] = pose_rs[..., self.root, :, :]
-        joint_Ts[..., self.root, :D, D] = pose_ts[..., self.root, :]
+        joint_T[..., self.root, :D, :D] = pose_r[..., self.root, :, :]
+        joint_T[..., self.root, :D, D] = pose_t[..., self.root, :]
 
         for u in self.joints_tp[1:]:
             p = self.parents[u]
 
-            cur_joint_T = joint_Ts[..., u, :, :]  # [..., D+1, D+1]
-            parent_joint_T = joint_Ts[..., p, :, :]  # [... D+1, D+1]
+            cur_joint_T = joint_T[..., u, :, :]  # [..., D+1, D+1]
+            parent_joint_T = joint_T[..., p, :, :]  # [... D+1, D+1]
 
             utils.merge_rt(
                 parent_joint_T[..., :D, :D],
                 parent_joint_T[..., :D, D],
-                pose_rs[..., u, :, :],
-                pose_ts[..., u, :],
-                out_rs=cur_joint_T[..., :D, :D],
-                out_ts=cur_joint_T[..., :D, D],
+                pose_r[..., u, :, :],
+                pose_t[..., u, :],
+                out_r=cur_joint_T[..., :D, :D],
+                out_t=cur_joint_T[..., :D, D],
             )
 
-        return joint_Ts
+        return joint_T

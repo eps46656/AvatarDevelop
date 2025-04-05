@@ -178,7 +178,7 @@ def main5():
         DEVICE
     )
 
-    vertices_cnt = mesh_data.vertices_cnt
+    vertices_cnt = mesh_data.verts_cnt
     faces_cnt = mesh_data.faces_cnt
 
     vertex_positions = torch.rand((vertices_cnt, 3), dtype=utils.FLOAT)

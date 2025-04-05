@@ -125,7 +125,7 @@ def main1():
                         global_rot=subject_data.blending_param.
                         global_rot[frame_i],
 
-                        body_poses=subject_data.blending_param.
+                        body_pose=subject_data.blending_param.
                         body_poses[frame_i],
                     )
                 )

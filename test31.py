@@ -406,7 +406,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
                     mesh_ras_result = rendering_utils.rasterize_mesh(
                         vert_pos=cur_avatar_model.vert_pos,
-                        faces=cur_avatar_model.mesh_data.face_vert_adj_list,
+                        faces=cur_avatar_model.mesh_data.f_to_vvv,
                         camera_config=sample.camera_config,
                         camera_transform=sample.camera_transform[k],
                         faces_per_pixel=1,
@@ -433,7 +433,7 @@ class MyTrainingCore(training_utils.TrainingCore):
                     f = pixel_to_faces[pixel_h_idx, pixel_w_idx, p_idx]
                     # [z]
 
-                    tv = cur_avatar_model.tex_mesh_data.face_vert_adj_list[f, :]
+                    tv = cur_avatar_model.tex_mesh_data.f_to_vvv[f, :]
                     # [z, 3]
 
                     tva, tvb, tvc = tv[:, 0], tv[:, 1], tv[:, 2]
@@ -506,7 +506,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         tex_vert_pos = tex_oven.tex_vert_pos
 
-        tex_faces = avatar_model.tex_mesh_data.face_vert_adj_list
+        tex_faces = avatar_model.tex_mesh_data.f_to_vvv
 
         global_gp_result = self.module.get_world_gp(
             tex_vert_pos[tex_faces[:, 0], :],
@@ -576,7 +576,7 @@ class MyTrainingCore(training_utils.TrainingCore):
             tex_vert_pos, tex_h, tex_w)
         img_tex_vert_pos[:, 2] = 0
 
-        tex_faces = avatar_model.tex_mesh_data.face_vert_adj_list
+        tex_faces = avatar_model.tex_mesh_data.f_to_vvv
 
         global_gp_result = self.module.get_world_gp(
             img_tex_vert_pos[tex_faces[:, 0], :],
@@ -685,7 +685,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
                 mesh_ras_result = rendering_utils.rasterize_mesh(
                     vert_pos=cur_avatar_model.vert_pos,
-                    faces=cur_avatar_model.mesh_data.face_vert_adj_list,
+                    faces=cur_avatar_model.mesh_data.f_to_vvv,
                     camera_config=sample.camera_config,
                     camera_transform=sample.camera_transform[k],
                     faces_per_pixel=1,
@@ -727,7 +727,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         face_idx_map = texture_utils.calc_face_idx(
             tex_vert_pos=avatar_model.tex_vert_pos,
-            tex_faces=avatar_model.tex_mesh_data.face_vert_adj_list,
+            tex_faces=avatar_model.tex_mesh_data.f_to_vvv,
 
             tex_h=tex_h,
             tex_w=tex_w,

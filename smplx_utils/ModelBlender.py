@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import dataclasses
-import typing
 
 import torch
 from beartype import beartype
 
 from .. import avatar_utils, utils
-from .blending_utils import blending, BlendingParam
+from .blending_utils import BlendingParam, blending
 from .Model import Model
 from .ModelBuilder import ModelBuilder
 
@@ -24,14 +25,14 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         # ---
 
-        model_config = model_builder.get_model_data().get_model_config()
+        model_data = model_builder.get_model_data()
 
         self.default_blending_param = BlendingParam(
             body_shapes=torch.zeros(
-                (model_config.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
+                (model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
             expr_shapes=torch.zeros(
-                (model_config.expr_shapes_cnt,), dtype=utils.FLOAT, device=device),
+                (model_data.expr_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
             global_transl=torch.zeros(
                 (3,), dtype=utils.FLOAT, device=device),
@@ -39,23 +40,23 @@ class ModelBlender(avatar_utils.AvatarBlender):
             global_rot=torch.zeros(
                 (3,), dtype=utils.FLOAT, device=device),
 
-            body_poses=torch.zeros(
-                (model_config.body_joints_cnt - 1, 3), dtype=utils.FLOAT, device=device),
+            body_pose=torch.zeros(
+                (model_data.body_joints_cnt - 1, 3), dtype=utils.FLOAT, device=device),
 
-            jaw_poses=torch.zeros(
-                (model_config.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            jaw_pose=torch.zeros(
+                (model_data.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
-            leye_poses=torch.zeros(
-                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            leye_pose=torch.zeros(
+                (model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
-            reye_poses=torch.zeros(
-                (model_config.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            reye_pose=torch.zeros(
+                (model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
-            lhand_poses=torch.zeros(
-                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            lhand_pose=torch.zeros(
+                (model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
-            rhand_poses=torch.zeros(
-                (model_config.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            rhand_pose=torch.zeros(
+                (model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
 
             blending_vert_nor=False,
         )
@@ -74,7 +75,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
             tex_vert_pos=model_data.tex_vert_pos,
 
-            joint_Ts=None,
+            joint_T=None,
         )
 
     @property
@@ -98,7 +99,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
     def device(self):
         return self.model_builder.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> ModelBlender:
         self.model_builder.to(*args, **kwargs)
 
         self.default_blending_param = self.default_blending_param \

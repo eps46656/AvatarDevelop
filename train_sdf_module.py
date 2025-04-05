@@ -1,28 +1,20 @@
-import copy
-import itertools
-import math
 import pathlib
-import time
-import typing
 
-import einops
 import torch
 import tqdm
 from beartype import beartype
 
-from . import (avatar_utils, camera_utils, config, dataset_utils,
-               dw_interp_utils, gaussian_utils,
-               people_snapshot_utils, rendering_utils, sdf_utils, smplx_utils,
-               texture_utils, training_utils, transform_utils, utils)
+from . import (config, dataset_utils, sdf_utils, smplx_utils, training_utils,
+               utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0404_2"
+PROJ_DIR = DIR / "sdf_train_2025_0405_1"
 
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 
 MODEL_TYPE = "smplx"
 MODEL_SUBTYPE = "female"
@@ -49,8 +41,8 @@ class MyTrainingCore(training_utils.TrainingCore):
         return self.__module
 
     @module.setter
-    def module(self, module: sdf_utils.Module) -> None:
-        self.__module = module
+    def module(self, val: sdf_utils.Module) -> None:
+        self.__module = val
 
     # --
 
@@ -59,8 +51,8 @@ class MyTrainingCore(training_utils.TrainingCore):
         return self.__dataset
 
     @dataset.setter
-    def dataset(self, dataset: sdf_utils.Dataset) -> None:
-        self.__dataset = dataset
+    def dataset(self, val: sdf_utils.Dataset) -> None:
+        self.__dataset = val
 
     # --
 
@@ -69,8 +61,8 @@ class MyTrainingCore(training_utils.TrainingCore):
         return self.__optimizer
 
     @optimizer.setter
-    def optimizer(self, optimizer: torch.optim.Optimizer) -> None:
-        self.__optimizer = optimizer
+    def optimizer(self, val: torch.optim.Optimizer) -> None:
+        self.__optimizer = val
 
     # --
 
@@ -79,8 +71,8 @@ class MyTrainingCore(training_utils.TrainingCore):
         return self.__scheduler
 
     @scheduler.setter
-    def scheduler(self, scheduler: object) -> None:
-        self.__scheduler = scheduler
+    def scheduler(self, val: object) -> None:
+        self.__scheduler = val
 
     # --
 
@@ -103,6 +95,9 @@ class MyTrainingCore(training_utils.TrainingCore):
             )
 
             loss = result.diff_loss
+
+            sum_loss += loss.item()
+
             self.optimizer.zero_grad()
             loss.backward()
 
@@ -145,8 +140,8 @@ def main1():
 
     # ---
 
-    model_data = smplx_utils.ModelData.from_file(
-        model_data_path=model_data_path_dict[MODEL_TYPE][MODEL_SUBTYPE],
+    model_data: smplx_utils.ModelData = smplx_utils.ModelData.from_file(
+        model_data_path=config.SMPL_FEMALE_MODEL,
         model_config=smplx_utils.smpl_model_config,
         device=DEVICE,
     )
@@ -160,20 +155,26 @@ def main1():
     ).to(DEVICE).train()
 
     dataset = sdf_utils.Dataset(
-        mean_x=(range_min[0] + range_max[0]) / 2,
-        mean_y=(range_min[1] + range_max[1]) / 2,
-        mean_z=(range_min[2] + range_max[2]) / 2,
+        mean=(
+            (range_min[0] + range_max[0]) / 2,
+            (range_min[1] + range_max[1]) / 2,
+            (range_min[2] + range_max[2]) / 2,
+        ),
 
-        std_x=(range_max[0] - range_min[0]) / 4,
-        std_y=(range_max[1] - range_min[1]) / 4,
-        std_z=(range_max[2] - range_min[2]) / 4,
+        std=(
+            (range_max[0] - range_min[0]) / 4,
+            (range_max[1] - range_min[1]) / 4,
+            (range_max[2] - range_min[2]) / 4,
+        ),
+
+        epoch_size=1024,
+        mesh_data=model_data.mesh_data,
+        vert_pos=model_data.vert_pos,
     )
 
     lr = 1e-3
 
     param_groups = utils.get_param_groups(module, lr)
-
-    print(param_groups)
 
     optimizer = torch.optim.Adam(
         param_groups,
@@ -183,8 +184,8 @@ def main1():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer,
         mode="min",
-        factor=pow(0.1, 1/4),
-        patience=5,
+        factor=pow(0.1, 1/8),
+        patience=10,
         threshold=0.05,
         threshold_mode="rel",
         cooldown=0,

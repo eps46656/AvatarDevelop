@@ -1,4 +1,4 @@
-import typing
+from __future__ import annotations
 
 import torch
 from beartype import beartype
@@ -39,7 +39,7 @@ class ObjectTransform:
         *,
         device: torch.device = None,
         dtype: torch.dtype = None,
-    ):
+    ) -> ObjectTransform:
         assert len(dirs) == 3
 
         dirs = dirs.upper()
@@ -109,11 +109,11 @@ class ObjectTransform:
     def dtype(self) -> torch.dtype:
         return self.trans.dtype
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> ObjectTransform:
         return ObjectTransform(
             self.trans.to(*args, **kwargs), self.inv_trans.to(*args, **kwargs))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "\n".join([
             f"F: <{self.vec_f}>",
             f"B: <{self.vec_b}>",
@@ -123,7 +123,7 @@ class ObjectTransform:
             f"R: <{self.vec_r}>",
         ])
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return str(self)
 
     @property
@@ -164,7 +164,7 @@ class ObjectTransform:
     def vec_r(self) -> torch.Tensor:  # [..., 3]
         return -self.trans[..., :3, 2]
 
-    def get_trans_to(self, dst: typing.Self):
+    def get_trans_to(self, dst: ObjectTransform) -> torch.Tensor:
         # self: object <-> coord_a
         # dst: object <-> coord_b
 
@@ -175,7 +175,7 @@ class ObjectTransform:
     def collapse(
         self,
         trans: torch.Tensor,  # [..., 4, 4]
-    ):
+    ) -> ObjectTransform:
         # self: object <-> coord_a
         # trans: coord_a -> coord_b
 
@@ -185,10 +185,10 @@ class ObjectTransform:
 
         return ObjectTransform(new_trans, new_trans.inverse())
 
-    def inverse(self):
+    def inverse(self) -> ObjectTransform:
         return ObjectTransform(self.inv_trans, self.trans)
 
-    def expand(self, shape):
+    def expand(self, shape) -> ObjectTransform:
         s = tuple(shape) + (4, 4)
 
         return ObjectTransform(
@@ -196,7 +196,7 @@ class ObjectTransform:
             self.inv_trans.expand(s),
         )
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> ObjectTransform:
         if not isinstance(idx, tuple):
             idx = (idx,)
 

@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import dataclasses
 import enum
 import math
-import typing
 
 import torch
 from beartype import beartype
@@ -96,7 +97,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         assert 0 < fov_diag < 180 * utils.DEG
 
         focal_length = make_focal_length_by_fov_diag(img_h, img_w, fov_diag)
@@ -121,7 +122,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         assert 0 < fov_h < 180 * utils.DEG
         assert 0 < fov_w < 180 * utils.DEG
 
@@ -147,7 +148,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         assert -90 * utils.DEG < fov_u < 90 * utils.DEG
         assert -90 * utils.DEG < fov_d < 90 * utils.DEG
         assert -90 * utils.DEG < fov_l < 90 * utils.DEG
@@ -172,7 +173,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         return CameraConfig(
             ProjType.PERS,
             slope_u, slope_d,
@@ -190,7 +191,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         foc_ud = delta_h / 2
         foc_lr = delta_w / 2
 
@@ -213,7 +214,7 @@ class CameraConfig:
         depth_far: float,
         img_h: int,
         img_w: int,
-    ) -> typing.Self:
+    ) -> CameraConfig:
         return CameraConfig(
             ProjType.ORTH,
             delta_u, delta_d,

@@ -257,8 +257,13 @@ def allocate_id(lb: int, rb: int, s=None):
 
 
 @beartype
+def to_pathlib_path(path: os.PathLike) -> pathlib.Path:
+    return path if isinstance(path, pathlib.Path) else pathlib.Path(path)
+
+
+@beartype
 def create_file(path: os.PathLike, mode: str = "w"):
-    path = pathlib.Path(path)
+    path = to_pathlib_path(path)
 
     os.makedirs(path.parents[0], exist_ok=True)
 
@@ -302,7 +307,7 @@ def write_pickle(
     *,
     mode: str = "wb+",
 ):
-    path = pathlib.Path(path)
+    path = to_pathlib_path(path)
 
     os.makedirs(path.parents[0], exist_ok=True)
 
@@ -346,7 +351,7 @@ def write_image(
 ):
     assert img.dim() == 3
 
-    path = pathlib.Path(path)
+    path = to_pathlib_path(path)
 
     os.makedirs(path.parents[0], exist_ok=True)
 
@@ -1346,39 +1351,39 @@ def homo_normalize(
 
 @beartype
 def do_rt(
-    rs: torch.Tensor,  # [..., P, Q]
-    ts: torch.Tensor,  # [..., P]
-    vs: torch.Tensor,  # [..., Q]
+    r: torch.Tensor,  # [..., P, Q]
+    t: torch.Tensor,  # [..., P]
+    v: torch.Tensor,  # [..., Q]
     *,
     out: typing.Optional[torch.Tensor] = None,  # [..., P]
 ) -> torch.Tensor:  # out[..., P]
     P, Q = -1, -2
 
     P, Q = check_shapes(
-        rs, (..., P, Q),
-        ts, (..., P),
-        vs, (..., Q),
+        r, (..., P, Q),
+        t, (..., P),
+        v, (..., Q),
     )
 
-    vs = (rs @ vs.unsqueeze(-1)).squeeze(-1) + ts
+    v = (r @ v.unsqueeze(-1)).squeeze(-1) + t
 
     if out is None:
-        out = vs
+        out = v
     else:
-        out.copy_(vs)
+        out.copy_(v)
 
     return out
 
 
 @beartype
 def merge_rt(
-    a_rs: torch.Tensor,  # [..., P, Q]
-    a_ts: torch.Tensor,  # [..., P]
-    b_rs: torch.Tensor,  # [..., Q, R]
-    b_ts: torch.Tensor,  # [..., Q]
+    a_r: torch.Tensor,  # [..., P, Q]
+    a_t: torch.Tensor,  # [..., P]
+    b_r: torch.Tensor,  # [..., Q, R]
+    b_t: torch.Tensor,  # [..., Q]
     *,
-    out_rs: typing.Optional[torch.Tensor] = None,  # [..., P, R]
-    out_ts: typing.Optional[torch.Tensor] = None,  # [..., P]
+    out_r: typing.Optional[torch.Tensor] = None,  # [..., P, R]
+    out_t: typing.Optional[torch.Tensor] = None,  # [..., P]
 ) -> tuple[
     torch.Tensor,  # out_rs[..., P, R]
     torch.Tensor,  # out_ts[..., P]
@@ -1386,87 +1391,87 @@ def merge_rt(
     P, Q, R = -1, -2, -3
 
     P, Q, R = check_shapes(
-        a_rs, (..., P, Q),
-        a_ts, (..., P),
-        b_rs, (..., Q, R),
-        b_ts, (..., Q),
+        a_r, (..., P, Q),
+        a_t, (..., P),
+        b_r, (..., Q, R),
+        b_t, (..., Q),
     )
 
-    dtype = promote_dtypes(a_rs, a_ts, b_rs, b_ts)
+    dtype = promote_dtypes(a_r, a_t, b_r, b_t)
 
-    a_rs = a_rs.to(dtype)
-    a_ts = a_ts.to(dtype)
-    b_rs = b_rs.to(dtype)
-    b_ts = b_ts.to(dtype)
+    a_r = a_r.to(dtype)
+    a_t = a_t.to(dtype)
+    b_r = b_r.to(dtype)
+    b_t = b_t.to(dtype)
 
-    if out_rs is None:
-        out_rs = a_rs @ b_rs
+    if out_r is None:
+        out_r = a_r @ b_r
     else:
-        torch.matmul(a_rs, b_rs, out=out_rs)
+        torch.matmul(a_r, b_r, out=out_r)
 
     # [..., P, R]
 
-    inv_ts = (a_rs @ b_ts.unsqueeze(-1)).squeeze(-1) + a_ts
+    inv_ts = (a_r @ b_t.unsqueeze(-1)).squeeze(-1) + a_t
     # [..., P]
 
-    if out_ts is None:
-        out_ts = inv_ts
+    if out_t is None:
+        out_t = inv_ts
     else:
-        out_ts.copy_(inv_ts)
+        out_t.copy_(inv_ts)
 
-    return out_rs, out_ts
+    return out_r, out_t
 
 
 @beartype
 def get_inv_rt(
-    rs: torch.Tensor,  # [..., D, D]
-    ts: torch.Tensor,  # [..., D]
+    r: torch.Tensor,  # [..., D, D]
+    t: torch.Tensor,  # [..., D]
     *,
-    out_rs: typing.Optional[torch.Tensor] = None,  # [..., D, D]
-    out_ts: typing.Optional[torch.Tensor] = None,  # [..., D]
+    out_r: typing.Optional[torch.Tensor] = None,  # [..., D, D]
+    out_t: typing.Optional[torch.Tensor] = None,  # [..., D]
 ) -> tuple[
     torch.Tensor,  # out_rs[..., D, D]
     torch.Tensor,  # out_ts[..., D]
 ]:
     D = check_shapes(
-        rs, (..., -1, -1),
-        ts, (..., -1),
+        r, (..., -1, -1),
+        t, (..., -1),
     )
 
-    if out_rs is None:
-        out_rs = torch.empty_like(rs)
+    if out_r is None:
+        out_r = torch.empty_like(r)
 
-    if out_ts is None:
-        out_ts = torch.empty(
-            ts.shape + (1,),
-            dtype=promote_dtypes(rs, ts),
-            device=check_devices(out_rs, ts)
+    if out_t is None:
+        out_t = torch.empty(
+            t.shape + (1,),
+            dtype=promote_dtypes(r, t),
+            device=check_devices(out_r, t)
         )
 
-    torch.inverse(rs, out=out_rs)
+    torch.inverse(r, out=out_r)
     # [..., D, D]
 
     torch.matmul(
-        out_rs,
-        -ts.unsqueeze(-1),
-        out=out_ts,
+        out_r,
+        -t.unsqueeze(-1),
+        out=out_t,
     )
     # [..., D, 1]
 
-    return out_rs, out_ts.squeeze(-1)
+    return out_r, out_t.squeeze(-1)
 
 
 @beartype
 def do_homo(
-    hs: torch.Tensor,  # [..., P, Q]
-    vs: torch.Tensor,  # [..., Q]
+    h: torch.Tensor,  # [..., P, Q]
+    v: torch.Tensor,  # [..., Q]
 ) -> torch.Tensor:  # [..., P]
     P, Q = check_shapes(
-        hs, (..., -1, -2),
-        vs, (..., -2),
+        h, (..., -1, -2),
+        v, (..., -2),
     )
 
-    return homo_normalize((hs @ vs.unsqueeze(-1)).squeeze(-1))
+    return homo_normalize((h @ v.unsqueeze(-1)).squeeze(-1))
 
 
 @beartype

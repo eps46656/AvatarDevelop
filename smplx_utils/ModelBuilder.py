@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import copy
-import typing
 
 import torch
 from beartype import beartype
@@ -20,7 +21,7 @@ class ModelBuilder(torch.nn.Module):
     def device(self) -> torch.device:
         raise utils.UnimplementationError()
 
-    def to(self) -> typing.Self:
+    def to(self) -> ModelBuilder:
         raise utils.UnimplementationError()
 
     def forward(self) -> ModelData:
@@ -40,7 +41,7 @@ class StaticModelBuilder(ModelBuilder):
     def device(self) -> torch.device:
         return self.model_data.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> StaticModelBuilder:
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 
@@ -69,7 +70,7 @@ class DeformableModelBuilder(ModelBuilder):
     def device(self) -> torch.device:
         return self.model_data.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> DeformableModelBuilder:
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 

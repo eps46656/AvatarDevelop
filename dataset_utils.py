@@ -1,5 +1,4 @@
 import random
-import typing
 
 import torch
 from beartype import beartype

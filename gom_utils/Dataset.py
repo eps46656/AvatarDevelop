@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 import typing
 
@@ -48,7 +49,7 @@ class Sample:
     def device(self) -> torch.device:
         return self.camera_transform.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> Sample:
         return Sample(
             camera_config=self.camera_config,
             camera_transform=self.camera_transform.to(*args, **kwargs),
@@ -58,7 +59,7 @@ class Sample:
             blending_param=self.blending_param.to(*args, **kwargs),
         )
 
-    def __getitem__(self, idx) -> typing.Self:
+    def __getitem__(self, idx) -> Sample:
         batch_shape = self.shape
 
         return Sample(
@@ -116,7 +117,7 @@ class Dataset(dataset_utils.Dataset):
     def device(self) -> torch.device:
         return self.sample.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> Dataset:
         self.sample = self.sample.to(*args, **kwargs)
         return self
 

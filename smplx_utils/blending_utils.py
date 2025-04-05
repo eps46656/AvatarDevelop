@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 import typing
 
@@ -33,13 +35,13 @@ class BlendingParam:
         global_transl: typing.Optional[torch.Tensor] = None,  # [..., 3]
         global_rot: typing.Optional[torch.Tensor] = None,  # [..., 3]
 
-        body_poses: typing.Optional[torch.Tensor] = None,  # [..., BJ - 1, 3]
-        jaw_poses: typing.Optional[torch.Tensor] = None,  # [..., JJ, 3]
-        leye_poses: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
-        reye_poses: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
+        body_pose: typing.Optional[torch.Tensor] = None,  # [..., BJ - 1, 3]
+        jaw_pose: typing.Optional[torch.Tensor] = None,  # [..., JJ, 3]
+        leye_pose: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
+        reye_pose: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
 
-        lhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
-        rhand_poses: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
+        lhand_pose: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
+        rhand_pose: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
 
         blending_vert_nor: bool = False,
     ):
@@ -55,27 +57,27 @@ class BlendingParam:
         if global_rot is not None:
             utils.check_shapes(global_rot, (..., 3))
 
-        if body_poses is not None:
-            BJ = utils.check_shapes(body_poses, (..., -1, 3)) + 1
+        if body_pose is not None:
+            BJ = utils.check_shapes(body_pose, (..., -1, 3)) + 1
 
-        if jaw_poses is not None:
-            JJ = utils.check_shapes(jaw_poses, (..., -1, 3))
+        if jaw_pose is not None:
+            JJ = utils.check_shapes(jaw_pose, (..., -1, 3))
 
         EYEJ = -1
 
-        if leye_poses is not None:
-            EYEJ = utils.check_shapes(leye_poses, (..., EYEJ, 3))
+        if leye_pose is not None:
+            EYEJ = utils.check_shapes(leye_pose, (..., EYEJ, 3))
 
-        if reye_poses is not None:
-            EYEJ = utils.check_shapes(reye_poses, (..., EYEJ, 3))
+        if reye_pose is not None:
+            EYEJ = utils.check_shapes(reye_pose, (..., EYEJ, 3))
 
         HANDJ = -1
 
-        if lhand_poses is not None:
-            HANDJ = utils.check_shapes(lhand_poses, (..., HANDJ, 3))
+        if lhand_pose is not None:
+            HANDJ = utils.check_shapes(lhand_pose, (..., HANDJ, 3))
 
-        if rhand_poses is not None:
-            HANDJ = utils.check_shapes(rhand_poses, (..., HANDJ, 3))
+        if rhand_pose is not None:
+            HANDJ = utils.check_shapes(rhand_pose, (..., HANDJ, 3))
 
         # ---
 
@@ -85,13 +87,13 @@ class BlendingParam:
         self.global_transl = global_transl
         self.global_rot = global_rot
 
-        self.body_poses = body_poses
-        self.jaw_poses = jaw_poses
-        self.leye_poses = leye_poses
-        self.reye_poses = reye_poses
+        self.body_poses = body_pose
+        self.jaw_poses = jaw_pose
+        self.leye_poses = leye_pose
+        self.reye_poses = reye_pose
 
-        self.lhand_poses = lhand_poses
-        self.rhand_poses = rhand_poses
+        self.lhand_poses = lhand_pose
+        self.rhand_poses = rhand_pose
 
         self.blending_vert_nor = blending_vert_nor
 
@@ -153,7 +155,7 @@ class BlendingParam:
     def device(self):
         return self.body_shapes.device
 
-    def to(self, *args, **kwargs) -> typing.Self:
+    def to(self, *args, **kwargs) -> BlendingParam:
         d = dict()
 
         for key in BlendingParam.batch_dim_table.keys():
@@ -163,26 +165,13 @@ class BlendingParam:
         return BlendingParam(
             **d, blending_vert_nor=self.blending_vert_nor)
 
-    def expand(self, shape) -> typing.Self:
+    def expand(self, shape) -> BlendingParam:
         shape = tuple(shape)
 
         d = dict()
 
         for key, val in BlendingParam.batch_dim_table.items():
             d[key] = utils.try_batch_expand(getattr(self, key), shape, val)
-
-        return BlendingParam(
-            **d, blending_vert_nor=self.blending_vert_nor)
-
-    def flatten(self) -> typing.Self:
-        batch_shape = self.shape
-
-        d = dict()
-
-        for key, val in BlendingParam.batch_dim_table.items():
-            cur_val = getattr(self, key)
-            d[key] = None if cur_val is None else utils.try_batch_expand(
-                self.body_shapes, batch_shape, val).flatten(end_dim=val)
 
         return BlendingParam(
             **d, blending_vert_nor=self.blending_vert_nor)
@@ -214,17 +203,17 @@ class BlendingParam:
 
         lhand_en = \
             self.lhand_poses is not None and \
-            model_data.lhand_poses_mean is not None
+            model_data.lhand_pose_mean is not None
 
         rhand_en = \
             self.rhand_poses is not None and \
-            model_data.rhand_poses_mean is not None
+            model_data.rhand_pose_mean is not None
 
         if lhand_en:
-            lhand_poses = self.lhand_poses + model_data.lhand_poses_mean
+            lhand_poses = self.lhand_poses + model_data.lhand_pose_mean
 
         if rhand_en:
-            rhand_poses = self.rhand_poses + model_data.rhand_poses_mean
+            rhand_poses = self.rhand_poses + model_data.rhand_pose_mean
 
         poses_batch_dims = utils.broadcast_shapes(
             self.global_rot.shape[:-1],
@@ -264,7 +253,7 @@ class BlendingParam:
 
         return ret
 
-    def combine(self, obj: typing.Self) -> typing.Self:
+    def combine(self, obj: BlendingParam) -> BlendingParam:
         ret = BlendingParam(**self.__dict__)
 
         for field_name in BlendingParam.batch_dim_table.keys():
@@ -289,43 +278,43 @@ def blending(
     assert vp.isfinite().all()
 
     if blending_param.body_shapes is not None:
-        assert model_data.body_shape_dirs.isfinite().all()
+        assert model_data.body_shape_vert_dir.isfinite().all()
         assert blending_param.body_shapes.isfinite().all()
 
         vp = vp + torch.einsum("...vxb,...b->...vx",
-                               model_data.body_shape_dirs,
+                               model_data.body_shape_vert_dir,
                                blending_param.body_shapes)
 
-    if model_data.expr_shape_dirs is not None and \
+    if model_data.expr_shape_vert_dir is not None and \
        blending_param.expr_shapes is not None:
-        assert model_data.expr_shape_dirs.isfinite().all()
+        assert model_data.expr_shape_vert_dir.isfinite().all()
         assert blending_param.expr_shapes.isfinite().all()
 
         vp = vp + torch.einsum("...vxb,...b->...vx",
-                               model_data.expr_shape_dirs,
+                               model_data.expr_shape_vert_dir,
                                blending_param.expr_shapes)
 
     # [..., V, 3]
 
-    assert model_data.joint_ts_mean.isfinite().all()
+    assert model_data.joint_t_mean.isfinite().all()
 
-    binding_joint_ts = model_data.joint_ts_mean.clone()
+    binding_joint_ts = model_data.joint_t_mean.clone()
 
     if blending_param.body_shapes is not None:
-        assert model_data.body_shape_joint_regressor.isfinite().all()
+        assert model_data.body_shape_joint_dir.isfinite().all()
         assert blending_param.body_shapes.isfinite().all()
 
         binding_joint_ts = binding_joint_ts + torch.einsum(
             "...jxb,...b->...jx",
-            model_data.body_shape_joint_regressor,
+            model_data.body_shape_joint_dir,
             blending_param.body_shapes,
         )
 
-    if model_data.expr_shape_joint_regressor is not None and \
+    if model_data.expr_shape_joint_dir is not None and \
        blending_param.expr_shapes is not None:
         binding_joint_ts = binding_joint_ts + torch.einsum(
             "...jxb,...b->...jx",
-            model_data.expr_shape_joint_regressor,
+            model_data.expr_shape_joint_dir,
             blending_param.expr_shapes,
         )
 
@@ -360,26 +349,26 @@ def blending(
 
     vp = vp + torch.einsum(
         "...vxp,...p->...vx",
-        model_data.pose_dirs,  # [..., V, 3, (J - 1) * 3 * 3]
+        model_data.pose_vert_dir,  # [..., V, 3, (J - 1) * 3 * 3]
         pose_feature,  # [..., (J - 1) * 3 * 3]
     )
 
     lbs_result = \
         blending_utils.lbs(
             kin_tree=model_data.kin_tree,
-            lbs_weights=model_data.lbs_weights,
+            lbs_weight=model_data.lbs_weight,
 
             vert_pos=vp,
             vert_dir=model_data.vert_nor if blending_param.blending_vert_nor else None,
 
-            binding_pose_rs=binding_pose_rs,
-            binding_pose_ts=binding_pose_ts,
-            target_pose_rs=target_pose_rs,
-            target_pose_ts=binding_pose_ts,
+            binding_pose_r=binding_pose_rs,
+            binding_pose_t=binding_pose_ts,
+            target_pose_r=target_pose_rs,
+            target_pose_t=binding_pose_ts,
         )
 
     if blending_param.global_transl is not None:
-        lbs_result.target_joint_Ts[..., :, :3, 3] += \
+        lbs_result.target_joint_T[..., :, :3, 3] += \
             blending_param.global_transl.unsqueeze(-2)
 
         vp = blending_param.global_transl.unsqueeze(-2) + \
@@ -397,5 +386,5 @@ def blending(
 
         tex_vert_pos=model_data.tex_vert_pos,
 
-        joint_Ts=lbs_result.target_joint_Ts,
+        joint_T=lbs_result.target_joint_T,
     )

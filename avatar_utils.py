@@ -1,4 +1,3 @@
-
 import typing
 
 import torch
@@ -24,13 +23,13 @@ class AvatarModel:
         tex_vert_pos: typing.Optional[torch.Tensor] = None,
         # [..., TV, 2]
 
-        joint_Ts: typing.Optional[torch.Tensor] = None,  # [..., J, 4, 4]
+        joint_T: typing.Optional[torch.Tensor] = None,  # [..., J, 4, 4]
     ):
         J = kin_tree.joints_cnt
 
-        V = mesh_data.vertices_cnt
+        V = mesh_data.verts_cnt
 
-        TV = 0 if tex_mesh_data is None else tex_mesh_data.vertices_cnt
+        TV = 0 if tex_mesh_data is None else tex_mesh_data.verts_cnt
 
         F = mesh_data.faces_cnt
         assert tex_mesh_data.faces_cnt == F
@@ -44,27 +43,20 @@ class AvatarModel:
         if tex_vert_pos is not None:
             utils.check_shapes(tex_vert_pos, (..., TV, 2))
 
-        if joint_Ts is not None:
-            utils.check_shapes(joint_Ts, (..., J, 4, 4))
+        if joint_T is not None:
+            utils.check_shapes(joint_T, (..., J, 4, 4))
 
         batch_shape = utils.broadcast_shapes(
             utils.try_get_batch_shape(vert_pos, -2),
             utils.try_get_batch_shape(vert_nor, -2),
             utils.try_get_batch_shape(tex_vert_pos, -2),
-            utils.try_get_batch_shape(joint_Ts, -3),
+            utils.try_get_batch_shape(joint_T, -3),
         )
 
-        vert_pos = utils.try_batch_expand(
-            vert_pos, batch_shape, -2)
-
-        vert_nor = utils.try_batch_expand(
-            vert_nor, batch_shape, -2)
-
-        tex_vert_pos = utils.try_batch_expand(
-            tex_vert_pos, batch_shape, -2)
-
-        joint_Ts = utils.try_batch_expand(
-            joint_Ts, batch_shape, -3)
+        vert_pos = utils.try_batch_expand(vert_pos, batch_shape, -2)
+        vert_nor = utils.try_batch_expand(vert_nor, batch_shape, -2)
+        tex_vert_pos = utils.try_batch_expand(tex_vert_pos, batch_shape, -2)
+        joint_T = utils.try_batch_expand(joint_T, batch_shape, -3)
 
         # ---
 
@@ -78,7 +70,7 @@ class AvatarModel:
 
         self.tex_vert_pos = tex_vert_pos
 
-        self.joint_Ts = joint_Ts
+        self.joint_T = joint_T
 
     @property
     def joints_cnt(self) -> int:
@@ -86,11 +78,11 @@ class AvatarModel:
 
     @property
     def verts_cnt(self) -> int:
-        return self.mesh_data.vertices_cnt
+        return self.mesh_data.verts_cnt
 
     @property
     def tex_verts_cnt(self) -> int:
-        return self.tex_mesh_data.vertices_cnt
+        return self.tex_mesh_data.verts_cnt
 
     @property
     def faces_cnt(self) -> int:
@@ -104,7 +96,7 @@ class AvatarModel:
         vert_pos = utils.try_batch_index(self.vert_pos, -2, idx)
         vert_nor = utils.try_batch_index(self.vert_nor, -2, idx)
         tex_vert_pos = utils.try_batch_index(self.tex_vert_pos, -2, idx)
-        joint_Ts = utils.try_batch_index(self.joint_Ts, -2, idx)
+        joint_T = utils.try_batch_index(self.joint_T, -2, idx)
 
         return AvatarModel(
             kin_tree=self.kin_tree,
@@ -117,7 +109,7 @@ class AvatarModel:
 
             tex_vert_pos=tex_vert_pos,
 
-            joint_Ts=joint_Ts,
+            joint_T=joint_T,
         )
 
 

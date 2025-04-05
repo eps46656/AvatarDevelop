@@ -31,7 +31,7 @@ class LogDatabase:
     def __init__(self, db_path: os.PathLike):
         super().__init__()
 
-        db_path = pathlib.Path(db_path)
+        db_path = utils.to_pathlib_path(db_path)
 
         is_new_db = not db_path.exists()
 
@@ -161,6 +161,21 @@ class TrainingCore:
     @optimizer.setter
     def scheduler(self, scheduler: object):
         raise utils.UnimplementationError()
+
+    # ---
+
+    def get(self, field_name: str):
+        assert field_name in {"module", "optimizer", "scheduler"}
+
+        ret = getattr(self, field_name)
+
+        print(f"{ret=}")
+
+        return ret
+
+    def set(self, field_name: str, field_val: object):
+        assert field_name in {"module", "optimizer", "scheduler"}
+        return setattr(self, field_name, field_val)
 
     # ---
 
@@ -397,13 +412,13 @@ class Trainer:
                 if field_name == "module":
                     val = val.to(self.__device)
 
-                setattr(self.training_core, field_name, val)
+                self.training_core.set(field_name, val)
         else:
             for field_name in {"module", "optimizer", "scheduler"}:
                 if field_name not in d:
                     continue
 
-                field_val = getattr(self.training_core, field_name)
+                field_val = self.training_core.get(field_name)
 
                 if field_val is not None:
                     field_val.load_state_dict(d[field_name])
@@ -450,18 +465,18 @@ class Trainer:
         if full:
             print(f"full saved")
 
-            d = {
-                field_name: getattr(self.training_core, field_name)
-                for field_name in {"module", "optimizer", "scheduler"}
-            }
+            for field_name in {"module", "optimizer", "scheduler"}:
+                d[field_name] = self.training_core.get(field_name)
         else:
             print(f"     saved")
 
             for field_name in {"module", "optimizer", "scheduler"}:
-                field_val = getattr(self.training_core, field_name)
+                field_val = self.training_core.get(field_name)
 
                 d[field_name] = None if field_val is None else \
                     field_val.state_dict()
+
+        print(f"{d=}")
 
         torch.save(
             d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
