@@ -199,7 +199,7 @@ class MeshData:
     ) -> MeshData:
         faces_cnt = utils.check_shapes(faces, (-1, 3))
 
-        faces = faces.to(utils.CPU_DEVICE, torch.int64)
+        faces = faces.to(utils.CPU_DEVICE, torch.long)
 
         edge_to_face_d: collections.defaultdict[tuple[int, int], set[int]] = \
             collections.defaultdict(set)
@@ -207,10 +207,10 @@ class MeshData:
         for f in range(faces_cnt):
             va, vb, vc = sorted(map(int, faces[f]))
 
-            assert 0 <= va
+            assert 0 <= va, f"{va=}"
             assert va < vb
             assert vb < vc
-            assert vc < verts_cnt
+            assert vc < verts_cnt, f"{vc=}, {verts_cnt=}"
 
             edge_to_face_d[(vb, vc)].add(f)
             edge_to_face_d[(va, vc)].add(f)
@@ -231,17 +231,17 @@ class MeshData:
             for fa, fb in itertools.combinations(fs, 2):
                 ff.add(utils.min_max(fa, fb))
 
-        faces = faces.to(device, torch.int64)
+        faces = faces.to(device, torch.long)
 
         e_to_vv = torch.tensor(
             sorted(edge_to_face_d.keys()),
-            dtype=torch.int64,
+            dtype=torch.long,
             device=device,
         )
 
         ff = torch.tensor(
             sorted(ff),
-            dtype=torch.int64,
+            dtype=torch.long,
             device=device,
         )
 
@@ -622,7 +622,8 @@ class MeshData:
         e_to_vv = self.e_to_vv.to(utils.CPU_DEVICE)
         # [VP, 2]
 
-        vv_to_e = {(va, vb): e for e, (va, vb) in enumerate(e_to_vv)}
+        vv_to_e = {(int(va), int(vb)): int(e)
+                   for e, (va, vb) in enumerate(e_to_vv)}
 
         e_to_fs = [[] for _ in range(self.edges_cnt)]
 
@@ -637,7 +638,8 @@ class MeshData:
             if target_edges is None:
                 target_edges = range(self.edges_cnt)
         else:
-            target_edges = set() if target_edges is None else set(target_edges)
+            target_edges = set() if target_edges is None else \
+                set(map(int, target_edges))
 
             for f in target_faces:
                 va, vb, vc = sorted(map(int, f_to_vvv[f]))
@@ -678,7 +680,7 @@ class MeshData:
         e_to_new_v: dict[int, int] = dict()
 
         vert_src_table = torch.empty(
-            (self.verts_cnt + edge_mark.count(True), 2), dtype=torch.int64)
+            (self.verts_cnt + edge_mark.count(True), 2), dtype=torch.long)
 
         for i in range(self.verts_cnt):
             vert_src_table[i] = i
@@ -692,11 +694,11 @@ class MeshData:
         new_faces: list[tuple[int, int, int]] = list()
 
         for f, cnt in enumerate(se_cnts):
-            if cnt == 0:
-                new_faces.append(tuple(self.f_to_vvv[f]))
-                continue
-
             va, vb, vc = map(int, f_to_vvv[f])
+
+            if cnt == 0:
+                new_faces.append((va, vb, vc))
+                continue
 
             ea = vv_to_e[utils.min_max(vb, vc)]
             eb = vv_to_e[utils.min_max(va, vc)]
@@ -737,11 +739,15 @@ class MeshData:
                 case _:
                     raise utils.MismatchException()
 
-        mesh_data = MeshData.from_faces(vert_src_table.shape[0], new_faces)
+        mesh_data = MeshData.from_faces(
+            vert_src_table.shape[0],
+            new_faces,
+        )
 
         return MeshSubdivisionResult(
             vert_src_table=vert_src_table,
             mesh_data=mesh_data,
+            device=self.f_to_vvv.device,
         )
 
     def extract(
@@ -764,21 +770,28 @@ class MeshData:
 
         v_to_new_v: dict[int, int] = dict()
 
-        vert_src_table = torch.empty((v_mark.count(True),), dtype=torch.int64)
+        vert_src_table = torch.empty((v_mark.count(True),), dtype=torch.long)
 
         for new_v, v in enumerate(v for v, mark in enumerate(v_mark) if mark):
             v_to_new_v[v] = new_v
             vert_src_table[new_v] = v
 
-        new_f_to_vvv: list[tuple[int, int, int]] = list()
+        new_f_to_vvv = torch.empty((len(target_faces), 3), dtype=torch.long)
 
-        face_src_table = torch.empty((len(target_faces),), dtype=torch.int64)
+        face_src_table = torch.empty((len(target_faces),), dtype=torch.long)
 
         for new_f, f in enumerate(target_faces):
-            new_f_to_vvv.append(tuple(v_to_new_v[v] for v in f_to_vvv[f]))
+            new_f_to_vvv[new_f, 0] = v_to_new_v[int(f_to_vvv[f, 0])]
+            new_f_to_vvv[new_f, 1] = v_to_new_v[int(f_to_vvv[f, 1])]
+            new_f_to_vvv[new_f, 2] = v_to_new_v[int(f_to_vvv[f, 2])]
+
             face_src_table[new_f] = f
 
-        mesh_data = MeshData.from_faces(vert_src_table.shape[0], new_f_to_vvv)
+        mesh_data = MeshData.from_faces(
+            vert_src_table.shape[0],
+            new_f_to_vvv,
+            device=self.f_to_vvv.device,
+        )
 
         return MeshExtractionResult(
             vert_src_table=vert_src_table,
@@ -795,7 +808,7 @@ class MeshData:
         utils.check_shapes(vert_pos, (V, 3))
 
         tm = trimesh.Trimesh(
-            vertices=vert_pos.to(utils.CPU_DEVICE),
+            vertices=vert_pos.detach().to(utils.CPU_DEVICE),
             faces=self.f_to_vvv.to(utils.CPU_DEVICE),
             validate=True,
         )

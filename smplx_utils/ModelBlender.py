@@ -109,7 +109,6 @@ class ModelBlender(avatar_utils.AvatarBlender):
     def forward(self, blending_param: BlendingParam):
         return blending(
             model_data=self.model_builder.get_model_data(),
-            blending_param=blending_param.combine(
-                self.default_blending_param),
+            blending_param=blending_param.combine(self.default_blending_param),
             device=self.model_builder.device,
         )

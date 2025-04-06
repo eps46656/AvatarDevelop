@@ -13,6 +13,7 @@ import time
 import types
 import typing
 
+import cv2 as cv
 import einops
 import PIL
 import torch
@@ -337,7 +338,7 @@ def denormalize_image(
 
 @beartype
 def read_image(path: os.PathLike):
-    img = torchvision.io.decode_image(
+    img = torchvision.io.read_image(
         path, torchvision.io.ImageReadMode.RGB)
     # [C, H, W]
 
@@ -398,10 +399,8 @@ def write_video(
     path: os.PathLike,
     video: torch.Tensor,  # [T, C, H, W]
     fps: int,
-    codec: str = "h264",
 ) -> None:
-    video = video.to(CPU_DEVICE)
-
+    """
     torchvision.io.write_video(
         filename=path,
         video_array=denormalize_image(
@@ -409,6 +408,22 @@ def write_video(
         fps=fps,
         video_codec=codec,
     )
+    """
+
+    T, C, H, W = -1, -2, -3, -4
+
+    T, C, H, W = check_shapes(video, (T, C, H, W))
+
+    fourcc = cv.VideoWriter_fourcc(*"mp4v")
+    writer = cv.VideoWriter(path, fourcc, fps, (W, H))
+
+    for t in range(T):
+        writer.write(einops.rearrange(
+            denormalize_image(video[t]).cpu().numpy(),
+            "c h w -> h w c",
+        ))
+
+    writer.release()
 
 
 @beartype
@@ -440,17 +455,26 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
         t = args[i]
         p = args[i + 1]
 
-        assert isinstance(t, tuple) or hasattr(t, "shape"), f"{type(t)=}"
+        assert t is None or isinstance(t, tuple) or hasattr(t, "shape"), \
+            f"{type(t)=}"
+
         assert isinstance(p, tuple)
 
-        t = tuple(t) if isinstance(t, tuple) else t.shape
+        for p_val in p:
+            assert p_val is ... or isinstance(p_val, int)
 
         ellipsis_cnt = p.count(...)
 
         assert ellipsis_cnt <= 1
 
-        for p_val in p:
-            assert p_val is ... or isinstance(p_val, int)
+        if t is None:
+            for p_val in p:
+                if isinstance(p_val, int) and p_val < 0:
+                    undet_shapes.setdefault(p_val, p_val)
+
+            continue
+
+        t = tuple(t) if isinstance(t, tuple) else t.shape
 
         if ellipsis_cnt == 0:
             assert len(p) == len(t), \
@@ -478,15 +502,19 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
             if 0 <= p_val:
                 assert t_val == p_val, \
                     f"Tensor shape {t} mismatches pattern {p}."
-            else:
-                old_p_val = undet_shapes.setdefault(
-                    p_val, t_val)
 
-                assert old_p_val == t_val, \
-                    f"Tensor shape {old_p_val} and {t_val} are inconsistant."
+                continue
+
+            old_p_val = undet_shapes.setdefault(p_val, t_val)
+
+            if old_p_val < 0:
+                undet_shapes[p_val] = t_val
+
+            assert old_p_val == t_val, \
+                f"Tensor shape {old_p_val} and {t_val} are inconsistant."
 
     ret = tuple(
-        undet_shape
+        max(0, undet_shape)
         for _, undet_shape in sorted(undet_shapes.items(), reverse=True)
     )
 

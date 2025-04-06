@@ -58,7 +58,7 @@ class TrainingCore(training_utils.TrainingCore):
     # --
 
     @property
-    def dataset(self) -> gom_utils.Dataset:
+    def dataset(self) -> typing.Optional[gom_utils.Dataset]:
         return self.__dataset
 
     @dataset.setter
@@ -68,7 +68,7 @@ class TrainingCore(training_utils.TrainingCore):
     # --
 
     @property
-    def optimizer(self) -> torch.optim.Optimizer:
+    def optimizer(self) -> typing.Optional[torch.optim.Optimizer]:
         return self.__optimizer
 
     @optimizer.setter
@@ -87,7 +87,7 @@ class TrainingCore(training_utils.TrainingCore):
 
     # --
 
-    def calc_loss(self, forward_result: gom_utils.Module.ForwardResult) \
+    def calc_loss(self, forward_result: gom_utils.ModuleForwardResult) \
             -> torch.Tensor:
         weighted_rgb_loss = \
             self.__config.alpha_rgb * forward_result.rgb_loss
@@ -118,7 +118,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             sample: gom_utils.Sample
 
-            result: gom_utils.Module.ForwardResult = self.module(
+            result: gom_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
                 img=sample.img,
@@ -184,7 +184,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             sample: gom_utils.Sample
 
-            result: gom_utils.Module.ForwardResult = self.module(
+            result: gom_utils.ModuleForwardResult = self.module(
                 camera_config=sample.camera_config,
                 camera_transform=sample.camera_transform,
                 img=sample.img,
@@ -241,7 +241,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             sample: gom_utils.Sample
 
-            result: gom_utils.Module.ForwardResult = self.module(
+            result: gom_utils.ModuleForwardResult = self.module(
                 camera_config=sample.camera_config,
                 camera_transform=sample.camera_transform,
                 img=sample.img,

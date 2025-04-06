@@ -50,7 +50,7 @@ def _read_mask(
 
     utils.write_video(mask_video_path, ret.expand((T, 3, H, W)), fps)
 
-    return ret.to(evice=device).squeeze(1)
+    return ret.to(device).squeeze(1)
 
 
 @beartype
@@ -173,24 +173,16 @@ def _read_smpl_blending_param(
 @beartype
 def read_subject(
     subject_dir: os.PathLike,
-    model_data_dict: dict[str, smplx_utils.ModelData],
+    model_data: smplx_utils.ModelData,
     device: torch.device,
 ):
     subject_dir = pathlib.Path(subject_dir)
 
     assert subject_dir.is_dir()
 
-    assert "female" in model_data_dict
-    assert "male" in model_data_dict
-
     subject_name = subject_dir.name
 
     subject_video_path = subject_dir / f"{subject_name}.mp4"
-
-    if "female" in subject_name:
-        model_data = model_data_dict["female"]
-    else:
-        model_data = model_data_dict["male"]
 
     video, fps = utils.read_video(subject_video_path)
     # [T, C, H, W]

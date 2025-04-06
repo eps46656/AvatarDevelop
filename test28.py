@@ -15,8 +15,8 @@ DEVICE = utils.CPU_DEVICE
 
 
 def main1():
-    model_data = smplx_utils.ModelData.from_file(
-        model_data_path=config.SMPLX_NEUTRAL_MODEL,
+    model_data = smplx_utils.Core.from_file(
+        model_data_path=config.SMPLX_NEUTRAL_MODEL_PATH,
         model_config=smplx_utils.smplx_model_config,
         device=DEVICE,
     )

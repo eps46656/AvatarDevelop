@@ -15,15 +15,13 @@ DEVICE = utils.CPU_DEVICE
 
 
 def main1():
-    video_path = DIR / "people_snapshot_public/female-3-sport/female-3-sport.mp4"
+    video_path = DIR / "people_snapshot_public/female-1-casual/female-1-casual.mp4"
 
     video, fps = utils.read_video(video_path)
 
-    timestamp = int(time.time())
-
     segment_utils.segment(
         imgs=video,  # [T, C, H, W]
-        out_dir=DIR / f"segment_{timestamp}",
+        out_dir=DIR / f"segment_2025_0406_01",
         out_fps=fps,
     )
 

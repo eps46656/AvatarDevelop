@@ -16,15 +16,15 @@ DEVICE = torch.device("cpu")
 
 def main1():
     smpl_model_data_path_dict = {
-        "male": config.SMPL_MALE_MODEL,
-        "female": config.SMPL_FEMALE_MODEL,
-        "neutral": config.SMPL_NEUTRAL_MODEL,
+        "male": config.SMPL_MALE_MODEL_PATH,
+        "female": config.SMPL_FEMALE_MODEL_PATH,
+        "neutral": config.SMPL_NEUTRAL_MODEL_PATH,
     }
 
     smplx_model_data_path_dict = {
-        "male": config.SMPLX_MALE_MODEL,
-        "female": config.SMPLX_FEMALE_MODEL,
-        "neutral": config.SMPLX_NEUTRAL_MODEL,
+        "male": config.SMPLX_MALE_MODEL_PATH,
+        "female": config.SMPLX_FEMALE_MODEL_PATH,
+        "neutral": config.SMPLX_NEUTRAL_MODEL_PATH,
     }
 
     body_shapes_cnt = 10
@@ -35,7 +35,7 @@ def main1():
     hand_joints_cnt = 0
 
     model_data_dict = {
-        key: smplx_utils.ModelData.from_file(
+        key: smplx_utils.Core.from_file(
             model_data_path=value,
             body_shapes_cnt=body_shapes_cnt,
             expr_shapes_cnt=expr_shapes_cnt,

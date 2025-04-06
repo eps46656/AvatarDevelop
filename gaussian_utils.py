@@ -95,11 +95,10 @@ def render_gaussian(
 
     assert gp_shs is not None or gp_colors is not None
 
-    if gp_shs is not None:
-        utils.check_shapes(gp_shs, (..., N, (sh_degree + 1)**2, C))
-
-    if gp_colors is not None:
-        utils.check_shapes(gp_colors, (..., N, C))
+    utils.check_shapes(
+        gp_shs, (..., N, (sh_degree + 1)**2, C),
+        gp_colors, (..., N, C),
+    )
 
     batch_shape = utils.broadcast_shapes(
         camera_transform.shape,

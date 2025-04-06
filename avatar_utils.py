@@ -37,17 +37,12 @@ class AvatarModel:
         F = mesh_data.faces_cnt
         assert tex_mesh_data.faces_cnt == F
 
-        if vert_pos is not None:
-            utils.check_shapes(vert_pos, (..., V, 3))
-
-        if vert_nor is not None:
-            utils.check_shapes(vert_nor, (..., V, 3))
-
-        if tex_vert_pos is not None:
-            utils.check_shapes(tex_vert_pos, (..., TV, 2))
-
-        if joint_T is not None:
-            utils.check_shapes(joint_T, (..., J, 4, 4))
+        utils.check_shapes(
+            vert_pos, (..., V, 3),
+            vert_nor, (..., V, 3),
+            tex_vert_pos, (..., TV, 2),
+            joint_T, (..., J, 4, 4),
+        )
 
         # ---
 
@@ -120,7 +115,7 @@ class AvatarModel:
                 self.tex_vert_pos, self.shape, -2, idx),
 
             joint_T=utils.try_batch_indexing(
-                self.joint_T, self.shape, -2, idx),
+                self.joint_T, self.shape, -3, idx),
         )
 
 

@@ -79,7 +79,7 @@ class KinTree:
     @staticmethod
     def from_parents(parents: typing.Iterable[int], null_value=-1):
         return KinTree.from_links(
-            ((p, u) for u, p in enumerate(parents)),
+            [(p, u) for u, p in enumerate(parents)],
             null_value)
 
     @property

@@ -158,10 +158,10 @@ def main4():
 
 
 def main5():
-    model_data_path = config.SMPL_FEMALE_MODEL
+    model_data_path = config.SMPL_FEMALE_MODEL_PATH
     model_config = smplx_utils.smpl_model_config
 
-    model_data: smplx_utils.Model = smplx_utils.ModelData.from_file(
+    model_data: smplx_utils.Model = smplx_utils.Core.from_file(
         model_data_path=model_data_path,
         model_config=model_config,
         device=DEVICE,

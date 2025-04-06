@@ -17,19 +17,19 @@ class BlendingParam:
         *,
         shape: tuple[int, ...] = torch.Size(),
 
-        body_shape: typing.Optional[torch.Tensor],  # [..., BS]
-        expr_shape: typing.Optional[torch.Tensor],  # [..., ES]
+        body_shape: typing.Optional[torch.Tensor] = None,  # [..., BS]
+        expr_shape: typing.Optional[torch.Tensor] = None,  # [..., ES]
 
-        global_transl: typing.Optional[torch.Tensor],  # [..., 3]
-        global_rot: typing.Optional[torch.Tensor],  # [..., 3]
+        global_transl: typing.Optional[torch.Tensor] = None,  # [..., 3]
+        global_rot: typing.Optional[torch.Tensor] = None,  # [..., 3]
 
-        body_pose: typing.Optional[torch.Tensor],  # [..., BJ - 1, 3]
-        jaw_pose: typing.Optional[torch.Tensor],  # [..., JJ, 3]
-        leye_pose: typing.Optional[torch.Tensor],  # [..., EYEJ, 3]
-        reye_pose: typing.Optional[torch.Tensor],  # [..., EYEJ, 3]
+        body_pose: typing.Optional[torch.Tensor] = None,  # [..., BJ - 1, 3]
+        jaw_pose: typing.Optional[torch.Tensor] = None,  # [..., JJ, 3]
+        leye_pose: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
+        reye_pose: typing.Optional[torch.Tensor] = None,  # [..., EYEJ, 3]
 
-        lhand_pose: typing.Optional[torch.Tensor],  # [..., HANDJ, 3]
-        rhand_pose: typing.Optional[torch.Tensor],  # [..., HANDJ, 3]
+        lhand_pose: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
+        rhand_pose: typing.Optional[torch.Tensor] = None,  # [..., HANDJ, 3]
 
         dtype: typing.Optional[torch.dtype] = None,
         device: typing.Optional[torch.device] = None,
@@ -88,21 +88,22 @@ class BlendingParam:
             utils.try_get_batch_shape(rhand_pose, -2),
         )
 
-        dd = (device, dtype)
+        def f(obj):
+            return None if obj is None else obj.to(device, dtype)
 
-        self.body_shape = body_shape.to(*dd)
-        self.expr_shape = expr_shape.to(*dd)
+        self.body_shape = f(body_shape)
+        self.expr_shape = f(expr_shape)
 
-        self.global_transl = global_transl.to(*dd)
-        self.global_rot = global_rot.to(*dd)
+        self.global_transl = f(global_transl)
+        self.global_rot = f(global_rot)
 
-        self.body_pose = body_pose.to(*dd)
-        self.jaw_pose = jaw_pose.to(*dd)
-        self.leye_pose = leye_pose.to(*dd)
-        self.reye_pose = reye_pose.to(*dd)
+        self.body_pose = f(body_pose)
+        self.jaw_pose = f(jaw_pose)
+        self.leye_pose = f(leye_pose)
+        self.reye_pose = f(reye_pose)
 
-        self.lhand_pose = lhand_pose.to(*dd)
-        self.rhand_pose = rhand_pose.to(*dd)
+        self.lhand_pose = f(lhand_pose)
+        self.rhand_pose = f(rhand_pose)
 
     @property
     def device(self):
@@ -119,12 +120,12 @@ class BlendingParam:
             global_rot=f(self.global_rot),
 
             body_pose=f(self.body_pose),
-            jaw_poses=f(self.jaw_pose),
-            leye_poses=f(self.leye_pose),
-            reye_poses=f(self.reye_pose),
+            jaw_pose=f(self.jaw_pose),
+            leye_pose=f(self.leye_pose),
+            reye_pose=f(self.reye_pose),
 
-            lhand_poses=f(self.lhand_pose),
-            rhand_poses=f(self.rhand_pose),
+            lhand_pose=f(self.lhand_pose),
+            rhand_pose=f(self.rhand_pose),
         )
 
     def expand(self, shape: tuple[int, ...]) -> BlendingParam:
@@ -237,8 +238,6 @@ def blending(
 ) -> Model:
     vp = model_data.vert_pos
 
-    assert vp.isfinite().all()
-
     if blending_param.body_shape is not None:
         vp = vp + torch.einsum("...vxb,...b->...vx",
                                model_data.body_shape_vert_dir,
@@ -252,14 +251,9 @@ def blending(
 
     # [..., V, 3]
 
-    assert model_data.joint_t_mean.isfinite().all()
-
     binding_joint_ts = model_data.joint_t_mean.clone()
 
     if blending_param.body_shape is not None:
-        assert model_data.body_shape_joint_dir.isfinite().all()
-        assert blending_param.body_shape.isfinite().all()
-
         binding_joint_ts = binding_joint_ts + torch.einsum(
             "...jxb,...b->...jx",
             model_data.body_shape_joint_dir,
@@ -267,7 +261,7 @@ def blending(
         )
 
     if model_data.expr_shape_joint_dir is not None and \
-       blending_param.expr_shape is not None:
+            blending_param.expr_shape is not None:
         binding_joint_ts = binding_joint_ts + torch.einsum(
             "...jxb,...b->...jx",
             model_data.expr_shape_joint_dir,
@@ -282,15 +276,15 @@ def blending(
         (J, 3, 3), dtype=utils.FLOAT, device=device)
 
     binding_pose_ts = torch.empty_like(binding_joint_ts)
-    binding_pose_ts[..., model_data.kin_tree.root, :] = \
-        binding_joint_ts[..., model_data.kin_tree.root, :]
+    binding_pose_ts[..., model_data.kin_tree.root,
+                    :] = binding_joint_ts[..., model_data.kin_tree.root, :]
     # [..., J, 3]
 
     for u in model_data.kin_tree.joints_tp[1:]:
         p = model_data.kin_tree.parents[u]
 
-        binding_pose_ts[..., u, :] = \
-            binding_joint_ts[..., u, :] - binding_joint_ts[..., p, :]
+        binding_pose_ts[..., u, :] = binding_joint_ts[...,
+                                                      u, :] - binding_joint_ts[..., p, :]
 
     target_pose_rs = utils.axis_angle_to_rot_mat(
         blending_param.get_poses(model_data), out_shape=(3, 3))
@@ -299,8 +293,11 @@ def blending(
     identity = torch.eye(
         3, dtype=target_pose_rs.dtype, device=target_pose_rs.device)
 
-    pose_feature = \
-        (target_pose_rs[..., 1:, :, :] - identity).view(-1, (J - 1) * 3 * 3)
+    pose_feature = target_pose_rs[..., 1:, :, :] - identity
+    # [..., J - 1, 3, 3]
+
+    pose_feature = pose_feature.view(
+        pose_feature.shape[:-3] + ((J - 1) * 3 * 3,))
     # [..., (J - 1) * 3 * 3]
 
     vp = vp + torch.einsum(
@@ -309,19 +306,18 @@ def blending(
         pose_feature,  # [..., (J - 1) * 3 * 3]
     )
 
-    lbs_result = \
-        blending_utils.lbs(
-            kin_tree=model_data.kin_tree,
-            lbs_weight=model_data.lbs_weight,
+    lbs_result = blending_utils.lbs(
+        kin_tree=model_data.kin_tree,
+        lbs_weight=model_data.lbs_weight,
 
-            vert_pos=vp,
-            vert_dir=model_data.vert_nor,
+        vert_pos=vp,
+        vert_dir=model_data.vert_nor,
 
-            binding_pose_r=binding_pose_rs,
-            binding_pose_t=binding_pose_ts,
-            target_pose_r=target_pose_rs,
-            target_pose_t=binding_pose_ts,
-        )
+        binding_pose_r=binding_pose_rs,
+        binding_pose_t=binding_pose_ts,
+        target_pose_r=target_pose_rs,
+        target_pose_t=binding_pose_ts,
+    )
 
     if blending_param.global_transl is not None:
         lbs_result.target_joint_T[..., :, :3, 3] += \
@@ -337,7 +333,8 @@ def blending(
         tex_mesh_data=model_data.tex_mesh_data,
 
         vert_pos=vp,
-        vert_nor=utils.vec_normed(lbs_result.blended_vert_dir),
+        vert_nor=None if lbs_result.blended_vert_dir is None
+        else utils.vec_normed(lbs_result.blended_vert_dir),
 
         tex_vert_pos=model_data.tex_vert_pos,
 

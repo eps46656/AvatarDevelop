@@ -10,12 +10,6 @@ import pytorch3d.structures
 from .. import camera_utils, transform_utils, utils
 
 
-@dataclasses.dataclass
-class RasterizeMeshResult:
-    pixel_to_faces: torch.Tensor  # [H, W, FPP]
-    bary_coords: torch.Tensor  # [H, W, FPP, 3]
-
-
 @beartype
 def rasterize_mesh(
     vert_pos: torch.Tensor,  # [V, 3]
@@ -28,7 +22,7 @@ def rasterize_mesh(
     faces_per_pixel: int,
 
     cull_backfaces: bool = True,
-) -> RasterizeMeshResult:
+) -> pytorch3d.renderer.mesh.rasterizer.Fragments:
     V, F = -1, -2
 
     V, F = utils.check_shapes(
@@ -90,17 +84,8 @@ def rasterize_mesh(
         textures=None,
     )
 
-    fragments = rasterizer(mesh)
+    fragments: pytorch3d.renderer.mesh.rasterizer.Fragments = rasterizer(mesh)
+    # fragments.pix_to_face[1, H, W, FPP]
+    # fragments.bary_coords[1, H, W, FPP, 3]
 
-    pixel_to_faces = fragments.pix_to_face.squeeze(0)
-    # [1, img_h, img_w, faces_per_pixel]
-    # [img_h, img_w, faces_per_pixel]
-
-    bary_coords = fragments.bary_coords.squeeze(0)
-    # [1, img_h, img_w, faces_per_pixel, 3]
-    # [img_h, img_w, faces_per_pixel, 3]
-
-    return RasterizeMeshResult(
-        pixel_to_faces=pixel_to_faces,
-        bary_coords=bary_coords,
-    )
+    return fragments

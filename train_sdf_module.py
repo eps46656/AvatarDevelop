@@ -127,21 +127,21 @@ def main1():
 
     model_data_path_dict = {
         "smpl": {
-            "male": config.SMPL_MALE_MODEL,
-            "female": config.SMPL_FEMALE_MODEL,
-            "neutral": config.SMPL_NEUTRAL_MODEL,
+            "male": config.SMPL_MALE_MODEL_PATH,
+            "female": config.SMPL_FEMALE_MODEL_PATH,
+            "neutral": config.SMPL_NEUTRAL_MODEL_PATH,
         },
         "smplx": {
-            "male": config.SMPLX_MALE_MODEL,
-            "female": config.SMPLX_FEMALE_MODEL,
-            "neutral": config.SMPLX_NEUTRAL_MODEL,
+            "male": config.SMPLX_MALE_MODEL_PATH,
+            "female": config.SMPLX_FEMALE_MODEL_PATH,
+            "neutral": config.SMPLX_NEUTRAL_MODEL_PATH,
         },
     }
 
     # ---
 
     model_data: smplx_utils.ModelData = smplx_utils.ModelData.from_file(
-        model_data_path=config.SMPL_FEMALE_MODEL,
+        model_data_path=config.SMPL_FEMALE_MODEL_PATH,
         model_config=smplx_utils.smpl_model_config,
         device=DEVICE,
     )

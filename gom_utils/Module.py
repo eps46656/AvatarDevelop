@@ -11,6 +11,30 @@ from .utils import FaceCoordResult, get_face_coord
 
 
 @beartype
+@dataclasses.dataclass
+class ModuleWorldGPResult:
+    face_coord_result: FaceCoordResult
+    gp_means: torch.Tensor  # [..., F, 3]
+    gp_rot_qs: torch.Tensor  # [..., F, 4]
+    gp_scales: torch.Tensor  # [..., F, 3]
+    gp_colors: torch.Tensor  # [..., F, 3]
+    gp_opacities: torch.Tensor  # [..., F, 1]
+
+
+@beartype
+@dataclasses.dataclass
+class ModuleForwardResult:
+    avatar_model: avatar_utils.AvatarModel
+
+    rendered_img: torch.Tensor  # [..., C, H, W]
+
+    rgb_loss: float | torch.Tensor
+    lap_smoothing_loss: float | torch.Tensor
+    nor_sim_loss: float | torch.Tensor
+    color_diff_loss: float | torch.Tensor
+
+
+@beartype
 class Module(torch.nn.Module):
     def __init__(
         self,
@@ -81,22 +105,12 @@ class Module(torch.nn.Module):
     def faces_cnt(self) -> int:
         return self.gp_rot_qs.shape[0]
 
-    @beartype
-    @dataclasses.dataclass
-    class WorldGPResult:
-        face_coord_result: FaceCoordResult
-        gp_means: torch.Tensor  # [..., F, 3]
-        gp_rot_qs: torch.Tensor  # [..., F, 4]
-        gp_scales: torch.Tensor  # [..., F, 3]
-        gp_colors: torch.Tensor  # [..., F, 3]
-        gp_opacities: torch.Tensor  # [..., F, 1]
-
     def get_world_gp(
         self,
         vert_pos_a: torch.Tensor,  # [..., F, 3]
         vert_pos_b: torch.Tensor,  # [..., F, 3]
         vert_pos_c: torch.Tensor,  # [..., F, 3]
-    ) -> WorldGPResult:
+    ) -> ModuleWorldGPResult:
         F = self.faces_cnt
 
         utils.check_shapes(
@@ -134,7 +148,7 @@ class Module(torch.nn.Module):
         world_gp_scales[..., :, 1] = k * self.gp_scales[:, 1]
         world_gp_scales[..., :, 2] = k * self.gp_scales[:, 2] * 1e-2
 
-        return Module.WorldGPResult(
+        return ModuleWorldGPResult(
             face_coord_result=face_coord_result,
             gp_means=world_gp_means,
             gp_rot_qs=world_gp_rot_qs,
@@ -143,18 +157,6 @@ class Module(torch.nn.Module):
             gp_opacities=torch.exp(self.gp_log_opacities),
         )
 
-    @beartype
-    @dataclasses.dataclass
-    class ForwardResult:
-        avatar_model: avatar_utils.AvatarModel
-
-        rendered_img: torch.Tensor  # [..., C, H, W]
-
-        rgb_loss: float | torch.Tensor
-        lap_smoothing_loss: float | torch.Tensor
-        nor_sim_loss: float | torch.Tensor
-        color_diff_loss: float | torch.Tensor
-
     def forward(
         self,
         camera_config: camera_utils.CameraConfig,
@@ -162,7 +164,7 @@ class Module(torch.nn.Module):
         img: torch.Tensor,  # [..., C, H, W]
         mask: torch.Tensor,  # [..., H, W]
         blending_param: object,
-    ):
+    ) -> ModuleForwardResult:
         device = next(self.parameters()).device
 
         color_channels_cnt = self.gp_colors.shape[-1]
@@ -256,7 +258,7 @@ class Module(torch.nn.Module):
 
             color_diff_loss = 0.0
 
-        return Module.ForwardResult(
+        return ModuleForwardResult(
             avatar_model=avatar_model,
             rendered_img=rendered_img,
             rgb_loss=rgb_loss,

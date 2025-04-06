@@ -72,6 +72,7 @@ BATCH_SIZE = 8
 
 
 @beartype
+@utils.mem_clear
 def _read_person_mask(
     imgs: torch.Tensor,  # [T, C, H, W]
     out_dir: pathlib.Path,
@@ -79,10 +80,15 @@ def _read_person_mask(
 ) -> torch.Tensor:  # [T, 1, H, W]
     T, C, H, W = utils.check_shapes(imgs, (-1, -2, -3, -4))
 
+    utils.print_cur_pos()
+
     person_mask_path = out_dir / PERSON_MASK_FILENAME
 
     if person_mask_path.exists():
+        utils.print_cur_pos()
         return utils.read_video(person_mask_path)[0].mean(1, keepdim=True)
+
+    utils.print_cur_pos()
 
     person_masks = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
@@ -92,19 +98,26 @@ def _read_person_mask(
         batch_size=BATCH_SIZE,
     )  # [T][H, W]
 
+    utils.print_cur_pos()
+
     person_masks = torch.stack(person_masks).unsqueeze(1)
     # [T, 1, H, W]
 
+    utils.print_cur_pos()
+
     utils.write_video(
         out_dir / PERSON_MASK_FILENAME,
-        person_masks.expand(T, 3, H, W),
+        person_masks.expand(T, 3, H, W).to(utils.CPU_DEVICE, copy=True),
         out_fps,
     )
+
+    utils.print_cur_pos()
 
     return person_masks
 
 
 @beartype
+@utils.mem_clear
 def _read_object_mask(
     masked_imgs: list[PIL.Image.Image],  # [T][C, H, W]
     out_dir: pathlib.Path,
@@ -112,14 +125,23 @@ def _read_object_mask(
     object_type: ObjectType
 ) -> torch.Tensor:  # [T, 1, H, W]
 
+    utils.print_cur_pos()
+
     T = len(masked_imgs)
+
+    utils.print_cur_pos()
 
     object_mask_path = out_dir / f"mask<{object_type.name}>.mp4"
 
     if object_mask_path.exists():
+        utils.print_cur_pos()
         return utils.read_video(object_mask_path)[0].mean(1, keepdim=True)
 
+    utils.print_cur_pos()
+
     object_segment_prompt = object_segment_prompts[object_type]
+
+    utils.print_cur_pos()
 
     object_masks = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
@@ -129,16 +151,22 @@ def _read_object_mask(
         batch_size=BATCH_SIZE,
     )  # [T][H, W]
 
+    utils.print_cur_pos()
+
     object_masks = torch.stack(object_masks).unsqueeze(1)
     # [T, 1, H, W]
 
     H, W = object_masks.shape[-2:]
 
+    utils.print_cur_pos()
+
     utils.write_video(
         out_dir / f"mask<{object_type.name}>.mp4",
-        object_masks.expand(T, 3, H, W),
+        object_masks.expand(T, 3, H, W).to(utils.CPU_DEVICE, copy=True),
         out_fps,
     )
+
+    utils.print_cur_pos()
 
     return object_masks
 
@@ -157,14 +185,24 @@ def segment(
 
     assert out_dir.is_dir()
 
+    utils.print_cur_pos()
+
     person_masks = _read_person_mask(imgs, out_dir, out_fps)
 
+    utils.print_cur_pos()
+
     bg = torch.ones((C, H, W), dtype=utils.FLOAT, device=imgs.device)
+
+    utils.print_cur_pos()
 
     masked_imgs = utils.to_pillow_image([
         bg + (imgs[frame_i] - bg) * person_masks[frame_i]
         for frame_i in range(T)
     ])
 
+    utils.print_cur_pos()
+
     for object_type in tqdm.tqdm(ObjectType):
+        utils.print_cur_pos()
         _read_object_mask(masked_imgs, out_dir, out_fps, object_type)
+        utils.print_cur_pos()

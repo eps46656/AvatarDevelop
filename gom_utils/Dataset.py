@@ -24,20 +24,20 @@ class Sample:
 
         C, H, W = utils.check_shapes(
             img, (..., C, H, W),
-            mask, (..., H, W)
+            mask, (..., H, W),
         )
 
-        batch_shape = utils.broadcast_shapes(
+        shape = utils.broadcast_shapes(
             camera_transform,
             img.shape[:-3],
             mask.shape[:-2],
             blending_param,
         )
 
-        camera_transform = camera_transform.expand(batch_shape)
-        img = img.expand(batch_shape + (C, H, W))
-        mask = mask.expand(batch_shape + (H, W))
-        blending_param = blending_param.expand(batch_shape + (H, W))
+        camera_transform = camera_transform.expand(shape)
+        img = img.expand(shape + (C, H, W))
+        mask = mask.expand(shape + (H, W))
+        blending_param = blending_param.expand(shape)
 
         # ---
 
@@ -67,14 +67,17 @@ class Sample:
         )
 
     def __getitem__(self, idx) -> Sample:
+        if not isinstance(idx, tuple):
+            idx = (idx,)
+
         return Sample(
             camera_config=self.camera_config,
-            camera_transform=self.camera_transform[idx],
+            camera_transform=self.camera_transform[*idx],
 
-            img=self.img[idx, :, :, :],
-            mask=self.mask[idx, :, :],
+            img=self.img[*idx, :, :, :],
+            mask=self.mask[*idx, :, :],
 
-            blending_param=self.blending_param[idx],
+            blending_param=self.blending_param[*idx],
         )
 
 

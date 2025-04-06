@@ -118,3 +118,33 @@ def elect(
     # [F]
 
     pass
+
+
+@beartype
+def assign(
+    face_ballot_box: torch.Tensor,  # [..., K, F]
+    threshold: float = 0.7,
+    bg_idx: int = -1,
+):
+    assert 0 < threshold
+    assert threshold <= 1
+
+    K, F = -1, -2
+
+    K, F = utils.check_shapes(face_ballot_box, (..., K, F))
+
+    votes_cnt = face_ballot_box.sum(-2, True)
+    # [..., 1, F]
+
+    scores = face_ballot_box / (1 + votes_cnt)
+    # [..., B, F]
+
+    max_score, max_obj = scores.max(-2)
+    # max_score[..., F]
+    # max_obj[..., F]
+
+    return torch.where(
+        threshold <= max_score,
+        max_obj,
+        bg_idx,
+    )
