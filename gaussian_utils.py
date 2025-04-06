@@ -141,7 +141,7 @@ def render_gaussian(
         batch_shape + (C, camera_config.img_h, camera_config.img_w),
         dtype=utils.FLOAT, device=device)
 
-    for batch_idx in utils.get_idxes(batch_shape):
+    for batch_idx in utils.get_batch_idxes(batch_shape):
         renderer_settings = diff_gaussian_rasterization.GaussianRasterizationSettings(
             image_height=camera_config.img_h,  # image height: int
             image_width=camera_config.img_w,  # image width: int

@@ -1,14 +1,13 @@
 
 
-from beartype import beartype
-
 import torch
+from beartype import beartype
 
 from . import utils
 
 
 @beartype
-def face_seg_elect_scatter(
+def vote(
     pixel_to_face:  torch.Tensor,  # [..., H, W]
     masks: torch.Tensor,  # [..., H, W]
     face_ballot_box: torch.Tensor,  # [F]
@@ -50,7 +49,7 @@ def face_seg_elect_scatter(
 
 
 @beartype
-def face_seg_elect(
+def batch_vote(
     pixel_to_face:  torch.Tensor,  # [H, W]
     masks: torch.Tensor,  # [B, H, W]
     face_ballot_box: torch.Tensor,  # [F, B]
@@ -70,7 +69,7 @@ def face_seg_elect(
 
     for n in range(N):
         for b in range(B):
-            face_seg_elect_scatter(
+            vote(
                 pixel_to_face,  # [H, W]
                 masks[b],  # [H, W]
                 b,
@@ -79,8 +78,8 @@ def face_seg_elect(
 
 
 @beartype
-def face_seg_elect(
-    pixel_to_face:  torch.Tensor,  # [..., H, W]
+def elect(
+    pixel_to_face: list[torch.Tensor],  # [H, W]
     masks: torch.Tensor,  # [..., K, H, W]
     faces_cnt: int,
 ):
@@ -109,7 +108,7 @@ def face_seg_elect(
 
     for batch_idxes in utils.get_batch_idxes(batch_shape):
         for k in range(K):
-            face_seg_elect_scatter(
+            vote(
                 pixel_to_face[batch_idxes],  # [H, W]
                 masks[*batch_idxes, k],  # [H, W]
                 face_ballot_box[k],

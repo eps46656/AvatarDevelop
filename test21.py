@@ -109,8 +109,8 @@ def main1():
                     subject_data.mask[frame_i],
 
                     smplx_utils.BlendingParam(
-                        body_shapes=subject_data.blending_param.
-                        body_shapes,
+                        body_shape=subject_data.blending_param.
+                        body_shape,
 
                         global_transl=subject_data.blending_param.
                         global_transl[frame_i],
@@ -119,7 +119,7 @@ def main1():
                         global_rot[frame_i],
 
                         body_pose=subject_data.blending_param.
-                        body_poses[frame_i],
+                        body_pose[frame_i],
                     )
                 )
 

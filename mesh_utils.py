@@ -10,10 +10,6 @@ import tqdm
 import trimesh
 from beartype import beartype
 
-import pytorch3d
-import pytorch3d.loss
-import pytorch3d.structures
-
 from . import utils
 
 
@@ -145,10 +141,19 @@ def calc_adj_sums_naive(
     return ret
 
 
+@beartype
 @dataclasses.dataclass
-class PartialSubdivisionResult:
-    f4: set[int]
-    f2: set[int]
+class MeshSubdivisionResult:
+    vert_src_table: torch.Tensor
+    mesh_data: MeshData
+
+
+@beartype
+@dataclasses.dataclass
+class MeshExtractionResult:
+    vert_src_table: torch.Tensor
+    face_src_table: torch.Tensor
+    mesh_data: MeshData
 
 
 @beartype
@@ -321,6 +326,10 @@ class MeshData:
         self,
         vert_pos: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # []
+        import pytorch3d
+        import pytorch3d.loss
+        import pytorch3d.structures
+
         utils.check_shapes(vert_pos, (..., self.verts_cnt, -1))
 
         assert 0 <= self.f_to_vvv.min()
@@ -563,7 +572,7 @@ class MeshData:
 
         ret = torch.empty(pp.shape[:-1], dtype=pp.dtype)
 
-        for pi in tqdm.tqdm(utils.get_idxes(pp.shape[:-1])):
+        for pi in tqdm.tqdm(utils.get_batch_idxes(pp.shape[:-1])):
             ans = float("inf")
 
             p = pp[pi]
@@ -601,18 +610,12 @@ class MeshData:
 
         return ret
 
-    @beartype
-    @dataclasses.dataclass
-    class SubdivisionResult:
-        vert_src_table: torch.Tensor
-        mesh_data: MeshData
-
     def subdivide(
         self,
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> SubdivisionResult:
+    ) -> MeshSubdivisionResult:
         f_to_vvv = self.f_to_vvv.to(utils.CPU_DEVICE)
         # [F, 3]
 
@@ -736,22 +739,15 @@ class MeshData:
 
         mesh_data = MeshData.from_faces(vert_src_table.shape[0], new_faces)
 
-        return MeshData.SubdivisionResult(
+        return MeshSubdivisionResult(
             vert_src_table=vert_src_table,
             mesh_data=mesh_data,
         )
 
-    @beartype
-    @dataclasses.dataclass
-    class ExtractionResult:
-        vert_src_table: torch.Tensor
-        face_src_table: torch.Tensor
-        mesh_data: MeshData
-
     def extract(
         self,
         target_faces: typing.Iterable[int],
-    ) -> ExtractionResult:
+    ) -> MeshExtractionResult:
         target_faces = sorted(set(target_faces))
 
         f_to_vvv = self.f_to_vvv.to(utils.CPU_DEVICE)
@@ -784,7 +780,7 @@ class MeshData:
 
         mesh_data = MeshData.from_faces(vert_src_table.shape[0], new_f_to_vvv)
 
-        return MeshData.ExtractionResult(
+        return MeshExtractionResult(
             vert_src_table=vert_src_table,
             face_src_table=face_src_table,
             mesh_data=mesh_data,

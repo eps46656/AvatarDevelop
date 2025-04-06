@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 
 import torch
@@ -61,7 +63,7 @@ class DatasetIterator:
     def __len__(self) -> int:
         return len(self.acc_batches_size) - 1
 
-    def __iter__(self):
+    def __iter__(self) -> DatasetIterator:
         return self
 
     def __next__(self) -> tuple[tuple[torch.Tensor], object]:

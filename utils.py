@@ -174,13 +174,13 @@ def mem_clear(func: typing.Optional[typing.Callable] = None):
         return
 
     @functools.wraps(func)
-    def f(*args, **kwargs):
+    def wrapper(*args, **kwargs):
         _mem_clear()
         ret = func(*args, **kwargs)
         _mem_clear()
         return ret
 
-    return f
+    return wrapper
 
 
 @beartype
@@ -371,14 +371,13 @@ def write_image(
 
 
 @beartype
+@mem_clear
 def read_video(
     path: os.PathLike
 ) -> tuple[
-    typing.Optional[torch.Tensor],  # video
+    torch.Tensor,  # video[T, C, H, W]
     int,  # fps
 ]:
-    _mem_clear()
-
     video, audio, d = torchvision.io.read_video(
         path,
         output_format="TCHW",
@@ -390,20 +389,17 @@ def read_video(
 
     video = normalize_image(video)
 
-    _mem_clear()
-
     return video, video_fps
 
 
 @beartype
+@mem_clear
 def write_video(
     path: os.PathLike,
     video: torch.Tensor,  # [T, C, H, W]
     fps: int,
     codec: str = "h264",
 ) -> None:
-    _mem_clear()
-
     video = video.to(CPU_DEVICE)
 
     torchvision.io.write_video(
@@ -413,8 +409,6 @@ def write_video(
         fps=fps,
         video_codec=codec,
     )
-
-    _mem_clear()
 
 
 @beartype
@@ -437,9 +431,7 @@ def check_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> None:
 
 
 @beartype
-def check_shapes(
-    *args: torch.Tensor | tuple[types.EllipsisType | int, ...],
-) -> None | int | tuple[int, ...]:
+def check_shapes(*args: object) -> None | int | tuple[int, ...]:
     assert len(args) % 2 == 0
 
     undet_shapes: dict[int, int] = dict()
@@ -448,8 +440,10 @@ def check_shapes(
         t = args[i]
         p = args[i + 1]
 
-        assert isinstance(t, torch.Tensor)
+        assert isinstance(t, tuple) or hasattr(t, "shape"), f"{type(t)=}"
         assert isinstance(p, tuple)
+
+        t = tuple(t) if isinstance(t, tuple) else t.shape
 
         ellipsis_cnt = p.count(...)
 
@@ -459,31 +453,31 @@ def check_shapes(
             assert p_val is ... or isinstance(p_val, int)
 
         if ellipsis_cnt == 0:
-            assert len(p) == t.dim(), \
-                f"Tensor dimenion {t.shape} mismatches pattern {p}."
+            assert len(p) == len(t), \
+                f"Tensor dimenion {t} mismatches pattern {p}."
 
-            t_idx_iter = range(t.dim())
+            t_idx_iter = range(len(t))
             p_idx_iter = range(len(p))
         else:
-            assert len(p) - 1 <= t.dim(), \
-                f"Tensor dimenion {t.shape} mismatches pattern {p}."
+            assert len(p) - 1 <= len(t), \
+                f"Tensor dimenion {t} mismatches pattern {p}."
 
             ellipsis_idx = p.index(...)
 
             t_idx_iter = itertools.chain(
                 range(ellipsis_idx),
-                range(t.dim() - len(p) + ellipsis_idx + 1, t.dim()))
+                range(len(t) - len(p) + ellipsis_idx + 1, len(t)))
 
             p_idx_iter = itertools.chain(
                 range(ellipsis_idx), range(ellipsis_idx + 1, len(p)))
 
         for t_idx, p_idx in zip(t_idx_iter, p_idx_iter):
-            t_val = t.shape[t_idx]
+            t_val = t[t_idx]
             p_val: int = p[p_idx]
 
             if 0 <= p_val:
                 assert t_val == p_val, \
-                    f"Tensor shape {t.shape} mismatches pattern {p}."
+                    f"Tensor shape {t} mismatches pattern {p}."
             else:
                 old_p_val = undet_shapes.setdefault(
                     p_val, t_val)
@@ -501,11 +495,6 @@ def check_shapes(
         case 1: return ret[0]
 
     return ret
-
-
-@beartype
-def get_idxes(shape: typing.Iterable[int]) -> typing.Iterable[tuple[int, ...]]:
-    return itertools.product(*(range(s) for s in shape))
 
 
 @beartype
@@ -614,10 +603,10 @@ def normed_idx(idx: int, length: int) -> int:
 
 
 @beartype
-def broadcast_shapes(*args: None | torch.Tensor | typing.Iterable[int]) \
+def broadcast_shapes(*args: object) \
         -> torch.Size:
     shapes = [
-        [int(d) for d in (arg.shape if isinstance(arg, torch.Tensor) else arg)]
+        [int(d) for d in (arg if isinstance(arg, tuple) else arg.shape)]
         for arg in args if arg is not None
     ]
 
@@ -642,8 +631,14 @@ def broadcast_shapes(*args: None | torch.Tensor | typing.Iterable[int]) \
 
 
 @beartype
-def try_get_batch_shape(x: typing.Optional[torch.Tensor],  dim: int):
+def try_get_batch_shape(x: typing.Optional[torch.Tensor], dim: int):
     return torch.Size() if x is None else x.shape[:dim]
+
+
+@beartype
+def get_batch_idxes(shape: typing.Iterable[int]) \
+        -> typing.Iterable[tuple[int, ...]]:
+    return itertools.product(*(range(s) for s in shape))
 
 
 @beartype
@@ -652,18 +647,47 @@ def try_batch_expand(x: typing.Optional[torch.Tensor], batch_shape, dim: int):
 
 
 @beartype
-def try_batch_index(x: typing.Optional[torch.Tensor], dim: int, idx):
+def try_batch_expand_multi(*args):
+    assert len(args) % 2 == 0
+
+    if len(args) == 0:
+        return
+
+    assert all(isinstance(args[i + 1], int) for i in range(1, len(args), 2))
+
+    batch_shape = broadcast_shapes(
+        try_get_batch_shape(args[i], args[i+2]) for i in range(0, len(args), 2))
+
+    ret = tuple(
+        try_batch_expand(args[i], batch_shape, args[i+1])
+        for i in range(0, len(args), 2)
+    )
+
+    return ret[0] if len(ret) == 1 else ret
+
+
+@beartype
+def try_batch_indexing(
+    x: object,
+    batch_shape: typing.Optional[tuple[int, ...]],
+    dim: int,
+    idx,
+):
     if x is None:
         return None
 
-    dim = normed_idx(dim, x.dim())
+    dim = normed_idx(dim, len(x.shape)) - len(x.shape)
 
-    data_idx = tuple(slice(None) for _ in range(x.dim() - dim))
+    x = x.expand(batch_shape + x.shape[dim:])
 
-    if not isinstance(idx, tuple):
-        idx = (idx,)
+    if isinstance(idx, tuple):
+        batch_idx = idx
+    else:
+        batch_idx = (idx,)
 
-    return x[idx + data_idx]
+    data_idx = tuple(slice(None) for _ in range(-dim))
+
+    return x[batch_idx + data_idx]
 
 
 @beartype
@@ -682,16 +706,6 @@ def unbatch_expand(x: typing.Optional[torch.Tensor], dim: int):
             idx[i] = 0 if is_first else slice(0, 1)
 
     return x[*idx]
-
-
-@beartype
-def try_batch_indexing(
-    x: typing.Optional[torch.Tensor],
-    batch_shape: torch.Size,
-    dim: int,
-    idx,
-) -> typing.Optional[torch.Tensor]:
-    return None if x is None else unbatch_expand(x.expand(batch_shape + x.shape[:dim])[idx], dim)
 
 
 @beartype
@@ -758,15 +772,13 @@ def get_param_groups(module: torch.nn.Module, base_lr: float):
 
 @beartype
 def batch_eye(
-    batch_shape,  # [...]
-    n: int,
+    shape,  # [..., N, N]
     *,
     dtype: torch.dtype = None,
     device: torch.device = None,
 ) -> torch.Tensor:  # [..., n, n]
-    ret = torch.empty(batch_shape + (n, n), dtype=dtype, device=device)
-    ret[..., :, :] = torch.eye(n, dtype=dtype)
-    return ret
+    N, M = check_shapes(shape, (..., -1, -2))
+    return torch.eye(N, M, dtype=dtype).expand(shape).to(device, dtype, True)
 
 
 @beartype
@@ -1542,13 +1554,13 @@ def dlt(
     for q in range(Q-1):
         A[q::Q-1, P*q:P*q+P] = rep_src
 
-    A[:, -P:] = (rep_src.unsqueeze(-2) * -rep_dst[:, :-1, None]
-                 ).reshape((N*(Q-1), P))
+    A[:, -P:] = (rep_src.unsqueeze(-2) * -rep_dst[:, :-1, None]) \
+        .reshape(N*(Q-1), P)
     # [N*(Q-1), P] = (N, 1, P) * (N, Q-1, 1) = (N, Q-1, P) = (N*(Q-1), P)
 
     Vh: torch.Tensor = torch.linalg.svd(A)[2]
 
-    H = Vh[-1, :].reshape((Q, P))
+    H = Vh[-1, :].reshape(Q, P)
 
     if normalize:
         H = torch.inverse(dst_h) @ H @ src_h

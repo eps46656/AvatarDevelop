@@ -204,7 +204,7 @@ def main1():
         device=DEVICE,
     )
 
-    trainer.set_training_core(training_core)
+    trainer.training_core = training_core
 
     # trainer.load_latest()
 

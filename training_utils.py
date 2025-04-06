@@ -373,12 +373,6 @@ class Trainer:
         utils.write_file(Trainer._get_cancel_token_path(
             self.__proj_dir), "w", "")
 
-    def get_training_core(self):
-        return self.training_core
-
-    def set_training_core(self, training_core: TrainingCore):
-        self.training_core = training_core
-
     def show(self):
         print(f"")
         print(f"            prv = {self.__prv}")

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import typing
 
 import torch
@@ -11,6 +13,7 @@ class AvatarModel:
     def __init__(
         self,
         *,
+        shape: tuple[int, ...] = torch.Size(),
 
         kin_tree: kin_utils.KinTree,
 
@@ -46,31 +49,27 @@ class AvatarModel:
         if joint_T is not None:
             utils.check_shapes(joint_T, (..., J, 4, 4))
 
-        batch_shape = utils.broadcast_shapes(
+        # ---
+
+        self.shape = utils.broadcast_shapes(
+            shape,
             utils.try_get_batch_shape(vert_pos, -2),
             utils.try_get_batch_shape(vert_nor, -2),
             utils.try_get_batch_shape(tex_vert_pos, -2),
             utils.try_get_batch_shape(joint_T, -3),
         )
 
-        vert_pos = utils.try_batch_expand(vert_pos, batch_shape, -2)
-        vert_nor = utils.try_batch_expand(vert_nor, batch_shape, -2)
-        tex_vert_pos = utils.try_batch_expand(tex_vert_pos, batch_shape, -2)
-        joint_T = utils.try_batch_expand(joint_T, batch_shape, -3)
-
-        # ---
-
         self.kin_tree = kin_tree
 
         self.mesh_data = mesh_data
         self.tex_mesh_data = tex_mesh_data
 
-        self.vert_pos = vert_pos
-        self.vert_nor = vert_nor
+        self.vert_pos = vert_pos  # [..., V, 3]
+        self.vert_nor = vert_nor  # [..., V, 3]
 
-        self.tex_vert_pos = tex_vert_pos
+        self.tex_vert_pos = tex_vert_pos  # [..., TV, 2]
 
-        self.joint_T = joint_T
+        self.joint_T = joint_T  # [..., J, 4, 4]
 
     @property
     def joints_cnt(self) -> int:
@@ -88,28 +87,40 @@ class AvatarModel:
     def faces_cnt(self) -> int:
         return self.mesh_data.faces_cnt
 
-    @property
-    def shape(self) -> torch.Size:
-        return self.vert_pos.shape[:-2]
+    def expand(self, shape: tuple[int, ...]) -> AvatarModel:
+        return AvatarModel(
+            shape=shape,
 
-    def __getitem__(self, idx):
-        vert_pos = utils.try_batch_index(self.vert_pos, -2, idx)
-        vert_nor = utils.try_batch_index(self.vert_nor, -2, idx)
-        tex_vert_pos = utils.try_batch_index(self.tex_vert_pos, -2, idx)
-        joint_T = utils.try_batch_index(self.joint_T, -2, idx)
+            mesh_data=self.mesh_data,
+            tex_mesh_data=self.tex_mesh_data,
 
+            vert_pos=self.vert_pos,
+
+            vert_nor=self.vert_nor,
+
+            tex_vert_pos=self.tex_vert_pos,
+
+            joint_T=self.joint_T,
+        )
+
+    def __getitem__(self, idx) -> AvatarModel:
         return AvatarModel(
             kin_tree=self.kin_tree,
 
             mesh_data=self.mesh_data,
             tex_mesh_data=self.tex_mesh_data,
 
-            vert_pos=vert_pos,
-            vert_nor=vert_nor,
+            vert_pos=utils.try_batch_indexing(
+                self.vert_pos, self.shape, -2, idx),
 
-            tex_vert_pos=tex_vert_pos,
+            vert_nor=utils.try_batch_indexing(
+                self.vert_nor, self.shape, -2, idx),
 
-            joint_T=joint_T,
+            tex_vert_pos=utils.try_batch_indexing(
+                self.tex_vert_pos, self.shape, -2, idx),
+
+            joint_T=utils.try_batch_indexing(
+                self.joint_T, self.shape, -2, idx),
         )
 
 

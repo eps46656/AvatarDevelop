@@ -78,7 +78,7 @@ def main1():
     ###
 
     binding_pose_rs = torch.eye(3, dtype=utils.FLOAT, device=DEVICE) \
-        .reshape(1, 3, 3).expand((J, 3, 3))
+        .reshape(1, 3, 3).expand(J, 3, 3)
 
     binding_pose_ts = torch.zeros(
         (J, 3), dtype=utils.FLOAT, device=DEVICE)
@@ -110,9 +110,10 @@ def main3():
     model_config = smplx_utils.smplx_model_config
 
     with utils.Timer():
-        my_smplx_model_data: smplx_utils.Model = smplx_utils.ModelData.from_file(
+        my_smplx_model_data: smplx_utils.Model = smplx_utils.ModelData.from_origin_file(
             model_data_path=model_data_path,
             model_config=model_config,
+            dtype=utils.FLOAT,
             device=DEVICE,
         )
 
@@ -129,10 +130,11 @@ def main3():
     with utils.Timer():
         smplx_builder = smplx.SMPLX(
             model_path=DIR / "models_smplx_v1_1/models/smplx",
+            gender="NEUTRAL",
             use_pca=False,
             num_betas=10,
             num_expression_coeffs=10,
-            dtype=utils.FLOAT
+            dtype=utils.FLOAT,
         )
 
     with utils.Timer():
@@ -222,10 +224,10 @@ def main3():
         )
 
     with utils.Timer():
-        my_smplx_model = my_smplx_model_blender(
+        my_smplx_model: smplx_utils.Model = my_smplx_model_blender(
             smplx_utils.BlendingParam(
-                body_shapes=body_shapes,
-                expr_shapes=expr_shapes,
+                body_shape=body_shapes,
+                expr_shape=expr_shapes,
 
                 global_transl=global_transl,
                 global_rot=global_rot,
@@ -237,12 +239,13 @@ def main3():
                 lhand_pose=lhand_poses,
                 rhand_pose=rhand_poses,
 
-                blending_vert_nor=False,
+                device=DEVICE,
+                dtype=utils.FLOAT,
             )
         )
 
-    print(f"{my_smplx_model.joint_Ts.shape=}")
-    print(f"{my_smplx_model.vertex_positions.shape=}")
+    print(f"{my_smplx_model.joint_T.shape=}")
+    print(f"{my_smplx_model.vert_pos.shape=}")
 
     print(f"{smplx_model.vertices.shape=}")
 
@@ -250,20 +253,23 @@ def main3():
     # print(f"{smplx_model.joints=}")
 
     joint_err = utils.get_l2_rms(
-        my_smplx_model.joint_Ts[..., :3, 3].reshape((-1, 3)) -
+        my_smplx_model.joint_T[..., :3, 3].reshape((-1, 3)) -
         smplx_model.joints.flatten()[:165].reshape((-1, 3))
     )
 
     print(f"{joint_err=}")
 
     vertices_err = utils.get_l2_rms(
-        my_smplx_model.vertex_positions.reshape((-1, 3)) -
+        my_smplx_model.vert_pos.reshape((-1, 3)) -
         smplx_model.vertices.reshape((-1, 3))
     )
 
+    print(f"{my_smplx_model.vert_pos=}")
+    print(f"{smplx_model.vertices=}")
+
     print(f"{vertices_err=}")
 
-    vertex_normals = my_smplx_model.vertex_normals
+    vertex_normals = my_smplx_model.vert_nor
 
     """
 

@@ -152,7 +152,7 @@ def _read_smpl_blending_param(
     elif poses_cnt * 3 < cur_flatten_poses_cnt:
         poses = poses[:, :-poses_cnt * 3]
 
-    poses = poses.reshape((T, poses_cnt, 3))
+    poses = poses.reshape(T, poses_cnt, 3)
 
     global_rot = poses[:, 0, :]
     # [T, 3]
@@ -163,7 +163,7 @@ def _read_smpl_blending_param(
     # ---
 
     return smplx_utils.BlendingParam(
-        body_shapes=body_shapes[:frames_cnt].to(device, utils.FLOAT),
+        body_shape=body_shapes[:frames_cnt].to(device, utils.FLOAT),
         global_transl=global_transl[:frames_cnt].to(device, utils.FLOAT),
         global_rot=global_rot[:frames_cnt].to(device, utils.FLOAT),
         body_pose=body_poses[:frames_cnt].to(device, utils.FLOAT),

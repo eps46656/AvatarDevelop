@@ -29,6 +29,8 @@ ALPHA_COLOR_DIFF = 1.0
 
 BATCH_SIZE = 4
 
+SUBJECT_NAME = "female-1-casual"
+
 
 @beartype
 def MyLossFunc(
@@ -895,11 +897,7 @@ def main1():
         for key, value in smpl_model_data_path_dict.items()
     }
 
-    people_snapshot_dir = DIR / "people_snapshot_public"
-
-    subject_name = "female-1-casual"
-
-    subject_dir = people_snapshot_dir / subject_name
+    subject_dir = config.PEOPLE_SNAPSHOT_DIR / SUBJECT_NAME
 
     subject_data = people_snapshot_utils.read_subject(
         subject_dir, model_data_dict, DEVICE)
@@ -933,8 +931,6 @@ def main1():
 
     param_groups = utils.get_param_groups(gom_avatar_module, lr)
 
-    print(param_groups)
-
     optimizer = torch.optim.Adam(
         param_groups,
         lr=lr,
@@ -964,7 +960,7 @@ def main1():
         device=DEVICE,
     )
 
-    trainer.set_training_core(training_core)
+    trainer.training_core = training_core
 
     # trainer.load_latest()
 

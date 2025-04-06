@@ -21,7 +21,7 @@ class KinTree:
         self.joints_tp = joints_tp
 
     @staticmethod
-    def from_links(links: typing.Sequence[int], null_value=-1):
+    def from_links(links: typing.Sequence[tuple[int, int]], null_value=-1):
         J = len(links)
 
         root = -1

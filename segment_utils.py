@@ -97,7 +97,7 @@ def _read_person_mask(
 
     utils.write_video(
         out_dir / PERSON_MASK_FILENAME,
-        person_masks.expand((T, 3, H, W)),
+        person_masks.expand(T, 3, H, W),
         out_fps,
     )
 
@@ -136,7 +136,7 @@ def _read_object_mask(
 
     utils.write_video(
         out_dir / f"mask<{object_type.name}>.mp4",
-        object_masks.expand((T, 3, H, W)),
+        object_masks.expand(T, 3, H, W),
         out_fps,
     )
 

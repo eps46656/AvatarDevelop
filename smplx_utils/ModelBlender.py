@@ -28,10 +28,10 @@ class ModelBlender(avatar_utils.AvatarBlender):
         model_data = model_builder.get_model_data()
 
         self.default_blending_param = BlendingParam(
-            body_shapes=torch.zeros(
+            body_shape=torch.zeros(
                 (model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
-            expr_shapes=torch.zeros(
+            expr_shape=torch.zeros(
                 (model_data.expr_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
             global_transl=torch.zeros(
@@ -57,8 +57,6 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
             rhand_pose=torch.zeros(
                 (model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
-
-            blending_vert_nor=False,
         )
 
     def get_avatar_model(self) -> avatar_utils.AvatarModel:
@@ -87,8 +85,6 @@ class ModelBlender(avatar_utils.AvatarBlender):
         return self.model_builder.get_model_data().expr_shapes_cnt
 
     def set_default_blending_param(self, blending_param: BlendingParam):
-        blending_param.check(self.model_data, True)
-
         for field in dataclasses.fields(BlendingParam):
             value = getattr(blending_param, field)
 

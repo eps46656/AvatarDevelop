@@ -14,6 +14,22 @@ from .ModelConfig import ModelConfig
 
 
 @beartype
+@dataclasses.dataclass
+class ModelMidpointSubdivisionResult:
+    mesh_subdivision_result: mesh_utils.MeshSubdivisionResult
+    tex_mesh_subdivision_result: mesh_utils.MeshSubdivisionResult
+    model_data: ModelData
+
+
+@beartype
+@dataclasses.dataclass
+class ModelExtractionResult:
+    mesh_data_extraction_result: mesh_utils.MeshExtractionResult
+    tex_mesh_data_extraction_result: mesh_utils.MeshExtractionResult
+    model_data: ModelData
+
+
+@beartype
 class ModelData:
     def __init__(
         self,
@@ -196,31 +212,58 @@ class ModelData:
         EYEJ = model_config.eye_joints_cnt
         HANDJ = model_config.hand_joints_cnt
 
-        assert BODYJ + JAWJ + EYEJ + HANDJ * 2 == J
+        assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
         # ---
 
         def try_fetch_int(field_name: str):
+            if field_name not in model_data:
+                print(f"not found {field_name}")
+
             return torch.from_numpy(model_data[field_name])\
                 if field_name in model_data else None
 
         def try_fetch_float(field_name: str):
+            if field_name not in model_data:
+                print(f"not found {field_name}")
+
             return torch.from_numpy(model_data[field_name]).to(torch.float64) \
                 if field_name in model_data else None
 
         vert_pos = try_fetch_float("v_template")
+        V = utils.check_shapes(vert_pos, (-1, 3))
+
         pose_vert_dir = try_fetch_float("posedirs")
-        lbs_weight = try_fetch_float("weight")
+        utils.check_shapes(pose_vert_dir, (V, 3, (J - 1) * 3 * 3))
+
+        lbs_weight = try_fetch_float("weights")
+        utils.check_shapes(lbs_weight, (V, J))
+
         joint_regressor = try_fetch_float("J_regressor")
+        utils.check_shapes(joint_regressor, (J, V))
+
         shape_dirs = try_fetch_float("shapedirs")
 
         tex_vert_pos = try_fetch_float("vt")
+        TV = utils.check_shapes(tex_vert_pos, (-1, 2))
 
         faces = try_fetch_int("f")
-        tex_faces = try_fetch_int("ft")
+        F = utils.check_shapes(faces, (-1, 3))
 
-        lhand_poses_mean = try_fetch_float("hands_meanl")[-HANDJ:, :]
-        rhand_poses_mean = try_fetch_float("hands_meanr")[-HANDJ:, :]
+        tex_faces = try_fetch_int("ft")
+        utils.check_shapes(tex_faces, (F, 3))
+
+        lhand_pose_mean = try_fetch_float("hands_meanl") \
+            .reshape(-1, 3)[-HANDJ:, :]
+        if lhand_pose_mean is not None:
+            utils.check_shapes(lhand_pose_mean, (HANDJ, 3))
+
+        rhand_pose_mean = try_fetch_float("hands_meanr") \
+            .reshape(-1, 3)[-HANDJ:, :]
+        if rhand_pose_mean is not None:
+            utils.check_shapes(rhand_pose_mean, (HANDJ, 3))
+
+        # ---
 
         def get_shape_dirs(shape_dirs: torch.Tensor, shape_dirs_cnt: int) \
                 -> torch.Tensor:
@@ -249,22 +292,7 @@ class ModelData:
         expr_shape_dirs = get_shape_dirs(
             shape_dirs[:, :, BODY_SHAPES_SPACE_DIM:], ES)
 
-        # ---
-
-        V, TV, F = -1, -2, -3, 4
-
-        V, TV, F = utils.check_shapes(
-            vert_pos, (V, 3),
-            pose_vert_dir, (V, 3, (J - 1) * 3 * 3),
-            lbs_weight, (V, J),
-            joint_regressor, (J, V),
-            tex_vert_pos, (TV, 2),
-            faces, (F, 3),
-            tex_faces, (F, 3),
-
-            lhand_poses_mean, (HANDJ, 3),
-            rhand_poses_mean, (HANDJ, 3),
-
+        utils.check_shapes(
             body_shape_dirs, (V, 3, BS),
             expr_shape_dirs, (V, 3, ES),
         )
@@ -294,13 +322,13 @@ class ModelData:
 
         # ---
 
-        if lhand_poses_mean is not None:
-            lhand_poses_mean = lhand_poses_mean \
-                .reshape((-1, 3))[-model_config.hand_joints_cnt:, :]
+        if lhand_pose_mean is not None:
+            lhand_pose_mean = lhand_pose_mean \
+                .reshape(-1, 3)[-model_config.hand_joints_cnt:, :]
 
-        if rhand_poses_mean is not None:
-            rhand_poses_mean = rhand_poses_mean \
-                .reshape((-1, 3))[-model_config.hand_joints_cnt:, :]
+        if rhand_pose_mean is not None:
+            rhand_pose_mean = rhand_pose_mean \
+                .reshape(-1, 3)[-model_config.hand_joints_cnt:, :]
 
         # ---
 
@@ -327,7 +355,7 @@ class ModelData:
             vert_pos=vert_pos.to(*dd),
 
             vert_nor=mesh_utils.get_area_weighted_vert_nor(
-                faces=faces,
+                faces=mesh_data.f_to_vvv,
                 vert_pos=vert_pos,
             ).to(*dd),
 
@@ -344,8 +372,8 @@ class ModelData:
             pose_vert_dir=pose_vert_dir.to(*dd),
             lbs_weight=lbs_weight.to(*dd),
 
-            lhand_pose_mean=lhand_poses_mean.to(*dd),
-            rhand_pose_mean=rhand_poses_mean.to(*dd),
+            lhand_pose_mean=lhand_pose_mean.to(*dd),
+            rhand_pose_mean=rhand_pose_mean.to(*dd),
         )
 
     def from_file(
@@ -479,17 +507,10 @@ class ModelData:
 
         return ModelData(**d)
 
-    @beartype
-    @dataclasses.dataclass
-    class MidpointSubdivisionResult:
-        mesh_subdivision_result: mesh_utils.MeshData.SubdivisionResult
-        tex_mesh_subdivision_result: mesh_utils.MeshData.SubdivisionResult
-        model_data: ModelData
-
     def midpoint_subdivide(
         self,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> MidpointSubdivisionResult:
+    ) -> ModelMidpointSubdivisionResult:
         mesh_subdivision_result = self.mesh_data.subdivide(
             target_faces=target_faces)
 
@@ -565,17 +586,10 @@ class ModelData:
             model_data=model_data,
         )
 
-    @beartype
-    @dataclasses.dataclass
-    class ExtractionResult:
-        mesh_data_extraction_result: mesh_utils.MeshData.ExtractionResult
-        tex_mesh_data_extraction_result: mesh_utils.MeshData.ExtractionResult
-        model_data: ModelData
-
     def extract(
         self,
         target_faces: typing.Sequence[int],
-    ) -> ExtractionResult:
+    ) -> ModelExtractionResult:
         mesh_data_extraction_result = self.mesh_data.extract(
             target_faces)
         # vert_src_table[V_]
