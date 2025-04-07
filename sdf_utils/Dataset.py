@@ -45,10 +45,6 @@ class Dataset(dataset_utils.Dataset):
     def device(self) -> torch.device:
         return self.vert_pos.device
 
-    def to(self, *args, **kwargs) -> Dataset:
-        self.vert_pos = self.vert_pos.to(*args, **kwargs)
-        return self
-
     def __getitem__(self, idx: tuple[torch.Tensor]) -> Sample:
         N = idx[0].numel()
 
@@ -71,3 +67,7 @@ class Dataset(dataset_utils.Dataset):
             point_pos=point_positions,
             signed_dist=signed_dists,
         )
+
+    def to(self, *args, **kwargs) -> Dataset:
+        self.vert_pos = self.vert_pos.to(*args, **kwargs)
+        return self

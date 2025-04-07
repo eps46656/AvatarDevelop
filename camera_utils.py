@@ -478,14 +478,11 @@ def make_proj_config(
 def make_proj_mat_with_config(
     *,
     camera_config: CameraConfig,
-    camera_view_transform: transform_utils.ObjectTransform,
+    camera_view_transform: transform_utils.ObjectTransform,  # [...]
     proj_config: ProjConfig,
     dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
-    device = camera_view_transform.device
-
-    camera_std_transform = \
-        transform_utils.ObjectTransform.from_matching("LUF").to(device)
+    camera_std_transform = transform_utils.ObjectTransform.from_matching("LUF")
     # camera <-> std
 
     # camera_view_transform
@@ -494,12 +491,15 @@ def make_proj_mat_with_config(
     # proj_config.camera_proj_transform
     # camera <-> proj
 
-    src_to_std = camera_view_transform.get_trans_to(camera_std_transform)
+    dd = (camera_view_transform.device, camera_view_transform.dtype)
+
+    src_to_std = camera_view_transform.get_trans_to(
+        camera_std_transform.to(*dd))
     # view -> std
     # [..., 4, 4]
 
     std_to_dst = camera_std_transform.get_trans_to(
-        proj_config.camera_proj_transform.to(device))
+        proj_config.camera_proj_transform)
     # std -> proj
     # [4, 4]
 
@@ -598,14 +598,14 @@ def make_proj_mat_with_config(
 
     assert err <= 1e-4, f"{err=}"
 
-    return (std_to_dst @ M.to(device)) @ src_to_std
+    return (std_to_dst @ M).to(*dd) @ src_to_std
 
 
 @beartype
 def make_proj_mat(
     *,
     camera_config: CameraConfig,
-    camera_view_transform: transform_utils.ObjectTransform,
+    camera_view_transform: transform_utils.ObjectTransform,  # [...]
     convention: Convention,
     target_coord: Coord,
     dtype: torch.dtype = utils.FLOAT,

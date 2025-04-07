@@ -82,22 +82,6 @@ class AvatarModel:
     def faces_cnt(self) -> int:
         return self.mesh_data.faces_cnt
 
-    def expand(self, shape: tuple[int, ...]) -> AvatarModel:
-        return AvatarModel(
-            shape=shape,
-
-            mesh_data=self.mesh_data,
-            tex_mesh_data=self.tex_mesh_data,
-
-            vert_pos=self.vert_pos,
-
-            vert_nor=self.vert_nor,
-
-            tex_vert_pos=self.tex_vert_pos,
-
-            joint_T=self.joint_T,
-        )
-
     def __getitem__(self, idx) -> AvatarModel:
         return AvatarModel(
             kin_tree=self.kin_tree,
@@ -116,6 +100,22 @@ class AvatarModel:
 
             joint_T=utils.try_batch_indexing(
                 self.joint_T, self.shape, -3, idx),
+        )
+
+    def expand(self, shape: tuple[int, ...]) -> AvatarModel:
+        return AvatarModel(
+            shape=shape,
+
+            mesh_data=self.mesh_data,
+            tex_mesh_data=self.tex_mesh_data,
+
+            vert_pos=self.vert_pos,
+
+            vert_nor=self.vert_nor,
+
+            tex_vert_pos=self.tex_vert_pos,
+
+            joint_T=self.joint_T,
         )
 
 

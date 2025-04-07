@@ -13,6 +13,8 @@ class Sample:
     def __init__(
         self,
         *,
+        shape: typing.Optional[tuple[int, ...]] = None,
+
         camera_config: camera_utils.CameraConfig,
         camera_transform: transform_utils.ObjectTransform,  # [...]
 
@@ -27,7 +29,8 @@ class Sample:
             mask, (..., H, W),
         )
 
-        shape = utils.broadcast_shapes(
+        self.shape = utils.broadcast_shapes(
+            shape,
             camera_transform,
             img.shape[:-3],
             mask.shape[:-2],
@@ -37,34 +40,41 @@ class Sample:
         camera_transform = camera_transform.expand(shape)
         img = img.expand(shape + (C, H, W))
         mask = mask.expand(shape + (H, W))
-        blending_param = blending_param.expand(shape)
+
+        self.blending_param = blending_param
 
         # ---
 
-        self.camera_config = camera_config
-        self.camera_transform = camera_transform
+        self.raw_camera_config = camera_config
+        self.raw_camera_transform = camera_transform
 
-        self.img = img
-        self.mask = mask
-        self.blending_param = blending_param
+        self.raw_img = img
+        self.raw_mask = mask
+        self.raw_blending_param = blending_param
 
     @property
-    def shape(self) -> torch.Size:
-        return self.camera_transform.shape
+    def camera_config(self) -> camera_utils.CameraConfig:
+        return self.raw_camera_config
+
+    @property
+    def camera_transform(self) -> transform_utils.ObjectTransform:
+        return self.raw_camera_transform.expand(self.shape)
+
+    @property
+    def img(self) -> torch.Tensor:
+        return utils.try_batch_expand(self.raw_img, self.shape, -3)
+
+    @property
+    def mask(self) -> torch.Tensor:
+        return utils.try_batch_expand(self.raw_mask, self.shape, -2)
+
+    @property
+    def blending_param(self):
+        return self.raw_blending_param.expand(self.shape)
 
     @property
     def device(self) -> torch.device:
         return self.camera_transform.device
-
-    def to(self, *args, **kwargs) -> Sample:
-        return Sample(
-            camera_config=self.camera_config,
-            camera_transform=self.camera_transform.to(*args, **kwargs),
-
-            img=self.img.to(*args, **kwargs),
-            mask=self.mask.to(*args, **kwargs),
-            blending_param=self.blending_param.to(*args, **kwargs),
-        )
 
     def __getitem__(self, idx) -> Sample:
         if not isinstance(idx, tuple):
@@ -74,10 +84,32 @@ class Sample:
             camera_config=self.camera_config,
             camera_transform=self.camera_transform[*idx],
 
-            img=self.img[*idx, :, :, :],
-            mask=self.mask[*idx, :, :],
+            img=self.img[*idx, ..., :, :, :],
+            mask=self.mask[*idx, ..., :, :],
 
             blending_param=self.blending_param[*idx],
+        )
+
+    def expand(self, shape: tuple[int, ...]) -> Sample:
+        return Sample(
+            shape=shape,
+
+            camera_config=self.raw_camera_config,
+            camera_transform=self.raw_camera_transform,
+
+            img=self.raw_img,
+            mask=self.raw_mask,
+            blending_param=self.raw_blending_param,
+        )
+
+    def to(self, *args, **kwargs) -> Sample:
+        return Sample(
+            camera_config=self.camera_config,
+            camera_transform=self.raw_camera_transform.to(*args, **kwargs),
+
+            img=self.raw_img.to(*args, **kwargs),
+            mask=self.raw_mask.to(*args, **kwargs),
+            blending_param=self.raw_blending_param.to(*args, **kwargs),
         )
 
 
@@ -89,6 +121,8 @@ class Dataset(dataset_utils.Dataset):
         C, H, W = utils.check_shapes(sample.img, (..., C, H, W))
 
         self.sample = Sample(
+            shape=None,
+
             camera_config=sample.camera_config,
             camera_transform=sample.camera_transform,
 
@@ -106,9 +140,9 @@ class Dataset(dataset_utils.Dataset):
     def device(self) -> torch.device:
         return self.sample.device
 
+    def __getitem__(self, idx) -> Sample:
+        return self.sample[idx]
+
     def to(self, *args, **kwargs) -> Dataset:
         self.sample = self.sample.to(*args, **kwargs)
         return self
-
-    def __getitem__(self, idx) -> Sample:
-        return self.sample[idx]

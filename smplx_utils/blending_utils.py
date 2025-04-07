@@ -91,61 +91,63 @@ class BlendingParam:
         def f(obj):
             return None if obj is None else obj.to(device, dtype)
 
-        self.body_shape = f(body_shape)
-        self.expr_shape = f(expr_shape)
+        self.raw_body_shape = f(body_shape)
+        self.raw_expr_shape = f(expr_shape)
 
-        self.global_transl = f(global_transl)
-        self.global_rot = f(global_rot)
+        self.raw_global_transl = f(global_transl)
+        self.raw_global_rot = f(global_rot)
 
-        self.body_pose = f(body_pose)
-        self.jaw_pose = f(jaw_pose)
-        self.leye_pose = f(leye_pose)
-        self.reye_pose = f(reye_pose)
+        self.raw_body_pose = f(body_pose)
+        self.raw_jaw_pose = f(jaw_pose)
+        self.raw_leye_pose = f(leye_pose)
+        self.raw_reye_pose = f(reye_pose)
 
-        self.lhand_pose = f(lhand_pose)
-        self.rhand_pose = f(rhand_pose)
+        self.raw_lhand_pose = f(lhand_pose)
+        self.raw_rhand_pose = f(rhand_pose)
+
+    @property
+    def body_shape(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_body_shape, self.shape, -1)
+
+    @property
+    def expr_shape(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_expr_shape, self.shape, -1)
+
+    @property
+    def global_transl(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_global_transl, self.shape, -1)
+
+    @property
+    def global_rot(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_global_rot, self.shape, -1)
+
+    @property
+    def body_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_body_pose, self.shape, -2)
+
+    @property
+    def jaw_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_jaw_pose, self.shape, -2)
+
+    @property
+    def leye_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_leye_pose, self.shape, -2)
+
+    @property
+    def reye_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_reye_pose, self.shape, -2)
+
+    @property
+    def lhand_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_lhand_pose, self.shape, -2)
+
+    @property
+    def rhand_pose(self) -> typing.Optional[torch.Tensor]:
+        return utils.try_batch_expand(self.raw_rhand_pose, self.shape, -2)
 
     @property
     def device(self):
         return self.body_shape.device
-
-    def to(self, *args, **kwargs) -> BlendingParam:
-        def f(x): return None if x is None else x.to(*args, **kwargs)
-
-        return BlendingParam(
-            body_shape=f(self.body_shape),
-            expr_shape=f(self.expr_shape),
-
-            global_transl=f(self.global_transl),
-            global_rot=f(self.global_rot),
-
-            body_pose=f(self.body_pose),
-            jaw_pose=f(self.jaw_pose),
-            leye_pose=f(self.leye_pose),
-            reye_pose=f(self.reye_pose),
-
-            lhand_pose=f(self.lhand_pose),
-            rhand_pose=f(self.rhand_pose),
-        )
-
-    def expand(self, shape: tuple[int, ...]) -> BlendingParam:
-        return BlendingParam(
-            shape=shape,
-
-            body_shape=self.body_shape,
-            expr_shape=self.expr_shape,
-
-            global_transl=self.global_transl,
-            global_rot=self.global_rot,
-
-            body_pose=self.body_pose,
-            jaw_pose=self.jaw_pose,
-            leye_pose=self.leye_pose,
-            reye_pose=self.reye_pose,
-
-            lhand_pose=self.lhand_pose,
-            rhand_pose=self.rhand_pose,
-        )
 
     def __getitem__(self, idx) -> BlendingParam:
         return BlendingParam(
@@ -172,6 +174,44 @@ class BlendingParam:
                 self.lhand_pose, self.shape, -2, idx),
             rhand_pose=utils.try_batch_indexing(
                 self.rhand_pose, self.shape, -2, idx),
+        )
+
+    def expand(self, shape: tuple[int, ...]) -> BlendingParam:
+        return BlendingParam(
+            shape=shape,
+
+            body_shape=self.body_shape,
+            expr_shape=self.expr_shape,
+
+            global_transl=self.global_transl,
+            global_rot=self.global_rot,
+
+            body_pose=self.body_pose,
+            jaw_pose=self.jaw_pose,
+            leye_pose=self.leye_pose,
+            reye_pose=self.reye_pose,
+
+            lhand_pose=self.lhand_pose,
+            rhand_pose=self.rhand_pose,
+        )
+
+    def to(self, *args, **kwargs) -> BlendingParam:
+        def f(x): return None if x is None else x.to(*args, **kwargs)
+
+        return BlendingParam(
+            body_shape=f(self.body_shape),
+            expr_shape=f(self.expr_shape),
+
+            global_transl=f(self.global_transl),
+            global_rot=f(self.global_rot),
+
+            body_pose=f(self.body_pose),
+            jaw_pose=f(self.jaw_pose),
+            leye_pose=f(self.leye_pose),
+            reye_pose=f(self.reye_pose),
+
+            lhand_pose=f(self.lhand_pose),
+            rhand_pose=f(self.rhand_pose),
         )
 
     def get_poses(self, model_data: ModelData) -> torch.Tensor:

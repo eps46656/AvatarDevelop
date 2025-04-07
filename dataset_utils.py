@@ -11,7 +11,7 @@ from . import utils
 @beartype
 class Dataset:
     @property
-    def shape() -> torch.Size:
+    def shape(self) -> torch.Size:
         raise utils.UnimplementationError()
 
     def __getitem__(self, idx):

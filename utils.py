@@ -427,6 +427,18 @@ def write_video(
 
 
 @beartype
+def all_same(*args: object):
+    assert 0 < len(args)
+
+    ret = args[0]
+
+    for arg in args:
+        assert ret == arg
+
+    return ret
+
+
+@beartype
 def to_pillow_image(
     imgs: list[torch.Tensor],
 ) -> list[PIL.Image.Image]:
@@ -670,8 +682,26 @@ def get_batch_idxes(shape: typing.Iterable[int]) \
 
 
 @beartype
-def try_batch_expand(x: typing.Optional[torch.Tensor], batch_shape, dim: int):
-    return None if x is None else x.expand(tuple(batch_shape) + x.shape[dim:])
+def try_expand(x, batch_shape: tuple[int, ...]):
+    return None if x is None else x.expand(batch_shape)
+
+
+@beartype
+def batch_expand(
+    x: torch.Tensor,
+    batch_shape: tuple[int, ...],
+    dim: int,
+):
+    return x.expand(tuple(batch_shape) + x.shape[dim:])
+
+
+@beartype
+def try_batch_expand(
+    x: typing.Optional[torch.Tensor],
+    batch_shape: tuple[int, ...],
+    dim: int,
+) -> typing.Optional[torch.Tensor]:
+    return None if x is None else batch_expand(x, batch_shape, dim)
 
 
 @beartype
@@ -695,31 +725,44 @@ def try_batch_expand_multi(*args):
 
 
 @beartype
-def try_batch_indexing(
+def batch_indexing(
     x: object,
     batch_shape: typing.Optional[tuple[int, ...]],
     dim: int,
     idx,
-):
-    if x is None:
-        return None
+) -> typing.Optional[torch.Tensor]:
+    assert x is not None
 
     dim = normed_idx(dim, len(x.shape)) - len(x.shape)
 
-    x = x.expand(batch_shape + x.shape[dim:])
+    if batch_shape is not None:
+        x = x.expand(batch_shape + x.shape[dim:])
 
     if isinstance(idx, tuple):
         batch_idx = idx
     else:
         batch_idx = (idx,)
 
-    data_idx = tuple(slice(None) for _ in range(-dim))
+    data_idx = (slice(None) for _ in range(-dim))
 
-    return x[batch_idx + data_idx]
+    return x[*batch_idx, ...,  *data_idx]
 
 
 @beartype
-def unbatch_expand(x: typing.Optional[torch.Tensor], dim: int):
+def try_batch_indexing(
+    x: object,
+    batch_shape: typing.Optional[tuple[int, ...]],
+    dim: int,
+    idx,
+) -> typing.Optional[torch.Tensor]:
+    return None if x is None else batch_indexing(x, batch_shape, dim, idx)
+
+
+@beartype
+def batch_shrink(
+    x: torch.Tensor,
+    dim: int,
+) -> typing.Optional[torch.Tensor]:
     dim = normed_idx(dim, x.dim())
 
     idx = [None for _ in range(x.dim())]
@@ -734,6 +777,14 @@ def unbatch_expand(x: typing.Optional[torch.Tensor], dim: int):
             idx[i] = 0 if is_first else slice(0, 1)
 
     return x[*idx]
+
+
+@beartype
+def try_batch_shrink(
+    x: typing.Optional[torch.Tensor],
+    dim: int,
+) -> typing.Optional[torch.Tensor]:
+    return None if x is None else batch_shrink(x, dim)
 
 
 @beartype
@@ -786,6 +837,168 @@ def check_devices(*args: object) -> torch.device:
             ret = device
         else:
             assert ret == device
+
+    return ret
+
+
+class OnlySelf:
+    def __hash__(self) -> int:
+        return hash(id(self))
+
+    def __eq__(self, obj) -> bool:
+        return self is obj
+
+    def __ne__(self, obj) -> bool:
+        return self is not obj
+
+
+@beartype
+def ein_rearrange(
+    x: torch.Tensor,
+    input: typing.Sequence[object],
+    output: typing.Sequence[object],
+):
+    it = list(input)
+    ot = list(output)
+
+    def get_ellipsis_idx(t):
+        syms = set()
+        ret = -1
+
+        for idx, sym in enumerate(t):
+            if sym is ...:
+                assert ret == -1
+                ret = idx
+                continue
+
+            assert sym not in syms
+            syms.add(sym)
+
+        return syms, ret
+
+    it_syms, it_ellipsis_idx = get_ellipsis_idx(it)
+    ot_syms, ot_ellipsis_idx = get_ellipsis_idx(ot)
+
+    assert it_syms.issubset(ot_syms)
+
+    if all_same(0 <= it_ellipsis_idx, 0 <= ot_ellipsis_idx):
+        assert len(it) - 1 <= x.dim()
+        assert len(ot) - 1 <= x.dim()
+
+        ellipsis_len = x.dim() - len(it) + 1
+    else:
+        ellipsis_len = 0
+
+    sym_idx_table = dict()
+
+    for idx, sym in enumerate(it):
+        if sym is ...:
+            continue
+
+        if idx < it_ellipsis_idx:
+            sym_idx_table[sym] = idx
+        else:
+            sym_idx_table[sym] = ellipsis_len - 1 + idx
+
+    permute_list = list()
+
+    for sym in ot:
+        if sym is ...:
+            permute_list += range(
+                it_ellipsis_idx, it_ellipsis_idx + ellipsis_len)
+            continue
+
+        if sym not in sym_idx_table:
+            sym_idx_table[sym] = x.dim()
+            x = x.unsqueeze(-1)
+
+        permute_list.append(sym_idx_table[sym])
+
+    return x.permute(*permute_list)
+
+
+@beartype
+def ein_scatter_add(
+    *,
+    lhs: typing.Sequence[
+        str | types.EllipsisType | typing.Sequence[str, types.EllipsisType]],
+    rhs: typing.Sequence[str | types.EllipsisType],
+    dst: torch.Tensor,
+    idx: torch.Tensor,
+    src: torch.Tensor,
+    inplace: bool,
+):
+    def f(expr):
+        syms = set()
+        subexpr_idx = -1
+        ellipsis_idx = -1
+
+        for idx, sym in enumerate(expr):
+            if sym is ...:
+                assert subexpr_idx == -1
+                ellipsis_idx = idx
+                continue
+
+            if isinstance(sym, str):
+                assert len(sym) == 1
+                assert sym not in syms
+                syms.add(sym)
+
+            assert subexpr_idx == -1
+            subexpr_idx = idx
+
+        return syms, subexpr_idx, ellipsis_idx
+
+    dst_expr = list(lhs)
+    src_expr = list(rhs)
+
+    dst_expr_syms, dst_expr_subexpr_idx, dst_expr_ellipsis_idx = f(dst_expr)
+
+    assert dst_expr_subexpr_idx != -1
+
+    idx_expr = list(dst_expr[dst_expr_subexpr_idx])
+    dst_expr[dst_expr_subexpr_idx] = None
+
+    idx_expr_syms, idx_expr_subexpr_idx, idx_expr_ellipsis_idx = f(idx_expr)
+    src_expr_syms, src_expr_subexpr_idx, src_expr_ellipsis_idx = f(src_expr)
+
+    assert idx_expr_subexpr_idx == -1
+    assert src_expr_subexpr_idx == -1
+
+    has_batch_shape = all_same(
+        0 <= dst_expr_ellipsis_idx,
+        0 <= idx_expr_ellipsis_idx,
+        0 <= src_expr_ellipsis_idx,
+    )
+
+    all_syms = sorted(dst_expr_syms | idx_expr_syms | src_expr_syms)
+
+    if has_batch_shape:
+        common_shape = (..., *all_syms, None)
+    else:
+        common_shape = (*all_syms, None)
+
+    if not inplace:
+        dst = dst.clone()
+
+    ret = dst
+
+    dst = ein_rearrange(dst, dst_expr, common_shape)
+    idx = ein_rearrange(idx, idx_expr, common_shape)
+    src = ein_rearrange(src, src_expr, common_shape)
+
+    if has_batch_shape:
+        batch_shape = broadcast_shapes(
+            dst.shape[:-1],
+            idx.shape[:-1],
+            src.shape[:-1],
+        )
+
+        dst = batch_expand(dst, batch_shape, -1)
+        idx = batch_expand(idx, batch_shape, -1)
+        src = batch_expand(src, batch_shape, -1)
+
+    dst.scatter_add_(-1, idx, src)
 
     return ret
 

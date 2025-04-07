@@ -37,8 +37,8 @@ class ObjectTransform:
             utils.Z_AXIS,
         ),  # [..., 3]
         *,
-        device: torch.device = None,
         dtype: torch.dtype = None,
+        device: torch.device = None,
     ) -> ObjectTransform:
         assert len(dirs) == 3
 
@@ -164,6 +164,23 @@ class ObjectTransform:
     def vec_r(self) -> torch.Tensor:  # [..., 3]
         return -self.trans[..., :3, 2]
 
+    def __getitem__(self, idx) -> ObjectTransform:
+        if not isinstance(idx, tuple):
+            idx = (idx,)
+
+        return ObjectTransform(
+            self.trans[*idx, :, :],
+            self.inv_trans[*idx, :, :],
+        )
+
+    def expand(self, shape) -> ObjectTransform:
+        s = tuple(shape) + (4, 4)
+
+        return ObjectTransform(
+            self.trans.expand(s),
+            self.inv_trans.expand(s),
+        )
+
     def get_trans_to(self, dst: ObjectTransform) -> torch.Tensor:
         # self: object <-> coord_a
         # dst: object <-> coord_b
@@ -187,20 +204,3 @@ class ObjectTransform:
 
     def inverse(self) -> ObjectTransform:
         return ObjectTransform(self.inv_trans, self.trans)
-
-    def expand(self, shape) -> ObjectTransform:
-        s = tuple(shape) + (4, 4)
-
-        return ObjectTransform(
-            self.trans.expand(s),
-            self.inv_trans.expand(s),
-        )
-
-    def __getitem__(self, idx) -> ObjectTransform:
-        if not isinstance(idx, tuple):
-            idx = (idx,)
-
-        return ObjectTransform(
-            self.trans[*idx, :, :],
-            self.inv_trans[*idx, :, :],
-        )
