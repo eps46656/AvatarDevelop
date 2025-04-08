@@ -17,6 +17,7 @@ import cv2 as cv
 import einops
 import PIL
 import torch
+import torch_scatter
 import torchvision
 from beartype import beartype
 
@@ -255,175 +256,6 @@ def allocate_id(lb: int, rb: int, s=None):
 
         if ret not in s:
             return ret
-
-
-@beartype
-def to_pathlib_path(path: os.PathLike) -> pathlib.Path:
-    return path if isinstance(path, pathlib.Path) else pathlib.Path(path)
-
-
-@beartype
-def create_file(path: os.PathLike, mode: str = "w"):
-    path = to_pathlib_path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    return open(path, mode)
-
-
-@beartype
-def read_file(
-    path: os.PathLike,
-    mode: str,
-):
-    with open(path, mode) as f:
-        return f.read()
-
-
-@beartype
-def write_file(
-    path: os.PathLike,
-    mode: str,
-    data,
-):
-    with create_file(path, mode) as f:
-        f.write(data)
-
-
-@beartype
-def read_pickle(
-    path: os.PathLike,
-    *,
-    mode: str = "rb",
-    encoding: str = "latin1",
-):
-    with open(path, mode=mode) as f:
-        return pickle.load(f, encoding=encoding)
-
-
-@beartype
-def write_pickle(
-    path: os.PathLike,
-    data,
-    *,
-    mode: str = "wb+",
-):
-    path = to_pathlib_path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    with open(path, mode=mode) as f:
-        pickle.dump(data, f)
-
-
-@beartype
-def normalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.float16,
-) -> torch.Tensor:
-    return torch.div(img, k, out=torch.empty_like(img, dtype=dtype))
-
-
-@beartype
-def denormalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.uint8,
-) -> torch.Tensor:
-    return (img * k).round().clamp(0, k).to(dtype)
-
-
-@beartype
-def read_image(path: os.PathLike):
-    img = torchvision.io.read_image(
-        path, torchvision.io.ImageReadMode.RGB)
-    # [C, H, W]
-
-    return normalize_image(img)
-
-
-@beartype
-def write_image(
-    path: os.PathLike,
-    img: torch.Tensor,  # [C, H, W]
-):
-    assert img.dim() == 3
-
-    path = to_pathlib_path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    img = img.to(CPU_DEVICE)
-
-    img = denormalize_image(img)
-
-    if path.suffix == ".png":
-        torchvision.io.write_png(img, path)
-        return
-
-    if path.suffix == ".jpg" or path.suffix == ".jpeg":
-        torchvision.io.write_jpeg(img, path)
-        return
-
-    raise MismatchException()
-
-
-@beartype
-@mem_clear
-def read_video(
-    path: os.PathLike
-) -> tuple[
-    torch.Tensor,  # video[T, C, H, W]
-    int,  # fps
-]:
-    video, audio, d = torchvision.io.read_video(
-        path,
-        output_format="TCHW",
-        pts_unit="sec",
-    )
-    # [T, C, H, W]
-
-    video_fps = int(d.get("video_fps", -1))
-
-    video = normalize_image(video)
-
-    return video, video_fps
-
-
-@beartype
-@mem_clear
-def write_video(
-    path: os.PathLike,
-    video: torch.Tensor,  # [T, C, H, W]
-    fps: int,
-) -> None:
-    """
-    torchvision.io.write_video(
-        filename=path,
-        video_array=denormalize_image(
-            einops.rearrange(video, "t c h w -> t h w c")),
-        fps=fps,
-        video_codec=codec,
-    )
-    """
-
-    T, C, H, W = -1, -2, -3, -4
-
-    T, C, H, W = check_shapes(video, (T, C, H, W))
-
-    fourcc = cv.VideoWriter_fourcc(*"mp4v")
-    writer = cv.VideoWriter(path, fourcc, fps, (W, H))
-
-    for t in range(T):
-        writer.write(einops.rearrange(
-            denormalize_image(video[t]).cpu().numpy(),
-            "c h w -> h w c",
-        ))
-
-    writer.release()
 
 
 @beartype
@@ -761,9 +593,9 @@ def try_batch_indexing(
 @beartype
 def batch_shrink(
     x: torch.Tensor,
-    dim: int,
+    dim: typing.Optional[int] = None,
 ) -> typing.Optional[torch.Tensor]:
-    dim = normed_idx(dim, x.dim())
+    dim = x.dim() if dim is None else normed_idx(dim, x.dim())
 
     idx = [None for _ in range(x.dim())]
 
@@ -853,6 +685,16 @@ class OnlySelf:
 
 
 @beartype
+def view_to(
+    x: torch.Tensor,
+    device: typing.Optional[torch.device] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+):
+    origin_shape = x.shape
+    return batch_shrink(x).to(device, dtype).expand(origin_shape)
+
+
+@beartype
 def ein_rearrange(
     x: torch.Tensor,
     input: typing.Sequence[object],
@@ -882,10 +724,8 @@ def ein_rearrange(
     assert it_syms.issubset(ot_syms)
 
     if all_same(0 <= it_ellipsis_idx, 0 <= ot_ellipsis_idx):
-        assert len(it) - 1 <= x.dim()
-        assert len(ot) - 1 <= x.dim()
-
         ellipsis_len = x.dim() - len(it) + 1
+        assert 0 <= ellipsis_len
     else:
         ellipsis_len = 0
 
@@ -959,6 +799,15 @@ def ein_scatter(
     src_expr = list(src_expr)
     idx_expr = list(idx_expr)
 
+    if ... not in dst_expr:
+        dst_expr.insert(0, ...)
+
+    if ... not in idx_expr:
+        idx_expr.insert(0, ...)
+
+    if ... not in src_expr:
+        src_expr.insert(0, ...)
+
     dst_expr_none_idx, dst_expr_syms = f(dst_expr)
     idx_expr_none_idx, idx_expr_syms = f(idx_expr)
     src_expr_none_idx, src_expr_syms = f(src_expr)
@@ -967,8 +816,11 @@ def ein_scatter(
     assert idx_expr_none_idx == -1
     assert src_expr_none_idx == -1
 
-    common_shape = (
-        ..., *sorted(dst_expr_syms | idx_expr_syms | src_expr_syms), None)
+    idx_src_expr_syms = idx_expr_syms | src_expr_syms
+
+    c_syms = sorted(idx_src_expr_syms - dst_expr_syms)
+
+    common_expr = (..., *sorted(dst_expr_syms), *c_syms, None)
 
     if not inplace:
         dst = dst.clone()
@@ -979,29 +831,61 @@ def ein_scatter(
     print(f"{idx.shape=}")
     print(f"{src.shape=}")
 
-    dst = ein_rearrange(dst, dst_expr, common_shape)
-    idx = ein_rearrange(idx, idx_expr, common_shape)
-    src = ein_rearrange(src, src_expr, common_shape)
+    print(f"{common_expr=}")
 
-    print(f"{common_shape=}")
+    print(f"{dst_expr=}")
+    print(f"{idx_expr=}")
+    print(f"{src_expr=}")
+
+    dst = ein_rearrange(dst, dst_expr, common_expr)
+    idx = ein_rearrange(idx, idx_expr, common_expr)
+    src = ein_rearrange(src, src_expr, common_expr)
 
     print(f"{dst.shape=}")
     print(f"{idx.shape=}")
     print(f"{src.shape=}")
 
-    batch_shape = broadcast_shapes(
-        dst.shape[:-1], idx.shape[:-1], src.shape[:-1])
+    print(f"{dst.shape=}")
+    print(f"{idx.shape=}")
+    print(f"{src.shape=}")
 
-    dst = batch_expand(dst, batch_shape, -1)
-    idx = batch_expand(idx, batch_shape, -1)
-    src = batch_expand(src, batch_shape, -1)
+    """
+
+    dst[..., 1, ..., 1, *]
+    idx[...,    ...   , 1]
+    src[...,    ...   , 1]
+
+    """
+
+    d = len(c_syms) + 1
+
+    common_shape = broadcast_shapes(
+        dst.shape[:-1], idx.shape[:-1], src.shape[:-1]) + (1,)
 
     match mode:
         case ScatterMode.SET:
+            assert len(c_syms) == 1
+
+            dst = batch_expand(dst, common_shape[:-d], -d).squeeze(-2)
+            idx = idx.expand(common_shape).squeeze(-1)
+            src = src.expand(common_shape).squeeze(-1)
+
+            print(f"{dst.shape=}")
+            print(f"{idx.shape=}")
+            print(f"{src.shape=}")
+
             dst.scatter_(-1, idx, src)
 
         case ScatterMode.ADD:
-            dst.scatter_add_(-1, idx, src)
+            dst = batch_expand(dst, common_shape[:-1], -1)
+            idx = batch_expand(idx, common_shape[:-1], -1)
+            src = batch_expand(src, common_shape[:-1], -1)
+
+            print(f"{dst.shape=}")
+            print(f"{idx.shape=}")
+            print(f"{src.shape=}")
+
+            dst.scatter_add_(-1, idx, view_to(src, dst.device, dst.dtype))
 
     return ret
 
@@ -1037,7 +921,7 @@ def idx_grid(
     return torch.cartesian_prod(*(
         torch.arange(s, dtype=dtype, device=device)
         for s in shape
-    )).reshape(shape + (len(shape),))
+    )).reshape(*shape, len(shape))
 
 
 @beartype
@@ -1815,3 +1699,162 @@ def dlt(
         err = -1.0
 
     return H, err
+
+
+@beartype
+def to_pathlib_path(path: os.PathLike) -> pathlib.Path:
+    return path if isinstance(path, pathlib.Path) else pathlib.Path(path)
+
+
+@beartype
+def create_file(path: os.PathLike, mode: str = "w"):
+    path = to_pathlib_path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    return open(path, mode)
+
+
+@beartype
+def read_file(
+    path: os.PathLike,
+    mode: str,
+):
+    with open(path, mode) as f:
+        return f.read()
+
+
+@beartype
+def write_file(
+    path: os.PathLike,
+    mode: str,
+    data,
+):
+    with create_file(path, mode) as f:
+        f.write(data)
+
+
+@beartype
+def read_pickle(
+    path: os.PathLike,
+    *,
+    mode: str = "rb",
+    encoding: str = "latin1",
+):
+    with open(path, mode=mode) as f:
+        return pickle.load(f, encoding=encoding)
+
+
+@beartype
+def write_pickle(
+    path: os.PathLike,
+    data,
+    *,
+    mode: str = "wb+",
+):
+    path = to_pathlib_path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    with open(path, mode=mode) as f:
+        pickle.dump(data, f)
+
+
+@beartype
+def normalize_image(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = torch.float16,
+) -> torch.Tensor:
+    return torch.div(img, k, out=torch.empty_like(img, dtype=dtype))
+
+
+@beartype
+def denormalize_image(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = torch.uint8,
+) -> torch.Tensor:
+    return (img * k).round().clamp(0, k).to(dtype)
+
+
+@beartype
+def read_image(path: os.PathLike):
+    img = torchvision.io.read_image(
+        path, torchvision.io.ImageReadMode.RGB)
+    # [C, H, W]
+
+    return normalize_image(img)
+
+
+@beartype
+def write_image(
+    path: os.PathLike,
+    img: torch.Tensor,  # [C, H, W]
+):
+    assert img.dim() == 3
+
+    path = to_pathlib_path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    img = img.to(CPU_DEVICE)
+
+    img = denormalize_image(img)
+
+    if path.suffix == ".png":
+        torchvision.io.write_png(img, path)
+        return
+
+    if path.suffix == ".jpg" or path.suffix == ".jpeg":
+        torchvision.io.write_jpeg(img, path)
+        return
+
+    raise MismatchException()
+
+
+@beartype
+@mem_clear
+def read_video(
+    path: os.PathLike
+) -> tuple[
+    torch.Tensor,  # video[T, C, H, W]
+    int,  # fps
+]:
+    video, audio, d = torchvision.io.read_video(
+        path,
+        output_format="TCHW",
+        pts_unit="sec",
+    )
+    # [T, C, H, W]
+
+    video_fps = int(d.get("video_fps", -1))
+
+    video = normalize_image(video)
+
+    return video, video_fps
+
+
+@beartype
+@mem_clear
+def write_video(
+    path: os.PathLike,
+    video: torch.Tensor,  # [T, C, H, W]
+    fps: int,
+) -> None:
+    T, C, H, W = -1, -2, -3, -4
+
+    T, C, H, W = check_shapes(video, (T, C, H, W))
+
+    fourcc = cv.VideoWriter_fourcc(*"mp4v")
+    writer = cv.VideoWriter(path, fourcc, fps, (W, H))
+
+    for t in range(T):
+        writer.write(einops.rearrange(
+            denormalize_image(video[t]).cpu().numpy(),
+            "c h w -> h w c",
+        ))
+
+    writer.release()

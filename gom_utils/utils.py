@@ -40,9 +40,9 @@ def get_face_coord(
         vp_c.shape[:-1],
     )
 
-    vp_a = vp_a.to(*dd).expand(batch_shape + (3,))
-    vp_b = vp_b.to(*dd).expand(batch_shape + (3,))
-    vp_c = vp_c.to(*dd).expand(batch_shape + (3,))
+    vp_a = vp_a.to(*dd).expand(*batch_shape, 3)
+    vp_b = vp_b.to(*dd).expand(*batch_shape, 3)
+    vp_c = vp_c.to(*dd).expand(*batch_shape, 3)
 
     g = (vp_a + vp_b + vp_c) / 3
     # [..., 3]

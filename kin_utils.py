@@ -90,7 +90,7 @@ class KinTree:
         self,
         pose_r: torch.Tensor,  # [..., J, D, D]
         pose_t: torch.Tensor,  # [..., J, D]
-    ) -> torch.Tensor:  # joint_T[..., J, D+1, D+1]:
+    ) -> torch.Tensor:  # joint_T[..., J, D + 1, D + 1]:
         J = self.joints_cnt
 
         D = utils.check_shapes(
@@ -106,11 +106,11 @@ class KinTree:
         )
 
         joint_T = torch.empty(
-            batch_shape + (J, D+1, D+1),
+            batch_shape + (J, D + 1, D + 1),
             dtype=torch.promote_types(pose_r.dtype, pose_t.dtype),
             device=device,
         )
-        # [..., J, D+1, D+1]
+        # [..., J, D + 1, D + 1]
 
         joint_T[..., :, D, :D] = 0
         joint_T[..., :, D, D] = 1
@@ -121,8 +121,8 @@ class KinTree:
         for u in self.joints_tp[1:]:
             p = self.parents[u]
 
-            cur_joint_T = joint_T[..., u, :, :]  # [..., D+1, D+1]
-            parent_joint_T = joint_T[..., p, :, :]  # [... D+1, D+1]
+            cur_joint_T = joint_T[..., u, :, :]  # [..., D + 1, D + 1]
+            parent_joint_T = joint_T[..., p, :, :]  # [... D + 1, D + 1]
 
             utils.merge_rt(
                 parent_joint_T[..., :D, :D],

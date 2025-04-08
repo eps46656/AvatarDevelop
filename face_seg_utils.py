@@ -29,14 +29,14 @@ def vote(
         masks.shape[:-2],
     )
 
-    pixel_to_face = pixel_to_face.expand(batch_shape + (H, W))
-    masks = masks.expand(batch_shape + (H, W))
-    face_ballot_box = face_ballot_box.expand(batch_shape + (F,))
+    pixel_to_face = pixel_to_face.expand(*batch_shape, H, W)
+    masks = masks.expand(*batch_shape, H, W)
+    face_ballot_box = face_ballot_box.expand(*batch_shape, F)
 
-    pixel_to_face = pixel_to_face.view(batch_shape + (H * W,))
+    pixel_to_face = pixel_to_face.view(*batch_shape, H * W)
     # [..., H * W]
 
-    masks = masks.view(batch_shape + (H * W,))
+    masks = masks.view(*batch_shape, H * W)
     # [..., H * W]
 
     face_ballot_box.scatter_add_(-1, pixel_to_face, masks)
@@ -97,8 +97,8 @@ def elect(
         masks.shape[:-2],
     )
 
-    pixel_to_face = pixel_to_face.expand(batch_shape + (H, W))
-    masks = masks.expand(batch_shape + (K, H, W))
+    pixel_to_face = pixel_to_face.expand(*batch_shape, H, W)
+    masks = masks.expand(*batch_shape, K, H, W)
 
     face_ballot_box = torch.zeros(
         (K, faces_cnt + 1),  # F + 1 for -1 pixel to face index

@@ -37,14 +37,6 @@ class Sample:
             blending_param,
         )
 
-        camera_transform = camera_transform.expand(shape)
-        img = img.expand(shape + (C, H, W))
-        mask = mask.expand(shape + (H, W))
-
-        self.blending_param = blending_param
-
-        # ---
-
         self.raw_camera_config = camera_config
         self.raw_camera_transform = camera_transform
 

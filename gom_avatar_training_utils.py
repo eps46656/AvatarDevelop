@@ -126,7 +126,7 @@ class TrainingCore(training_utils.TrainingCore):
                 blending_param=sample.blending_param,
             )
 
-            loss: torch.Tensor = self.calc_loss(**result.__dict__)
+            loss: torch.Tensor = self.calc_loss(result)
 
             sum_loss += float(loss) * batch_size
 
@@ -157,6 +157,7 @@ class TrainingCore(training_utils.TrainingCore):
     @utils.mem_clear
     @torch.no_grad()
     def output_rgb_video(self):
+        # call output_rgb_video
         self.dataset: gom_utils.Dataset
 
         rgb_frames = torch.empty_like(
@@ -207,6 +208,30 @@ class TrainingCore(training_utils.TrainingCore):
                 mode=utils.ScatterMode.SET,
             )
             # rgb_frames[idesx[k], c, h, w] = rendered_img[k, c, h, w]
+
+            """
+
+            ... syms None
+            ... syms 1
+            ... syms 1
+
+            dst[idx[k], c, h, w] = src[k, c, h, w]
+
+            dst[c, h, w, ?]
+            idx[c, h, w, k]
+            src[c, h, w, k]
+
+
+            dst[c, h, w, 1, 1, ?]
+            idx[c, 1, w, a, b, 1]
+            src[1, h, w, a, b, 1]
+
+
+
+
+            dst[idx[a, b], c] = src[a, b]
+
+            """
 
             avatar_model: smplx_utils.Model = result.avatar_model
 
@@ -351,7 +376,10 @@ class TrainingCore(training_utils.TrainingCore):
     @utils.mem_clear
     @torch.no_grad()
     def bake_texture_face_2(self, tex_h: int, tex_w: int):
-        # call bake_texture_face_2 tex_h=1000 tex_w=1000
+        """
+        load_latest
+        call bake_texture_face_2 tex_h=1000 tex_w=1000
+        """
 
         self.dataset: gom_utils.Dataset
 
@@ -365,18 +393,18 @@ class TrainingCore(training_utils.TrainingCore):
         F = avatar_model.faces_cnt
 
         face_color_all_cnt = torch.zeros(
-            (F + 1,), dtype=torch.int, device=self.__config.batch_size)
+            (F + 1,), dtype=torch.int, device=self.__config.device)
 
         face_color_all_sum_x = torch.zeros(
-            (F + 1, C), dtype=torch.float64, device=self.__config.batch_size)
+            (F + 1, C), dtype=torch.float64, device=self.__config.device)
 
         face_color_all_sum_xxt = torch.zeros(
-            (F + 1, C), dtype=torch.float64, device=self.__config.batch_size)
+            (F + 1, C, C), dtype=torch.float64, device=self.__config.device)
 
-        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=1)):
+        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=8)):
             utils.mem_clear()
 
-            k = batch_idxes[0][0]
+            B = batch_idxes[0].shape[0]
 
             sample: gom_utils.Sample
 
@@ -387,22 +415,23 @@ class TrainingCore(training_utils.TrainingCore):
                 vert_pos=cur_avatar_model.vert_pos,
                 faces=cur_avatar_model.mesh_data.f_to_vvv,
                 camera_config=sample.camera_config,
-                camera_transform=sample.camera_transform[k],
+                camera_transform=sample.camera_transform,
                 faces_per_pixel=1,
             )
 
-            pix_to_face = fragments.pix_to_face
-            # [1, H, W, 1]
-
-            ref_img = einops.rearrange(sample.img[k], "c h w -> h w c")
-            # [H, W, 3]
+            pix_to_face = fragments.pix_to_face.reshape(-1)
+            # [B * H * W]
 
             pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
-            # [H, W]
+            # [B * H * W]
+
+            ref_img = einops.rearrange(
+                sample.img, "b c h w -> b h w c").reshape(B * H * W, C)
+            # [B * H * W, C]
 
             pca_utils.scatter_feed(
-                idx=pix_to_face,  # [H, W]
-                x=ref_img,  # [H, W, C]
+                idx=pix_to_face,  # [B * H * W]
+                x=ref_img,  # [B * H * W, C]
                 inplace=True,
 
                 dst_cnts=face_color_all_cnt,  # [F]
@@ -416,17 +445,18 @@ class TrainingCore(training_utils.TrainingCore):
             sum_xxt=face_color_all_sum_xxt,
         )
 
-        # face_color_means[F, C]
-        # face_color_pcas[F, C, C]
-        # face_color_stds[F, C]
+        # face_color_means[F + 1, C]
+        # face_color_pcas[F + 1, C, C]
+        # face_color_stds[F + 1, C]
 
         face_ell_means = face_color_means
 
         inv_face_ell_axis = torch.where(
-            2 <= face_color_all_cnt,
+            (2 <= face_color_all_cnt)[..., None, None].expand(F + 1, C, C),
             face_color_pcas * face_color_stds.unsqueeze(-1),
             10 * torch.eye(
                 C, dtype=face_color_pcas.dtype, device=face_color_pcas.device)
+            .expand(F + 1, C, C)
         ).inverse()
         # [F, C, C]
 
@@ -436,15 +466,10 @@ class TrainingCore(training_utils.TrainingCore):
         face_color_inlier_sum_x = torch.zeros(
             (F + 1, C), dtype=torch.float64, device=self.__config.device)
 
-        face_color_inlier_cnt_one = torch.ones(
-            (),
-            dtype=face_color_inlier_cnt.dtype,
-            device=face_color_inlier_cnt.device).expand(H, W)
-
-        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=1)):
+        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=8)):
             utils.mem_clear()
 
-            k = batch_idxes[0][0]
+            B = batch_idxes[0].shape[0]
 
             sample: gom_utils.Sample
 
@@ -455,67 +480,47 @@ class TrainingCore(training_utils.TrainingCore):
                 vert_pos=cur_avatar_model.vert_pos,
                 faces=cur_avatar_model.mesh_data.f_to_vvv,
                 camera_config=sample.camera_config,
-                camera_transform=sample.camera_transform[k],
+                camera_transform=sample.camera_transform,
                 faces_per_pixel=1,
             )
 
-            pix_to_face = fragments.pix_to_face
-            # [1, H, W, 1]
-
-            ref_img = einops.rearrange(sample.img[k], "c h w -> h w c")
-            # [H, W, C]
+            pix_to_face = fragments.pix_to_face.reshape(-1)
+            # [B * H * W]
 
             pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
-            # [H, W]
+            # [B * H * W]
+
+            ref_img = einops.rearrange(
+                sample.img, "b c h w -> b h w c").reshape(B * H * W, C)
+            # [B * H * W, C]
 
             cur_face_ell_means = face_ell_means[pix_to_face]
-            # [H, W, C]
+            # [B * H * W, C]
 
             cur_inv_face_ell_axis = inv_face_ell_axis[pix_to_face]
-            # [H, W, C, C]
+            # [B * H * W, C, C]
 
             ell_coord = (
                 cur_inv_face_ell_axis @
                 (ref_img - cur_face_ell_means).unsqueeze(-1)).squeeze(-1)
-            # [H, W, C]
+            # [B * H * W, C]
 
             ell_dist = utils.vec_norm(ell_coord)
-            # [H, W]
+            # [B * H * W]
 
             pix_to_face = torch.where(
                 ell_dist <= 1.5,
                 pix_to_face,
-                F + 1,
+                F,
             )
-            # [H, W]
+            # [B * H * W]
 
-            utils.ein_scatter(
-                dst=face_color_inlier_cnt,  # [F + 1]
-                dst_expr=(None, "c"),
+            face_color_inlier_cnt += pix_to_face.bincount(minlength=F + 1)
 
-                idx=pix_to_face,  # [H, W]
-                idx_expr="hw",
-
-                src=face_color_inlier_cnt_one,  # [H, W]
-                src_expr="hw",
-
-                inplace=True,
-                mode=utils.ScatterMode.ADD,
-            )
-
-            utils.ein_scatter(
-                dst=face_color_inlier_sum_x,  # [F + 1, C]
-                dst_expr=(None, "c"),
-
-                idx=pix_to_face,  # [H, W]
-                idx_expr="hw",
-
-                src=ref_img,  # [H, W, C]
-                src_expr="hwc",
-
-                inplace=True,
-                mode=utils.ScatterMode.ADD,
-            )
+            face_color_inlier_sum_x.index_add_(
+                0, pix_to_face,
+                ref_img.to(face_color_inlier_sum_x.device,
+                           face_color_inlier_sum_x.dtype))
 
         face_idx_map = texture_utils.calc_face_idx(
             tex_vert_pos=avatar_model.tex_vert_pos,
@@ -524,7 +529,9 @@ class TrainingCore(training_utils.TrainingCore):
             tex_h=tex_h,
             tex_w=tex_w,
         )
-        # [H, W, 1]
+        # [H, W]
+
+        face_idx_map = (face_idx_map + (F + 1)) % (F + 1)
 
         print(f"{face_idx_map.shape=}")
         print(f"{face_idx_map.dtype=}")
@@ -538,6 +545,9 @@ class TrainingCore(training_utils.TrainingCore):
         face_color[F, :] = 1
 
         face_idx_map = face_idx_map.reshape(-1, 1).expand(tex_h * tex_w, 3)
+
+        print(f"{face_idx_map.min()=}")
+        print(f"{face_idx_map.max()=}")
 
         tex = torch.gather(face_color, 0, face_idx_map)
         # [H * W, 3]

@@ -337,7 +337,7 @@ def blending(
     # [..., J - 1, 3, 3]
 
     pose_feature = pose_feature.view(
-        pose_feature.shape[:-3] + ((J - 1) * 3 * 3,))
+        *pose_feature.shape[:-3], (J - 1) * 3 * 3)
     # [..., (J - 1) * 3 * 3]
 
     vp = vp + torch.einsum(

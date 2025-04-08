@@ -44,10 +44,6 @@ def rasterize_mesh(
         camera_transform,
     )
 
-    vert_pos = utils.batch_expand(vert_pos, batch_shape, -2)
-    faces = utils.batch_expand(faces, batch_shape, -2)
-    camera_transform = camera_transform.expand(batch_shape)
-
     camera_view_transform = transform_utils.ObjectTransform.from_matching(
         "LUF",
         dtype=camera_transform.dtype,
@@ -57,6 +53,7 @@ def rasterize_mesh(
 
     world_view_mat = camera_transform.get_trans_to(camera_view_transform)
     # world -> view
+    # [..., 4, 4]
 
     camera_proj_mat = camera_utils.make_proj_mat(
         camera_config=camera_config,
@@ -67,13 +64,18 @@ def rasterize_mesh(
     )
     # [..., 4, 4]
 
-    world_view_mat = world_view_mat.to(torch.float)
-    camera_proj_mat = camera_proj_mat.to(torch.float)
-    vert_pos = vert_pos.to(torch.float)
+    vert_pos = utils.batch_expand(vert_pos, batch_shape, -2).to(torch.float)
+    faces = utils.batch_expand(faces, batch_shape, -2)
+    world_view_mat = utils.batch_expand(world_view_mat, batch_shape, -2) \
+        .to(torch.float)
+    camera_proj_mat = utils.batch_expand(camera_proj_mat, batch_shape, -2) \
+        .to(torch.float)
 
-    R: list[torch.Tensor] = list()
-    T: list[torch.Tensor] = list()
-    K: list[torch.Tensor] = list()
+    N = batch_shape.numel()
+
+    camera_R: list[torch.Tensor] = list()
+    camera_T: list[torch.Tensor] = list()
+    camera_K: list[torch.Tensor] = list()
 
     for idxes in utils.get_batch_idxes(batch_shape):
         cur_world_view_mat = world_view_mat[idxes]
@@ -82,14 +84,14 @@ def rasterize_mesh(
         cur_camera_proj_mat = camera_proj_mat[idxes]
         # [4, 4]
 
-        R.append(cur_world_view_mat[:3, :3].T)
-        T.append(cur_world_view_mat[:3, 3])
-        K.append(cur_camera_proj_mat.T)
+        camera_R.append(cur_world_view_mat[:3, :3].T)
+        camera_T.append(cur_world_view_mat[:3, 3])
+        camera_K.append(cur_camera_proj_mat.T)
 
     cameras = pytorch3d.renderer.PerspectiveCameras(
-        R=R,
-        T=T,
-        K=K,
+        R=torch.stack(camera_R),
+        T=torch.stack(camera_T),
+        K=torch.stack(camera_K),
         in_ndc=True,
         device=device,
     )
@@ -108,13 +110,13 @@ def rasterize_mesh(
     )
 
     mesh = pytorch3d.structures.Meshes(
-        verts=[vert_pos.to(utils.FLOAT)],
-        faces=[faces],
+        verts=vert_pos.to(utils.FLOAT).reshape(N, V, 3),
+        faces=faces.reshape(N, F, 3),
         textures=None,
     )
 
     fragments: pytorch3d.renderer.mesh.rasterizer.Fragments = rasterizer(mesh)
-    # fragments.pix_to_face[B, H, W, FPP]
-    # fragments.bary_coords[B, H, W, FPP, 3]
+    # fragments.pix_to_face[N, H, W, FPP]
+    # fragments.bary_coords[N, H, W, FPP, 3]
 
     return fragments

@@ -162,7 +162,10 @@ def calc_face_idx(
         cull_backfaces=False,
     )
 
-    return rasterize_mesh_result.pixel_to_faces
+    ret = rasterize_mesh_result.pix_to_face
+    # [1, H, W, 1]
+
+    return ret[0, :, :, 0]
 
 
 @beartype

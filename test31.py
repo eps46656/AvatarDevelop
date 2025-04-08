@@ -20,7 +20,7 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0404_2"
+PROJ_DIR = DIR / "train_2025_0408_1"
 
 ALPHA_RGB = 1.0
 ALPHA_LAP_SMOOTHING = 10.0
@@ -88,9 +88,21 @@ def load_trainer():
 
     param_groups = utils.get_param_groups(module, LR)
 
-    optimizer = None
+    optimizer = torch.optim.Adam(
+        param_groups,
+        lr=1e-3,
+    )
 
-    scheduler = None
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer,
+        mode="min",
+        factor=pow(0.1, 1/4),
+        patience=5,
+        threshold=0.05,
+        threshold_mode="rel",
+        cooldown=0,
+        min_lr=1e-7,
+    )
 
     training_core = gom_avatar_training_utils.TrainingCore(
         config=gom_avatar_training_utils.Config(
@@ -123,6 +135,12 @@ def load_trainer():
 def main1():
     trainer = load_trainer()
 
+    trainer.enter_cli()
+
+
+def main2():
+    trainer = load_trainer()
+
     trainer.load_latest()
 
     training_core: gom_avatar_training_utils.TrainingCore = \
@@ -139,6 +157,7 @@ def main1():
 
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
-        main1()
+        with torch.no_grad():
+            main1()
 
     print("ok")

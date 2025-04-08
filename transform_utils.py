@@ -70,26 +70,19 @@ class ObjectTransform:
         if dtype is None:
             dtype = utils.promote_dtypes(pos, vec_a, vec_b, vec_c)
 
-        s = batch_shape + (3,)
-
-        f_vec, u_vec, l_vec = None, None, None
+        trans = torch.empty(
+            batch_shape + (4, 4), dtype=dtype, device=device)
 
         for dir, vec in zip(dirs, vecs):
             match dir:
-                case "F": f_vec = +vec
-                case "B": f_vec = -vec
-                case "U": u_vec = +vec
-                case "D": u_vec = -vec
-                case "L": l_vec = +vec
-                case "R": l_vec = -vec
+                case "F": trans[..., :3, 0] = +vec
+                case "B": trans[..., :3, 0] = -vec
+                case "U": trans[..., :3, 1] = +vec
+                case "D": trans[..., :3, 1] = -vec
+                case "L": trans[..., :3, 2] = +vec
+                case "R": trans[..., :3, 2] = -vec
 
-        trans = torch.empty(batch_shape + (4, 4),
-                            dtype=dtype, device=device)
-
-        trans[..., :3, 0] = f_vec.to(device, dtype).expand(s)
-        trans[..., :3, 1] = u_vec.to(device, dtype).expand(s)
-        trans[..., :3, 2] = l_vec.to(device, dtype).expand(s)
-        trans[..., :3, 3] = pos.to(device, dtype).expand(s)
+        trans[..., :3, 3] = pos
         trans[..., 3, :3] = 0
         trans[..., 3, 3] = 1
 
