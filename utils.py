@@ -917,88 +917,91 @@ def ein_rearrange(
     return x.permute(*permute_list)
 
 
+class ScatterMode(enum.StrEnum):
+    SET = "set"
+    ADD = "add"
+
+
 @beartype
-def ein_scatter_add(
+def ein_scatter(
     *,
-    lhs: typing.Sequence[
-        str | types.EllipsisType | typing.Sequence[str, types.EllipsisType]],
-    rhs: typing.Sequence[str | types.EllipsisType],
     dst: torch.Tensor,
+    dst_expr: typing.Sequence[object],
+
     idx: torch.Tensor,
+    idx_expr: typing.Sequence[object],
+
     src: torch.Tensor,
+    src_expr: typing.Sequence[object],
+
     inplace: bool,
+    mode: ScatterMode,
 ):
     def f(expr):
+        none_idx = -1
+        ell_idx = -1
         syms = set()
-        subexpr_idx = -1
-        ellipsis_idx = -1
 
         for idx, sym in enumerate(expr):
-            if sym is ...:
-                assert subexpr_idx == -1
-                ellipsis_idx = idx
-                continue
-
-            if isinstance(sym, str):
-                assert len(sym) == 1
+            if sym is None:
+                assert none_idx == -1
+                none_idx = idx
+            elif sym is ...:
+                assert ell_idx == -1
+                ell_idx = idx
+            else:
                 assert sym not in syms
                 syms.add(sym)
 
-            assert subexpr_idx == -1
-            subexpr_idx = idx
+        return none_idx, syms
 
-        return syms, subexpr_idx, ellipsis_idx
+    dst_expr = list(dst_expr)
+    src_expr = list(src_expr)
+    idx_expr = list(idx_expr)
 
-    dst_expr = list(lhs)
-    src_expr = list(rhs)
+    dst_expr_none_idx, dst_expr_syms = f(dst_expr)
+    idx_expr_none_idx, idx_expr_syms = f(idx_expr)
+    src_expr_none_idx, src_expr_syms = f(src_expr)
 
-    dst_expr_syms, dst_expr_subexpr_idx, dst_expr_ellipsis_idx = f(dst_expr)
+    assert dst_expr_none_idx != -1
+    assert idx_expr_none_idx == -1
+    assert src_expr_none_idx == -1
 
-    assert dst_expr_subexpr_idx != -1
-
-    idx_expr = list(dst_expr[dst_expr_subexpr_idx])
-    dst_expr[dst_expr_subexpr_idx] = None
-
-    idx_expr_syms, idx_expr_subexpr_idx, idx_expr_ellipsis_idx = f(idx_expr)
-    src_expr_syms, src_expr_subexpr_idx, src_expr_ellipsis_idx = f(src_expr)
-
-    assert idx_expr_subexpr_idx == -1
-    assert src_expr_subexpr_idx == -1
-
-    has_batch_shape = all_same(
-        0 <= dst_expr_ellipsis_idx,
-        0 <= idx_expr_ellipsis_idx,
-        0 <= src_expr_ellipsis_idx,
-    )
-
-    all_syms = sorted(dst_expr_syms | idx_expr_syms | src_expr_syms)
-
-    if has_batch_shape:
-        common_shape = (..., *all_syms, None)
-    else:
-        common_shape = (*all_syms, None)
+    common_shape = (
+        ..., *sorted(dst_expr_syms | idx_expr_syms | src_expr_syms), None)
 
     if not inplace:
         dst = dst.clone()
 
     ret = dst
 
+    print(f"{dst.shape=}")
+    print(f"{idx.shape=}")
+    print(f"{src.shape=}")
+
     dst = ein_rearrange(dst, dst_expr, common_shape)
     idx = ein_rearrange(idx, idx_expr, common_shape)
     src = ein_rearrange(src, src_expr, common_shape)
 
-    if has_batch_shape:
-        batch_shape = broadcast_shapes(
-            dst.shape[:-1],
-            idx.shape[:-1],
-            src.shape[:-1],
-        )
+    print(f"{common_shape=}")
 
-        dst = batch_expand(dst, batch_shape, -1)
-        idx = batch_expand(idx, batch_shape, -1)
-        src = batch_expand(src, batch_shape, -1)
+    print(f"{dst.shape=}")
+    print(f"{idx.shape=}")
+    print(f"{src.shape=}")
 
-    dst.scatter_add_(-1, idx, src)
+    batch_shape = broadcast_shapes(
+        dst.shape[:-1], idx.shape[:-1], src.shape[:-1])
+
+    dst = batch_expand(dst, batch_shape, -1)
+    idx = batch_expand(idx, batch_shape, -1)
+    src = batch_expand(src, batch_shape, -1)
+
+    match mode:
+        case ScatterMode.SET:
+            dst.scatter_(-1, idx, src)
+
+        case ScatterMode.ADD:
+            dst.scatter_add_(-1, idx, src)
 
     return ret
 

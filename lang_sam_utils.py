@@ -21,9 +21,9 @@ class SAMType(enum.StrEnum):
 
 
 @beartype
-class MaskStrategy(enum.Enum):
-    MAX_SCORE = 1
-    MIN_AREA = 2
+class MaskStrategy(enum.StrEnum):
+    MAX_SCORE = "max score"
+    MIN_AREA = "min area"
 
 
 @beartype

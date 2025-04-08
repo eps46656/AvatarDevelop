@@ -177,10 +177,8 @@ class TrainingCore(training_utils.TrainingCore):
                 self.dataset, batch_size=self.__config.batch_size)):
             batch_size = batch_idxes[0].shape[0]
 
-            idxes = utils.ravel_idxes(batch_idxes, self.dataset.shape)\
-                .reshape(batch_size, 1, 1, 1) \
-                .expand(batch_size, C, H, W)
-            # [K, C, H, W]
+            idxes = utils.ravel_idxes(batch_idxes, self.dataset.shape)
+            # [K]
 
             sample: gom_utils.Sample
 
@@ -195,10 +193,20 @@ class TrainingCore(training_utils.TrainingCore):
             rendered_img = result.rendered_img.reshape(-1, C, H, W)
             # [K, C, H, W]
 
-            rgb_frames.scatter_(
-                0,
-                idxes.to(rgb_frames.device),
-                rendered_img.to(rgb_frames))
+            utils.ein_scatter(
+                dst=rgb_frames,  # [T, C, H, W]
+                dst_expr=(None, *"chw"),
+
+                idx=idxes.to(rgb_frames.device),  # [K]
+                idx_expr="k",
+
+                src=rendered_img.to(rgb_frames),  # [K, C, H, W]
+                src_expr="kchw",
+
+                inplace=True,
+                mode=utils.ScatterMode.SET,
+            )
+            # rgb_frames[idesx[k], c, h, w] = rendered_img[k, c, h, w]
 
             avatar_model: smplx_utils.Model = result.avatar_model
 
@@ -481,20 +489,32 @@ class TrainingCore(training_utils.TrainingCore):
             )
             # [H, W]
 
-            utils.ein_scatter_add(
-                lhs=(("h", "w"),),
-                rhs=("h", "w"),
+            utils.ein_scatter(
                 dst=face_color_inlier_cnt,  # [F + 1]
+                dst_expr=(None, "c"),
+
                 idx=pix_to_face,  # [H, W]
+                idx_expr="hw",
+
                 src=face_color_inlier_cnt_one,  # [H, W]
+                src_expr="hw",
+
+                inplace=True,
+                mode=utils.ScatterMode.ADD,
             )
 
-            utils.ein_scatter_add(
-                lhs=(("h", "w"), "c"),
-                rhs=("h", "w", "c"),
+            utils.ein_scatter(
                 dst=face_color_inlier_sum_x,  # [F + 1, C]
+                dst_expr=(None, "c"),
+
                 idx=pix_to_face,  # [H, W]
+                idx_expr="hw",
+
                 src=ref_img,  # [H, W, C]
+                src_expr="hwc",
+
+                inplace=True,
+                mode=utils.ScatterMode.ADD,
             )
 
         face_idx_map = texture_utils.calc_face_idx(
