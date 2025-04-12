@@ -129,7 +129,7 @@ class MyTrainingCore(training_utils.TrainingCore):
                     blending_param=sample.blending_param,
                 )
 
-                rendered_img = result.rendered_img.reshape((-1, C, H, W))
+                rendered_img = result.gp_render_img.reshape((-1, C, H, W))
                 # [K, C, H, W]
 
                 out_frames.scatter_(

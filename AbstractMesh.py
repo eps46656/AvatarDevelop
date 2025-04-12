@@ -78,7 +78,7 @@ class AbstractMesh:
 
         self.__vertices[vi] = vertex_attr
 
-        self.__graph.AddVertex(vi)
+        self.__graph.add_vert(vi)
 
         return vi
 
@@ -106,11 +106,11 @@ class AbstractMesh:
         self.__fi_to_vis[fi] = vis
         self.__vis_to_fi[sorted_vis] = fi
 
-        self.__graph.AddVertex(fi)
+        self.__graph.add_vert(fi)
 
-        self.__graph.AddEdge(vis[0], fi, bidirectional=True)
-        self.__graph.AddEdge(vis[1], fi, bidirectional=True)
-        self.__graph.AddEdge(vis[2], fi, bidirectional=True)
+        self.__graph.add_edge(vis[0], fi, bidirectional=True)
+        self.__graph.add_edge(vis[1], fi, bidirectional=True)
+        self.__graph.add_edge(vis[2], fi, bidirectional=True)
 
         return fi, True
 
@@ -131,7 +131,7 @@ class AbstractMesh:
         if not utils.dict_pop(self.__faces, fi):
             return False
 
-        self.__graph.RemoveVertex(fi)
+        self.__graph.remove_vert(fi)
 
         return True
 

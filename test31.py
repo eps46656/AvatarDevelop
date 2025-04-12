@@ -20,10 +20,10 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0408_1"
+PROJ_DIR = DIR / "train_2025_0412_1"
 
 ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHING = 10.0
+ALPHA_LAP_SMOOTHING = 5.0
 ALPHA_NOR_SIM = 1.0
 ALPHA_COLOR_DIFF = 1.0
 
@@ -91,6 +91,7 @@ def load_trainer():
     optimizer = torch.optim.Adam(
         param_groups,
         lr=1e-3,
+        betas=(0.5, 0.5),
     )
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -157,7 +158,6 @@ def main2():
 
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
-        with torch.no_grad():
-            main1()
+        main1()
 
     print("ok")

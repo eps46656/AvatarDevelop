@@ -8,9 +8,9 @@ from .. import utils
 
 @dataclasses.dataclass
 class FaceCoordResult:
-    rs: torch.Tensor  # [..., 3, 3]
-    ts: torch.Tensor  # [..., 3]
-    areas: torch.Tensor  # [...]
+    r: torch.Tensor  # [..., 3, 3]
+    t: torch.Tensor  # [..., 3]
+    area: torch.Tensor  # [...]
 
 
 @beartype
@@ -34,15 +34,11 @@ def get_face_coord(
         utils.promote_dtypes(vp_a, vp_b, vp_c),
     )
 
-    batch_shape = utils.broadcast_shapes(
-        vp_a.shape[:-1],
-        vp_b.shape[:-1],
-        vp_c.shape[:-1],
-    )
+    s = utils.broadcast_shapes(vp_a, vp_b, vp_c)
 
-    vp_a = vp_a.to(*dd).expand(*batch_shape, 3)
-    vp_b = vp_b.to(*dd).expand(*batch_shape, 3)
-    vp_c = vp_c.to(*dd).expand(*batch_shape, 3)
+    vp_a = vp_a.to(*dd).expand(s)
+    vp_b = vp_b.to(*dd).expand(s)
+    vp_c = vp_c.to(*dd).expand(s)
 
     g = (vp_a + vp_b + vp_c) / 3
     # [..., 3]
@@ -50,26 +46,27 @@ def get_face_coord(
     axis_x = g - vp_a
 
     axis_z = utils.vec_cross(vp_b - vp_a, vp_c - vp_a)
+    axis_z_norm = utils.vec_norm(axis_z)
 
     axis_y = utils.vec_cross(axis_z, axis_x)
 
-    area = utils.vec_norm(axis_z) * 0.5
+    area = axis_z_norm * 0.5
     # [...]
 
     normed_axis_x = utils.vec_normed(axis_x)
     normed_axis_y = utils.vec_normed(axis_y)
-    normed_axis_z = utils.vec_normed(axis_z)
+    normed_axis_z = axis_z / (1e-6 + axis_z_norm).unsqueeze(-1)
 
     err = utils.vec_dot(normed_axis_z, normed_axis_x).abs().max()
-    assert err <= 2e-3, err
+    assert err <= 1e-4, err
 
     err = utils.vec_dot(normed_axis_x, normed_axis_y).abs().max()
-    assert err <= 2e-3, err
+    assert err <= 1e-4, err
 
     err = utils.vec_dot(normed_axis_y, normed_axis_z).abs().max()
-    assert err <= 2e-3, err
+    assert err <= 1e-4, err
 
-    rs = torch.stack([
+    r = torch.stack([
         normed_axis_x,
         normed_axis_y,
         normed_axis_z,
@@ -86,4 +83,4 @@ def get_face_coord(
 
     """
 
-    return FaceCoordResult(rs=rs, ts=g, areas=area)
+    return FaceCoordResult(r=r, t=g, area=area)

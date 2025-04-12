@@ -10,7 +10,7 @@ from beartype import beartype
 
 from . import (avatar_utils, dataset_utils, dw_interp_utils, gaussian_utils,
                gom_utils, pca_utils, rendering_utils, smplx_utils,
-               texture_utils, training_utils, utils)
+               texture_utils, training_utils, utils, video_utils)
 
 
 @dataclasses.dataclass
@@ -89,6 +89,8 @@ class TrainingCore(training_utils.TrainingCore):
 
     def calc_loss(self, forward_result: gom_utils.ModuleForwardResult) \
             -> torch.Tensor:
+        print(f"{forward_result.rgb_loss=}")
+
         weighted_rgb_loss = \
             self.__config.alpha_rgb * forward_result.rgb_loss
 
@@ -134,7 +136,22 @@ class TrainingCore(training_utils.TrainingCore):
 
             loss.backward()
 
+            avatar_blender = self.module.avatar_blender
+
+            if isinstance(avatar_blender, smplx_utils.ModelBlender) and isinstance(avatar_blender.model_builder, smplx_utils.DeformableModelBuilder):
+                model_builder: smplx_utils.DeformableModelBuilder = avatar_blender.model_builder
+
+                vert_pos = model_builder.model_data.vert_pos
+
+                if vert_pos.grad is not None:
+                    threshold = 1e-8
+
+                    grad_norm = utils.vec_norm(vert_pos.grad, -1, True)
+
+                    vert_pos.grad *= threshold / grad_norm.clamp(threshold)
+
             self.optimizer.step()
+            self.module.refresh()
 
         avg_loss = sum_loss / self.dataset.shape.numel()
 
@@ -162,7 +179,7 @@ class TrainingCore(training_utils.TrainingCore):
 
         rgb_frames = torch.empty_like(
             self.dataset.sample.img,
-            dtype=torch.float16,
+            dtype=torch.uint8,
             device=self.__config.device,
         )
         # [T, C, H, W]
@@ -175,9 +192,10 @@ class TrainingCore(training_utils.TrainingCore):
         avatar_model.mesh_data.show(avatar_model.vert_pos)
 
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
-                self.dataset, batch_size=self.__config.batch_size)):
-            batch_size = batch_idxes[0].shape[0]
-
+            self.dataset,
+            batch_size=self.__config.batch_size,
+            shuffle=False,
+        )):
             idxes = utils.ravel_idxes(batch_idxes, self.dataset.shape)
             # [K]
 
@@ -191,55 +209,29 @@ class TrainingCore(training_utils.TrainingCore):
                 blending_param=sample.blending_param,
             )
 
-            rendered_img = result.rendered_img.reshape(-1, C, H, W)
+            rendered_img = result.gp_render_img.reshape(-1, C, H, W)
             # [K, C, H, W]
 
-            utils.ein_scatter(
-                dst=rgb_frames,  # [T, C, H, W]
-                dst_expr=(None, *"chw"),
-
-                idx=idxes.to(rgb_frames.device),  # [K]
-                idx_expr="k",
-
-                src=rendered_img.to(rgb_frames),  # [K, C, H, W]
-                src_expr="kchw",
-
-                inplace=True,
-                mode=utils.ScatterMode.SET,
+            rgb_frames.index_put_(
+                (idxes,),
+                utils.denormalize_image(
+                    rendered_img,
+                    dtype=rgb_frames.dtype,
+                    device=rgb_frames.device
+                )
             )
-            # rgb_frames[idesx[k], c, h, w] = rendered_img[k, c, h, w]
-
-            """
-
-            ... syms None
-            ... syms 1
-            ... syms 1
-
-            dst[idx[k], c, h, w] = src[k, c, h, w]
-
-            dst[c, h, w, ?]
-            idx[c, h, w, k]
-            src[c, h, w, k]
-
-
-            dst[c, h, w, 1, 1, ?]
-            idx[c, 1, w, a, b, 1]
-            src[1, h, w, a, b, 1]
-
-
-
-
-            dst[idx[a, b], c] = src[a, b]
-
-            """
 
             avatar_model: smplx_utils.Model = result.avatar_model
 
-        utils.write_video(
-            path=self.__config.proj_dir / f"rgb_{int(time.time())}.mp4",
-            video=rgb_frames,
+        with video_utils.VideoWriter(
+            path=self.__config.proj_dir / f"rgb_{utils.timestamp_sec()}.mp4",
+            height=H,
+            width=W,
+            color_type=video_utils.ColorType.RGB,
             fps=25,
-        )
+        ) as video_writer:
+            for i in range(T):
+                video_writer.write(rgb_frames[i])
 
     @utils.mem_clear
     @torch.no_grad()
@@ -282,13 +274,13 @@ class TrainingCore(training_utils.TrainingCore):
                 blending_param=sample.blending_param,
             )
 
-            rendered_img = result.rendered_img.reshape(-1, C, H, W)
+            rendered_img = result.gp_render_img.reshape(-1, C, H, W)
             # [K, C, H, W]
 
             for k in range(batch_size):
                 cur_avatar_model = result.avatar_model[k]
 
-                rendered_img = result.rendered_img[k]
+                rendered_img = result.gp_render_img[k]
                 # [C, H, W]
 
                 mesh_ras_result = rendering_utils.rasterize_mesh(
@@ -342,11 +334,6 @@ class TrainingCore(training_utils.TrainingCore):
         )
         # [H, W, 1]
 
-        print(f"{face_idx_map.shape=}")
-        print(f"{face_idx_map.dtype=}")
-        print(f"{face_idx_map.min()=}")
-        print(f"{face_idx_map.max()=}")
-
         face_color = face_color_sum / (1e-2 + face_weight_sum).unsqueeze(-1)
         # [F + 1, 3]
 
@@ -369,13 +356,17 @@ class TrainingCore(training_utils.TrainingCore):
         tex = tex.reshape(tex_h, tex_w, 3)
 
         utils.write_image(
-            path=self.__config.proj_dir / f"tex_{int(time.time())}.png",
+            path=self.__config.proj_dir / f"tex_{utils.timestamp_sec()}.png",
             img=einops.rearrange(tex, "h w c -> c h w"),
         )
 
     @utils.mem_clear
     @torch.no_grad()
-    def bake_texture_face_2(self, tex_h: int, tex_w: int):
+    def bake_texture_face_2(
+        self,
+        tex_h: int,
+        tex_w: int,
+    ):
         """
         load_latest
         call bake_texture_face_2 tex_h=1000 tex_w=1000
@@ -401,6 +392,8 @@ class TrainingCore(training_utils.TrainingCore):
         face_color_all_sum_xxt = torch.zeros(
             (F + 1, C, C), dtype=torch.float64, device=self.__config.device)
 
+        print(f"{F=}")
+
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=8)):
             utils.mem_clear()
 
@@ -419,10 +412,18 @@ class TrainingCore(training_utils.TrainingCore):
                 faces_per_pixel=1,
             )
 
-            pix_to_face = fragments.pix_to_face.reshape(-1)
-            # [B * H * W]
+            pix_to_face = fragments.pix_to_face.reshape(B, H, W)
+
+            pix_to_face = torch.where(
+                0.5 <= sample.mask,
+                pix_to_face,
+                -1,
+            )
+            # discard pixels not on person
 
             pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
+
+            pix_to_face = pix_to_face.reshape(-1)
             # [B * H * W]
 
             ref_img = einops.rearrange(
@@ -434,34 +435,34 @@ class TrainingCore(training_utils.TrainingCore):
                 x=ref_img,  # [B * H * W, C]
                 inplace=True,
 
-                dst_cnts=face_color_all_cnt,  # [F]
+                dst_cnt=face_color_all_cnt,  # [F]
                 dst_sum_x=face_color_all_sum_x,  # [F, C]
                 dst_sum_xxt=face_color_all_sum_xxt,  # [F, C, C]
             )
 
-        face_color_means, face_color_pcas, face_color_stds = pca_utils.get_pca(
+        face_color_mean, face_color_pca, face_color_std = pca_utils.get_pca(
             cnt=face_color_all_cnt,
             sum_x=face_color_all_sum_x,
             sum_xxt=face_color_all_sum_xxt,
         )
 
-        # face_color_means[F + 1, C]
-        # face_color_pcas[F + 1, C, C]
-        # face_color_stds[F + 1, C]
+        # face_color_mean[F + 1, C]
+        # face_color_pca[F + 1, C, C]
+        # face_color_std[F + 1, C]
 
-        face_ell_means = face_color_means
+        face_color_ell_mean = face_color_mean
 
-        inv_face_ell_axis = torch.where(
+        inv_face_color_ell_axis = torch.where(
             (2 <= face_color_all_cnt)[..., None, None].expand(F + 1, C, C),
-            face_color_pcas * face_color_stds.unsqueeze(-1),
+            (face_color_pca * face_color_std.unsqueeze(-1)).transpose(-1, -2),
             10 * torch.eye(
-                C, dtype=face_color_pcas.dtype, device=face_color_pcas.device)
+                C, dtype=face_color_pca.dtype, device=face_color_pca.device)
             .expand(F + 1, C, C)
         ).inverse()
         # [F, C, C]
 
-        face_color_inlier_cnt = torch.zeros(
-            (F + 1,), dtype=torch.int, device=self.__config.device)
+        face_color_inlier_sum_weight = torch.zeros(
+            (F + 1,), dtype=torch.float64, device=self.__config.device)
 
         face_color_inlier_sum_x = torch.zeros(
             (F + 1, C), dtype=torch.float64, device=self.__config.device)
@@ -494,33 +495,32 @@ class TrainingCore(training_utils.TrainingCore):
                 sample.img, "b c h w -> b h w c").reshape(B * H * W, C)
             # [B * H * W, C]
 
-            cur_face_ell_means = face_ell_means[pix_to_face]
+            cur_face_color_ell_mean = face_color_ell_mean[pix_to_face]
             # [B * H * W, C]
 
-            cur_inv_face_ell_axis = inv_face_ell_axis[pix_to_face]
+            cur_inv_face_color_ell_axi = inv_face_color_ell_axis[pix_to_face]
             # [B * H * W, C, C]
 
             ell_coord = (
-                cur_inv_face_ell_axis @
-                (ref_img - cur_face_ell_means).unsqueeze(-1)).squeeze(-1)
+                cur_inv_face_color_ell_axi @
+                (ref_img - cur_face_color_ell_mean).unsqueeze(-1)).squeeze(-1)
             # [B * H * W, C]
 
-            ell_dist = utils.vec_norm(ell_coord)
+            weight = 1 / (0.1 + utils.vec_norm(ell_coord).square())
             # [B * H * W]
 
-            pix_to_face = torch.where(
-                ell_dist <= 1.5,
-                pix_to_face,
-                F,
-            )
-            # [B * H * W]
-
-            face_color_inlier_cnt += pix_to_face.bincount(minlength=F + 1)
+            face_color_inlier_sum_weight.index_add_(
+                0, pix_to_face, weight)
 
             face_color_inlier_sum_x.index_add_(
-                0, pix_to_face,
+                0,
+
+                pix_to_face,
+
                 ref_img.to(face_color_inlier_sum_x.device,
-                           face_color_inlier_sum_x.dtype))
+                           face_color_inlier_sum_x.dtype) *
+                weight.unsqueeze(-1)
+            )
 
         face_idx_map = texture_utils.calc_face_idx(
             tex_vert_pos=avatar_model.tex_vert_pos,
@@ -533,32 +533,26 @@ class TrainingCore(training_utils.TrainingCore):
 
         face_idx_map = (face_idx_map + (F + 1)) % (F + 1)
 
-        print(f"{face_idx_map.shape=}")
-        print(f"{face_idx_map.dtype=}")
-        print(f"{face_idx_map.min()=}")
-        print(f"{face_idx_map.max()=}")
+        face_color = torch.where(
+            (10 <= face_color_all_cnt).unsqueeze(-1).expand(F + 1, 3),
 
-        face_color = face_color_inlier_sum_x / \
-            (1e-2 + face_color_inlier_cnt).unsqueeze(-1)
-        # [F + 1, C]
+            face_color_inlier_sum_x /
+            (1e-2 + face_color_inlier_sum_weight).unsqueeze(-1),
+
+            face_color_all_sum_x /
+            (1e-2 + face_color_all_cnt).unsqueeze(-1),
+        )
 
         face_color[F, :] = 1
 
         face_idx_map = face_idx_map.reshape(-1, 1).expand(tex_h * tex_w, 3)
 
-        print(f"{face_idx_map.min()=}")
-        print(f"{face_idx_map.max()=}")
-
         tex = torch.gather(face_color, 0, face_idx_map)
         # [H * W, 3]
-
-        """
-        tex[i, j] = face_color[face_idx_map[i, j], j]
-        """
 
         tex = tex.reshape(tex_h, tex_w, 3)
 
         utils.write_image(
-            path=self.__config.proj_dir / f"tex_{int(time.time())}.png",
+            path=self.__config.proj_dir / f"tex_{utils.timestamp_sec()}.png",
             img=einops.rearrange(tex, "h w c -> c h w"),
         )

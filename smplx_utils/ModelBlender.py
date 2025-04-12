@@ -112,3 +112,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
             blending_param=blending_param.combine(self.default_blending_param),
             device=self.model_builder.device,
         )
+
+    def refresh(self) -> None:
+        if hasattr(self.model_builder, "refresh"):
+            self.model_builder.refresh()

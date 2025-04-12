@@ -136,31 +136,31 @@ class TrainingResult:
 class TrainingCore:
     @property
     def module(self) -> typing.Optional[torch.nn.Module]:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     @module.setter
     def module(self, module: typing.Optional[torch.nn.Module]):
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     # ---
 
     @property
     def optimizer(self) -> typing.Optional[torch.optim.Optimizer]:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     @optimizer.setter
     def optimizer(self, optimizer: typing.Optional[torch.optim.Optimizer]):
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     # ---
 
     @property
     def scheduler(self) -> object:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     @optimizer.setter
     def scheduler(self, scheduler: object):
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     # ---
 
@@ -180,10 +180,10 @@ class TrainingCore:
     # ---
 
     def train(self) -> TrainingResult:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     def eval(self):
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
 
 DEFAULT_DIFF_TIME_WEIGHT = 1 / (30 * 60)
@@ -349,7 +349,7 @@ class Trainer:
         proj_dir: os.PathLike,
         device: torch.device,
     ):
-        self.__proj_dir = pathlib.Path(proj_dir)
+        self.__proj_dir = utils.to_pathlib_path(proj_dir)
 
         if not self.__proj_dir.exists():
             os.makedirs(self.__proj_dir, exist_ok=True)

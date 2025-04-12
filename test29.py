@@ -6,7 +6,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import config, segment_utils, smplx_utils, utils
+from . import config, segment_utils, smplx_utils, utils, video_utils
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -17,12 +17,13 @@ DEVICE = utils.CPU_DEVICE
 def main1():
     video_path = DIR / "people_snapshot_public/female-1-casual/female-1-casual.mp4"
 
-    video, fps = utils.read_video(video_path)
+    video, fps = video_utils.read_video(
+        video_path, video_utils.ColorType.RGB)
 
     segment_utils.segment(
-        imgs=video,  # [T, C, H, W]
-        out_dir=DIR / f"segment_2025_0406_01",
-        out_fps=fps,
+        imgs=[i for i in video],  # [T, C, H, W]
+        fps=fps,
+        out_dir=DIR / f"segment_2025_0412_1",
     )
 
 

@@ -19,21 +19,21 @@ class Sample:
         camera_transform: transform_utils.ObjectTransform,  # [...]
 
         img: torch.Tensor,  # [..., C, H, W]
-        mask: torch.Tensor,  # [..., H, W]
+        mask: torch.Tensor,  # [..., 1, H, W]
         blending_param: object,
     ):
         C, H, W = -1, -2, -3
 
         C, H, W = utils.check_shapes(
             img, (..., C, H, W),
-            mask, (..., H, W),
+            mask, (..., 1, H, W),
         )
 
         self.shape = utils.broadcast_shapes(
             shape,
             camera_transform,
             img.shape[:-3],
-            mask.shape[:-2],
+            mask.shape[:-3],
             blending_param,
         )
 
@@ -58,7 +58,7 @@ class Sample:
 
     @property
     def mask(self) -> torch.Tensor:
-        return utils.try_batch_expand(self.raw_mask, self.shape, -2)
+        return utils.try_batch_expand(self.raw_mask, self.shape, -3)
 
     @property
     def blending_param(self):
@@ -133,7 +133,12 @@ class Dataset(dataset_utils.Dataset):
         return self.sample.device
 
     def __getitem__(self, idx) -> Sample:
-        return self.sample[idx]
+        ret = self.sample[idx]
+
+        ret.img = utils.normalize_image(ret.img)
+        ret.mask = utils.normalize_image(ret.mask)
+
+        return ret
 
     def to(self, *args, **kwargs) -> Dataset:
         self.sample = self.sample.to(*args, **kwargs)

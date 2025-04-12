@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import enum
 import functools
@@ -10,14 +12,12 @@ import pickle
 import random
 import sys
 import time
-import types
 import typing
 
 import cv2 as cv
 import einops
 import PIL
 import torch
-import torch_scatter
 import torchvision
 from beartype import beartype
 
@@ -78,6 +78,21 @@ def print_cur_pos():
 
 
 @beartype
+def timestamp_sec() -> int:
+    return int(time.time())
+
+
+@beartype
+def timestamp_msec() -> int:
+    return int(time.time() * 1000)
+
+
+@beartype
+def timestamp_usec() -> int:
+    return int(time.time() * 1000000)
+
+
+@beartype
 def set_add(s: set[object], obj: object):
     old_size = len(s)
     s.add(obj)
@@ -85,21 +100,28 @@ def set_add(s: set[object], obj: object):
 
 
 @beartype
-def set_discard(s: set[object], obj: object):
+def set_discard(s: set[object], obj: object) -> bool:
     old_size = len(s)
     s.discard(obj)
     return old_size != len(s)
 
 
 @beartype
-def dict_insert(d: dict[object, object], key: object, value: object):
+def dict_insert(
+    d: dict[object, object],
+    key: object,
+    value: object,
+):
     old_size = len(d)
     value = d.setdefault(key, value)
     return key, value, old_size != len(d)
 
 
 @beartype
-def dict_pop(d: dict[object, object], key: object):
+def dict_pop(
+    d: dict[object, object],
+    key: object,
+):
     old_size = len(d)
     d.pop(key, None)
     return old_size != len(d)
@@ -270,12 +292,14 @@ def all_same(*args: object):
     return ret
 
 
+_to_pillow_image_core = torchvision.transforms.ToPILImage()
+
+
 @beartype
 def to_pillow_image(
-    imgs: list[torch.Tensor],
-) -> list[PIL.Image.Image]:
-    f = torchvision.transforms.ToPILImage()
-    return [f(img * 255) for img in imgs]
+    img: torch.Tensor,  # [C, H, W] 255
+) -> PIL.Image.Image:
+    return _to_pillow_image_core(img)
 
 
 @beartype
@@ -595,13 +619,13 @@ def batch_shrink(
     x: torch.Tensor,
     dim: typing.Optional[int] = None,
 ) -> typing.Optional[torch.Tensor]:
-    dim = x.dim() if dim is None else normed_idx(dim, x.dim())
+    dim = x.ndim if dim is None else normed_idx(dim, x.ndim)
 
-    idx = [None for _ in range(x.dim())]
+    idx = [None for _ in range(x.ndim)]
 
     is_first = True
 
-    for i in range(x.dim()):
+    for i in range(x.ndim):
         if dim <= i or x.shape[i] == 0 or x.stride(i) != 0:
             is_first = False
             idx[i] = slice(None)
@@ -724,7 +748,7 @@ def ein_rearrange(
     assert it_syms.issubset(ot_syms)
 
     if all_same(0 <= it_ellipsis_idx, 0 <= ot_ellipsis_idx):
-        ellipsis_len = x.dim() - len(it) + 1
+        ellipsis_len = x.ndim - len(it) + 1
         assert 0 <= ellipsis_len
     else:
         ellipsis_len = 0
@@ -749,7 +773,7 @@ def ein_rearrange(
             continue
 
         if sym not in sym_idx_table:
-            sym_idx_table[sym] = x.dim()
+            sym_idx_table[sym] = x.ndim
             x = x.unsqueeze(-1)
 
         permute_list.append(sym_idx_table[sym])
@@ -963,6 +987,15 @@ def vec_norm(
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
     return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim)
+
+
+@beartype
+def vec_sq_norm(
+    x: torch.Tensor,  # [...]
+    dim: int = -1,
+    keepdim: bool = False,
+) -> torch.Tensor:  # [...]
+    return x.square().sum(dim=dim, keepdim=keepdim)
 
 
 @beartype
@@ -1458,14 +1491,14 @@ def make_homo(
     x: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
-    dim = normed_idx(dim, x.dim())
+    dim = normed_idx(dim, x.ndim)
 
     shape = list(x.shape)
     shape[dim] += 1
 
     ret = torch.empty(shape, dtype=x.dtype, device=x.device)
 
-    idxes = [slice(None)] * x.dim()
+    idxes = [slice(None)] * x.ndim
 
     idxes[dim] = slice(None, -1)
     ret[tuple(idxes)] = x
@@ -1481,9 +1514,9 @@ def homo_normalize(
     x: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
-    dim = normed_idx(dim, x.dim())
+    dim = normed_idx(dim, x.ndim)
 
-    idxes = [slice(None)] * x.dim()
+    idxes = [slice(None)] * x.ndim
     idxes[dim] = slice(-1, None)
 
     return x / x[tuple(idxes)]
@@ -1752,11 +1785,7 @@ def write_pickle(
     *,
     mode: str = "wb+",
 ):
-    path = to_pathlib_path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    with open(path, mode=mode) as f:
+    with create_file(path, mode) as f:
         pickle.dump(data, f)
 
 
@@ -1765,9 +1794,15 @@ def normalize_image(
     img: torch.Tensor,
     *,
     k: int = 255,
-    dtype: torch.dtype = torch.float16,
+    dtype: torch.dtype = torch.float32,
+    device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:
-    return torch.div(img, k, out=torch.empty_like(img, dtype=dtype))
+    return torch.div(
+        img.clamp(0, k),
+        k,
+        rounding_mode=None,
+        out=torch.empty_like(img, dtype=dtype, device=device),
+    )
 
 
 @beartype
@@ -1776,8 +1811,9 @@ def denormalize_image(
     *,
     k: int = 255,
     dtype: torch.dtype = torch.uint8,
+    device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:
-    return (img * k).round().clamp(0, k).to(dtype)
+    return (img * k).round().clamp(0, k).to(device, dtype)
 
 
 @beartype
@@ -1794,7 +1830,7 @@ def write_image(
     path: os.PathLike,
     img: torch.Tensor,  # [C, H, W]
 ):
-    assert img.dim() == 3
+    assert img.ndim == 3
 
     path = to_pathlib_path(path)
 
@@ -1817,32 +1853,10 @@ def write_image(
 
 @beartype
 @mem_clear
-def read_video(
-    path: os.PathLike
-) -> tuple[
-    torch.Tensor,  # video[T, C, H, W]
-    int,  # fps
-]:
-    video, audio, d = torchvision.io.read_video(
-        path,
-        output_format="TCHW",
-        pts_unit="sec",
-    )
-    # [T, C, H, W]
-
-    video_fps = int(d.get("video_fps", -1))
-
-    video = normalize_image(video)
-
-    return video, video_fps
-
-
-@beartype
-@mem_clear
 def write_video(
     path: os.PathLike,
     video: torch.Tensor,  # [T, C, H, W]
-    fps: int,
+    fps: float,
 ) -> None:
     T, C, H, W = -1, -2, -3, -4
 
@@ -1852,9 +1866,85 @@ def write_video(
     writer = cv.VideoWriter(path, fourcc, fps, (W, H))
 
     for t in range(T):
-        writer.write(einops.rearrange(
+        writer.write(cv.cvtColor(einops.rearrange(
             denormalize_image(video[t]).cpu().numpy(),
-            "c h w -> h w c",
-        ))
+            "c h w -> h w c"), cv.COLOR_RGB2BGR))
 
     writer.release()
+
+
+@beartype
+def write_tensor_to_file(path: os.PathLike, x: torch.Tensor) -> None:
+    path = to_pathlib_path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    if x.dtype.is_floating_point:
+        def to_str(val): return f"{float(val):+.7e}"
+    else:
+        def to_str(val): return str(int(val))
+
+    with create_file(path) as f:
+        def _write_tensor(tensor: torch.Tensor) -> bytes:
+            if tensor.ndim == 0:
+                f.write(to_str(tensor.item()))
+                return
+
+            f.write("[ ")
+
+            k = x.shape[0]
+
+            for i in range(k):
+                _write_tensor(x[i])
+
+                if i < k - 1:
+                    f.write(", ")
+
+            f.write(" ]")
+
+        _write_tensor(x)
+
+
+@beartype
+def smooth_clamp(
+    x: torch.Tensor,
+
+    x_lb: float,
+    x_rb: float,
+
+    slope_l: float,
+    slope_r: float,
+
+    smoothness_l: float = 1.0,
+    smoothness_r: float = 1.0,
+) -> torch.Tensor:
+    assert x_lb <= x_rb
+
+    assert 0 <= slope_l
+    assert slope_l <= 1
+
+    assert 0 <= slope_r
+    assert slope_r <= 1
+
+    assert 0 < smoothness_l
+    assert 0 < smoothness_r
+
+    center = (x_lb + x_rb) / 2
+    scale = x_rb - x_lb
+
+    centered_x = x - center
+
+    normed_x_l = centered_x / (+scale * smoothness_l)
+    normed_x_r = centered_x / (-scale * smoothness_r)
+
+    y_l = \
+        ((1 - slope_l) * smoothness_l * scale) * torch.exp(normed_x_l) + \
+        slope_l * centered_x + \
+        ((slope_l - 1) * smoothness_l * scale + center)
+
+    y_r = \
+        ((slope_r - 1) * smoothness_r * scale) * torch.exp(normed_x_r) + \
+        slope_r * centered_x + \
+        ((1 - slope_r) * smoothness_r * scale + center)
+
+    return torch.where(centered_x < 0, y_l, y_r)

@@ -12,10 +12,10 @@ from . import utils
 class Dataset:
     @property
     def shape(self) -> torch.Size:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     def __getitem__(self, idx):
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
 
 @beartype
@@ -24,8 +24,7 @@ class DatasetIterator:
         self,
         dataset: Dataset,
         batches_cnt: int,
-        random_batch_size: bool,
-        random_sample: bool,
+        shuffle: bool,
     ):
         self.dataset = dataset
 
@@ -36,27 +35,15 @@ class DatasetIterator:
 
         batches_cnt = min(batches_cnt, dataset_size)
 
-        if random_sample:
+        if shuffle:
             idxes = torch.randperm(dataset_size, dtype=torch.long)
         else:
             idxes = torch.arange(dataset_size, dtype=torch.long)
 
         self.batch_idxes = torch.unravel_index(idxes, dataset_shape)
 
-        k = dataset_size // batches_cnt
-        l = dataset_size % batches_cnt
-
-        batch_sizes = [k] * (batches_cnt - l) + [k+1] * l
-
-        if random_batch_size:
-            random.shuffle(batch_sizes)
-
-        acc_batches_size = [0 for _ in range(batches_cnt + 1)]
-
-        for i in range(1, batches_cnt + 1):
-            acc_batches_size[i] = acc_batches_size[i-1] + batch_sizes[i-1]
-
-        self.acc_batches_size = acc_batches_size
+        self.acc_batches_size = [
+            i * dataset_size // batches_cnt for i in range(batches_cnt + 1)]
 
         self.batch_i = 0
 
@@ -87,17 +74,11 @@ def load(
     *,
     batch_size: int = 0,
     batches_cnt: int = 0,
-    random_batch_size: bool = True,
-    random_sample: bool = True,
+    shuffle: bool = True,
 ):
     assert (0 < batch_size) != (0 < batches_cnt)
 
     if batches_cnt <= 0:
         batches_cnt = (dataset.shape.numel() + batch_size - 1) // batch_size
 
-    return DatasetIterator(
-        dataset,
-        batches_cnt,
-        random_batch_size,
-        random_sample,
-    )
+    return DatasetIterator(dataset, batches_cnt, shuffle)

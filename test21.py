@@ -123,7 +123,7 @@ def main1():
                     )
                 )
 
-            frames[frame_i] = result.rendered_img.detach()
+            frames[frame_i] = result.gp_render_img.detach()
 
             mean_rgb_loss = result.rgb_loss.mean()
             mean_lap_loss = result.lap_smoothing_loss.mean()

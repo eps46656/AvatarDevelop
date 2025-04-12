@@ -95,13 +95,13 @@ def main1():
         bg_color=torch.tensor(
             [1.0, 1.0, 1.0], dtype=utils.FLOAT, device=DEVICE),
 
-        gp_means=gp_means,
-        gp_opacities=gp_opacities,
-        gp_scales=gp_scales,
-        gp_rots=gp_rots,
+        gp_mean=gp_means,
+        gp_opacity=gp_opacities,
+        gp_scale=gp_scales,
+        gp_rot_q=gp_rots,
 
-        gp_shs=None,
-        gp_colors=gp_colors,
+        gp_sh=None,
+        gp_color=gp_colors,
 
         device=CUDA_DEVICE,
     )

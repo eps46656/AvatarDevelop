@@ -132,7 +132,7 @@ class MyTrainingCore(training_utils.TrainingCore):
                     blending_param=sample.blending_param,
                 )
 
-                rendered_img = result.rendered_img.reshape((-1, C, H, W))
+                rendered_img = result.gp_render_img.reshape((-1, C, H, W))
                 # [K, C, H, W]
 
                 out_frames.scatter_(
@@ -185,11 +185,11 @@ def map_to_texture(
         .reshape((-1, 3)).to(utils.CPU_DEVICE)
     # [F, 3]
 
-    gp_colors = torch.exp(gom_module.gp_colors) \
+    gp_colors = torch.exp(gom_module.gp_color) \
         .to(utils.CPU_DEVICE)
     # [F, C]
 
-    gp_opacities = torch.exp(gom_module.gp_log_opacities) \
+    gp_opacities = torch.exp(gom_module.gp_log_opacity) \
         .to(utils.CPU_DEVICE)
     # [F, 1]
 

@@ -7,16 +7,16 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import camera_utils, smplx_utils, transform_utils, utils
+from . import camera_utils, smplx_utils, transform_utils, utils, video_utils
 
 
 @beartype
 @dataclasses.dataclass
 class SubjectData:
-    fps: int
+    fps: float
 
     video: torch.Tensor  # [T, C, H, W]
-    mask: torch.Tensor  # [T, H, W]
+    mask: torch.Tensor  # [T, 1, H, W]
 
     camera_config: camera_utils.CameraConfig
     camera_transform: transform_utils.ObjectTransform
@@ -29,13 +29,17 @@ class SubjectData:
 @beartype
 def _read_mask(
     subject_dir: pathlib.Path,
-    fps: int,
+    fps: float,
     device: torch.device,
-) -> torch.Tensor:
+) -> torch.Tensor:  # [T, 1, H, W]
     mask_video_path = subject_dir / "masks.mp4"
 
+    def f():
+        return video_utils.read_video_mask(
+            mask_video_path, dtype=torch.float16, device=device)[0]
+
     if mask_video_path.exists():
-        return utils.read_video(mask_video_path)[0].mean(1).to(device)
+        return f()
 
     f = h5py.File(subject_dir / "masks.hdf5")
 
@@ -43,14 +47,18 @@ def _read_mask(
 
     T, H, W = masks.shape
 
-    ret = torch.empty((T, 1, H, W), dtype=utils.FLOAT)
+    with video_utils.VideoWriter(
+        mask_video_path,
+        height=H,
+        width=W,
+        color_type=video_utils.ColorType.RGB,
+        fps=fps,
+    ) as video_writer:
+        for i in tqdm.tqdm(range(T)):
+            video_writer.write(utils.denormalize_image(torch.from_numpy(
+                masks[i]).expand(3, H, W)))
 
-    for i in tqdm.tqdm(range(T)):
-        ret[i, 0] = torch.from_numpy(masks[i])
-
-    utils.write_video(mask_video_path, ret.expand((T, 3, H, W)), fps)
-
-    return ret.to(device).squeeze(1)
+    return f()
 
 
 @beartype
@@ -136,7 +144,7 @@ def _read_smpl_blending_param(
             0.0
         )
     elif body_shapes_cnt < cur_body_shapes_cnt:
-        body_shapes = body_shapes[:, :-body_shapes_cnt]
+        body_shapes = body_shapes[:, :body_shapes_cnt]
 
     # [body_shapes_cnt]
 
@@ -150,7 +158,7 @@ def _read_smpl_blending_param(
             0.0
         )
     elif poses_cnt * 3 < cur_flatten_poses_cnt:
-        poses = poses[:, :-poses_cnt * 3]
+        poses = poses[:, :poses_cnt * 3]
 
     poses = poses.reshape(T, poses_cnt, 3)
 
@@ -162,11 +170,13 @@ def _read_smpl_blending_param(
 
     # ---
 
+    dd = (device, utils.FLOAT)
+
     return smplx_utils.BlendingParam(
-        body_shape=body_shapes[:frames_cnt].to(device, utils.FLOAT),
-        global_transl=global_transl[:frames_cnt].to(device, utils.FLOAT),
-        global_rot=global_rot[:frames_cnt].to(device, utils.FLOAT),
-        body_pose=body_poses[:frames_cnt].to(device, utils.FLOAT),
+        body_shape=body_shapes[:frames_cnt].to(*dd),
+        global_transl=global_transl[:frames_cnt].to(*dd),
+        global_rot=global_rot[:frames_cnt].to(*dd),
+        body_pose=body_poses[:frames_cnt].to(*dd),
     )
 
 
@@ -176,7 +186,7 @@ def read_subject(
     model_data: smplx_utils.ModelData,
     device: torch.device,
 ):
-    subject_dir = pathlib.Path(subject_dir)
+    subject_dir = utils.to_pathlib_path(subject_dir)
 
     assert subject_dir.is_dir()
 
@@ -184,7 +194,8 @@ def read_subject(
 
     subject_video_path = subject_dir / f"{subject_name}.mp4"
 
-    video, fps = utils.read_video(subject_video_path)
+    video, fps = video_utils.read_video(
+        subject_video_path, video_utils.ColorType.RGB)
     # [T, C, H, W]
 
     img_h, img_w = video.shape[2:]

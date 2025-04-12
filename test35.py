@@ -1,10 +1,13 @@
 import dataclasses
+import math
 import pathlib
 import typing
 
 import einops
 import numpy as np
 import torch
+import torchvision
+import torchvision.transforms.functional
 import tqdm
 from beartype import beartype
 
@@ -14,8 +17,8 @@ import pytorch3d.structures
 
 from . import (camera_utils, config, dataset_utils, face_seg_utils,
                gom_avatar_training_utils, gom_utils, people_snapshot_utils,
-               rendering_utils, smplx_utils, training_utils, transform_utils,
-               utils)
+               rendering_utils, segment_utils, smplx_utils, training_utils,
+               transform_utils, utils, video_utils)
 
 
 class AlbedoMeshShader(pytorch3d.renderer.mesh.shader.ShaderBase):
@@ -38,7 +41,7 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0404_2"
+PROJ_DIR = DIR / "train_2025_0410_1"
 
 ALPHA_RGB = 1.0
 ALPHA_LAP_SMOOTHING = 10.0
@@ -154,17 +157,18 @@ def main1():
     # ---
 
     obj_list = [
-        "UPPER_GARMENT",
-        "LOWER_GARMENT",
-        "HAIR",
+        segment_utils.ObjectType.UPPER_GARMENT,
+        segment_utils.ObjectType.LOWER_GARMENT,
+        segment_utils.ObjectType.HAIR,
     ]
 
-    mask_dir = DIR / "segment_2025_0406_01"
+    mask_dir = DIR / "segment_2025_0412_1"
 
-    masks = [
-        utils.read_video(mask_dir / f"mask<{obj}>.mp4")[0].mean(1).to(DEVICE)
-        for obj in obj_list
-    ]
+    masks = [video_utils.read_video_mask(
+        mask_dir / segment_utils.blurred_object_mask_filename(obj),
+        dtype=torch.float16,
+        device=DEVICE,
+    )[0] for obj in obj_list]
 
     # [K][T, H, W]
 
@@ -172,15 +176,29 @@ def main1():
 
     F = model_data.mesh_data.faces_cnt
 
-    face_ballot_box = torch.zeros(
-        (K, F + 1),  # F + 1 for -1 pixel to face index
+    face_ballots_cnt = torch.zeros(
+        (F + 1,),  # F + 1 for -1 pixel to face index
+        dtype=torch.int,
+        device=DEVICE,
+    )
+
+    face_pos_ballot_box = torch.zeros(
+        (F + 1, K),  # F + 1 for -1 pixel to face index
         dtype=utils.FLOAT,
         device=DEVICE,
     )
 
+    face_neg_ballot_box = torch.zeros(
+        (F + 1, K),  # F + 1 for -1 pixel to face index
+        dtype=utils.FLOAT,
+        device=DEVICE,
+    )
+
+    T, C, H, W = dataset.sample.img.shape
+
     with torch.no_grad():
-        for batch_idxes, sample in tqdm.tqdm(
-                dataset_utils.load(dataset, batch_size=8)):
+        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
+                dataset, batch_size=8, shuffle=False)):
             assert len(batch_idxes) == 1
 
             idxes = batch_idxes[0]
@@ -208,27 +226,44 @@ def main1():
                     faces_per_pixel=1,
                 )
 
-                pixel_to_faces = mesh_ras_result.pixel_to_faces
-                # [H, W, 1]
+                pix_to_face: torch.Tensor = \
+                    mesh_ras_result.pix_to_face.reshape(H * W)
+                # [H * W]
 
-                pixel_to_faces = pixel_to_faces.squeeze(-1)
-                # [H, W]
-
-                pixel_to_faces = (pixel_to_faces + (F + 1)) % (F + 1)
+                pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
                 # -1 -> F       [0, F-1] -> [0, F-1]
 
+                print(f"{idxes[i]=}")
+
                 for k in range(K):
-                    face_seg_utils.vote(
-                        pixel_to_faces,  # [H, W]
-                        masks[k][idxes[i]].to(utils.FLOAT),  # [H, W]
-                        face_ballot_box[k],
-                    )
+                    cur_mask = masks[k][idxes[i]].to(utils.FLOAT)
+
+                    ballot = cur_mask.unsqueeze(0) * 2 - 1
+
+                    ballot = ballot.view(H * W)
+
+                    face_ballots_cnt += pix_to_face.bincount(minlength=F + 1)
+
+                    face_pos_ballot_box[:, k].index_add_(
+                        0, pix_to_face, ballot.clamp(0, None))
+
+                    face_neg_ballot_box[:, k].index_add_(
+                        0, pix_to_face, ballot.clamp(None, 0))
 
     utils.write_pickle(
-        DIR / "face_ballot_box",
+        PROJ_DIR / f"face_voting_result_{utils.timestamp_sec()}.pkl",
         {
-            "face_ballot_box": np.array(face_ballot_box.numpy(force=True),
-                                        dtype=np.float64, copy=True),
+            "face_ballots_cnt": np.array(
+                face_ballots_cnt.numpy(force=True),
+                dtype=np.int32, copy=True),
+
+            "face_pos_ballot_box": np.array(
+                face_pos_ballot_box.numpy(force=True),
+                dtype=np.float64, copy=True),
+
+            "face_neg_ballot_box": np.array(
+                face_neg_ballot_box.numpy(force=True),
+                dtype=np.float64, copy=True),
         }
     )
 
@@ -241,8 +276,6 @@ def main2():
     training_core: gom_avatar_training_utils.TrainingCore = \
         trainer.training_core
 
-    dataset = training_core.dataset
-
     smplx_model_blender: smplx_utils.ModelBlender = \
         training_core.module.avatar_blender
 
@@ -251,13 +284,49 @@ def main2():
 
     model_data: smplx_utils.ModelData = smplx_model_builder.model_data
 
-    face_ballot_box = torch.from_numpy(
-        utils.read_pickle(DIR / "face_ballot_box")["face_ballot_box"])
-    # [K, F]
+    face_voting_result = utils.read_pickle(
+        PROJ_DIR / "face_voting_result_1744458415.pkl")
 
-    face_ballot_box = face_ballot_box.to(utils.FLOAT)
+    face_ballots_cnt = torch.from_numpy(
+        face_voting_result["face_ballots_cnt"])
+    # [F + 1]
+
+    face_pos_ballot_box = torch.from_numpy(
+        face_voting_result["face_pos_ballot_box"])
+
+    face_neg_ballot_box = torch.from_numpy(
+        face_voting_result["face_neg_ballot_box"])
+
+    face_ballots_cnt = face_ballots_cnt.to(torch.float64)
+    face_pos_ballot_box = face_pos_ballot_box.to(torch.float64)
+    face_neg_ballot_box = face_neg_ballot_box.to(torch.float64)
+
+    print(f"{face_ballots_cnt.shape=}")
+    print(f"{face_pos_ballot_box.shape=}")
+    print(f"{face_neg_ballot_box.shape=}")
+
+    print(f"{face_pos_ballot_box.min()=}")
+    print(f"{face_pos_ballot_box.max()=}")
+
+    print(f"{face_neg_ballot_box.min()=}")
+    print(f"{face_neg_ballot_box.max()=}")
+
+    face_ballot_box = ((
+        face_pos_ballot_box + face_neg_ballot_box
+    ) / face_ballots_cnt.unsqueeze(-1))[:-1, :].to(DEVICE)
+
+    # ([F + 1, K] + [F + 1, K]) / [F + 1, 1] -> [F + 1, K]
 
     F = model_data.mesh_data.faces_cnt
+
+    face_ballot_box = model_data.mesh_data.face_lap_trans(
+        face_ballot_box, 0.05)
+
+    face_ballot_box = model_data.mesh_data.face_lap_trans(
+        face_ballot_box, 0.05)
+
+    face_ballot_box = model_data.mesh_data.face_lap_trans(
+        face_ballot_box, 0.05)
 
     obj_list = [
         "UPPER_GARMENT",
@@ -268,7 +337,8 @@ def main2():
     K = len(obj_list)
 
     obj_idx = face_seg_utils.assign(
-        face_ballot_box,  # [K, F]
+        face_ballot_box,  # [F, K]
+        threshold=0.0,
     ).to(utils.CPU_DEVICE)  # [F]
 
     face_idx_list = [[] for k in range(K)]
@@ -284,20 +354,24 @@ def main2():
     for k in range(K):
         obj = obj_list[k]
 
+        print(f"{k=}")
+        print(f"{obj=}")
+
         model_data_extraction_result = model_data.extract(face_idx_list[k])
 
         obj_model_data = model_data_extraction_result.model_data
 
         obj_model_data.show()
 
-        obj_model_data.save(DIR / f"obj_model_data<{obj}>.pkl")
+        obj_model_data.save(
+            PROJ_DIR / f"obj_model_data_{obj}_{utils.timestamp_sec()}.pkl")
 
 
 def main3():
     obj = "UPPER_GARMENT"
 
     obj_model_data: smplx_utils.ModelData = smplx_utils.ModelData.from_file(
-        DIR / f"obj_model_data<{obj}>.pkl", dtype=utils.FLOAT, device=DEVICE)
+        PROJ_DIR / f"obj_model_data<{obj}>.pkl", dtype=utils.FLOAT, device=DEVICE)
 
     model_builder = smplx_utils.StaticModelBuilder(obj_model_data)
 
@@ -308,7 +382,7 @@ def main3():
     T, C, H, W = subject_data.video.shape
 
     albedo_map = utils.read_image(
-        DIR / "train_2025_0404_2" / "tex_1743769009.png").to(DEVICE, utils.FLOAT)
+        PROJ_DIR / "tex_1744290016.png").to(DEVICE, utils.FLOAT)
 
     albedo_tex = pytorch3d.renderer.TexturesUV(
         maps=[einops.rearrange(albedo_map, "c h w -> h w c")],
@@ -321,17 +395,13 @@ def main3():
     subject_data.camera_transform = subject_data.camera_transform.to(
         DEVICE, utils.FLOAT)
 
-    out_images = torch.empty((T, C, H, W), dtype=utils.FLOAT)
+    out_images = torch.empty((T, C, H, W), dtype=torch.uint8)
 
     for t in tqdm.tqdm(range(T)):
         camera_transform = subject_data.camera_transform
         blending_param = subject_data.blending_param[t]
 
         cur_model: smplx_utils.Model = model_blender(blending_param)
-
-        print(f"{blending_param.shape=}")
-        print(f"{cur_model.shape=}")
-        print(f"{cur_model.vert_pos.shape=}")
 
         fragments = rendering_utils.rasterize_mesh(
             cur_model.vert_pos,
@@ -347,11 +417,11 @@ def main3():
         texels = albedo_tex.sample_textures(fragments)
         # [1, H, W, 1, C]
 
-        out_images[t] = einops.rearrange(
-            texels.view(H, W, C), "h w c -> c h w")
+        out_images[t] = utils.denormalize_image(
+            einops.rearrange(texels.view(H, W, C), "h w c -> c h w"))
 
     utils.write_video(
-        DIR / f"seg_video<{obj}>.mp4",
+        PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.mp4",
         out_images,
         subject_data.fps,
     )
@@ -360,4 +430,4 @@ def main3():
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
         with torch.no_grad():
-            main3()
+            main1()

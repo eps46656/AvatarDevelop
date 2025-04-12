@@ -1,4 +1,6 @@
 import enum
+import itertools
+import typing
 
 import lang_sam
 import numpy as np
@@ -40,45 +42,37 @@ def get_lang_sam_module(sam_type: SAMType):
 @beartype
 def predict(
     sam_type: SAMType,
-    imgs: list[PIL.Image.Image],  # [C, H, W]
-    prompt: list[str],
+    imgs: typing.Iterable[PIL.Image.Image],  # [C, H, W]
+    prompts: typing.Iterable[str],
     mask_strategy: MaskStrategy,
     batch_size: int,
-) -> list[torch.Tensor]:  # [H, W]
-    T = len(imgs)
-    assert len(prompt) == T
+) -> typing.Iterable[torch.Tensor]:  # [C, H, W]
+    assert 0 < batch_size
 
     lang_sam_module = get_lang_sam_module(sam_type)
 
-    ret: list[torch.Tensor] = [None for _ in range(T)]
-
     with torch.no_grad():
-        for frame_beg in tqdm.tqdm(range(0, T, batch_size)):
-            frame_end = min(frame_beg + batch_size, T)
-
+        for cur_batch in tqdm.tqdm(
+                itertools.batched(zip(imgs, prompts), batch_size)):
             with utils.DisableStdOut():
                 result = lang_sam_module.predict(
-                    imgs[frame_beg:frame_end],
-                    prompt[frame_beg:frame_end],
+                    [k[0] for k in cur_batch],
+                    [k[1] for k in cur_batch],
                 )
 
-            for frame_i in range(frame_beg, frame_end):
-                cur_result = result[frame_i - frame_beg]
+            for i in range(len(cur_batch)):
+                cur_result = result[i]
 
                 masks = cur_result["masks"]
-                # [K, 1, H, W]
+                # [K, H, W]
 
-                mask_scores = cur_result["mask_scores"]
+                mask_scores = cur_result["mask_scores"].reshape(masks.shape[0])
                 # [K]
 
                 match mask_strategy:
                     case MaskStrategy.MAX_SCORE:
                         target_idx = mask_scores.argmax()
                     case MaskStrategy.MIN_AREA:
-                        target_idx = \
-                            np.array([masks[k].sum()
-                                      for k in range(masks.shape[0])]).argmin()
+                        target_idx = masks.sum(axis=(1, 2)).argmin()
 
-                ret[frame_i] = torch.from_numpy(masks[target_idx])
-
-    return ret
+                yield torch.from_numpy(masks[target_idx])

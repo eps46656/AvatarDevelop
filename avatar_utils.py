@@ -125,7 +125,7 @@ class AvatarBlender(torch.nn.Module):
         super().__init__()
 
     def get_avatar_model() -> AvatarModel:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()
 
     def forward(self, blending_param) -> AvatarModel:
-        raise utils.UnimplementationError()
+        raise NotImplementedError()

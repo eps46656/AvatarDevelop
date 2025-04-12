@@ -69,7 +69,8 @@ class Module(torch.nn.Module):
         if self.training:
             diff = pr_signed_dist - signed_dist
 
-            diff_loss = diff.square().mean()
+            diff_loss = (diff.square().sum(-1) /
+                         (1e-3 + signed_dist.square().sum(-1))).mean()
         else:
             diff_loss = torch.tensor(0.0, dtype=diff.dtype, device=diff.device)
 

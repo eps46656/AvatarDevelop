@@ -1,7 +1,6 @@
 
 
 import torch
-import typing
 from beartype import beartype
 
 from . import utils
@@ -18,7 +17,7 @@ def feed(
     torch.Tensor,  # dst_sum_x[D]
     torch.Tensor,  # dst_sum_xxt[D, D]
 ]:
-    N, D = -1, -2
+    D = -1
 
     D = utils.check_shapes(
         x, (..., D),
@@ -45,7 +44,7 @@ def scatter_feed(
     x: torch.Tensor,  # [B, D]
     inplace: bool,
 
-    dst_cnts: torch.Tensor,  # [N]
+    dst_cnt: torch.Tensor,  # [N]
     dst_sum_x: torch.Tensor,  # [N, D]
     dst_sum_xxt: torch.Tensor,  # [N, D, D]
 ) -> tuple[
@@ -58,7 +57,7 @@ def scatter_feed(
     B, N, D = utils.check_shapes(
         idx, (B,),
         x, (B, D),
-        dst_cnts, (N,),
+        dst_cnt, (N,),
         dst_sum_x, (N, D),
         dst_sum_xxt, (N, D, D),
     )
@@ -66,20 +65,24 @@ def scatter_feed(
     xxt = x.unsqueeze(-1) @ x.unsqueeze(-2)
     # [..., D, D]
 
-    if not inplace:
-        dst_cnts = dst_cnts.clone()
-        dst_sum_x = dst_sum_x.clone()
-        dst_sum_xxt = dst_sum_xxt.clone()
+    if inplace:
+        dst_cnt += idx.bincount(minlength=N)
 
-    dst_cnts += idx.bincount(minlength=N)
+        dst_sum_x.index_add_(
+            0, idx, x.to(dst_sum_x.device, dst_sum_x.dtype))
 
-    dst_sum_x.index_add_(
-        0, idx, x.to(dst_sum_x.device, dst_sum_x.dtype))
+        dst_sum_xxt.index_add_(
+            0, idx, xxt.to(dst_sum_xxt.device, dst_sum_xxt.dtype))
+    else:
+        dst_cnt = dst_cnt + idx.bincount(minlength=N)
 
-    dst_sum_xxt.index_add_(
-        0, idx, xxt.to(dst_sum_xxt.device, dst_sum_xxt.dtype))
+        dst_sum_x = dst_sum_x.index_add(
+            0, idx, x.to(dst_sum_x.device, dst_sum_x.dtype))
 
-    return dst_cnts, dst_sum_x, dst_sum_xxt
+        dst_sum_xxt = dst_sum_xxt.index_add(
+            0, idx, xxt.to(dst_sum_xxt.device, dst_sum_xxt.dtype))
+
+    return dst_cnt, dst_sum_x, dst_sum_xxt
 
 
 @beartype
@@ -93,8 +96,6 @@ def get_pca(
         sum_xxt, (..., -1, -1),
     )
 
-    batch_shape = utils.broadcast_shapes(sum_x.shape[:-1], sum_xxt.shape[:-2])
-
     cnt = cnt.clamp(2, None)
 
     mean_x = sum_x / cnt.unsqueeze(-1)
@@ -104,27 +105,19 @@ def get_pca(
         / (cnt - 1).unsqueeze(-1).unsqueeze(-1)
     # [..., D, D]
 
-    eig_vals, eig_vecs = torch.linalg.eig(cov)
+    eig_val, eig_vec = torch.linalg.eigh(cov)
 
-    eig_vals: torch.Tensor  # [..., D]
-    eig_vecs: torch.Tensor  # [..., D, D]
+    eig_val: torch.Tensor  # [..., D]
+    eig_vec: torch.Tensor  # [..., D, D]
 
-    eig_vals = eig_vals.real  # [..., D]
-    eig_vecs = eig_vecs.real  # [..., D, D]
-
-    eig_vals, idxes = eig_vals.sort(dim=-1, descending=True)
-
-    # eig_vals[..., D]
-    # idxes[..., D]
-
-    eig_vecs = eig_vecs.transpose(-1, -2).expand(*batch_shape, D, D).gather(
-        -2, idxes.unsqueeze(-1).expand(*batch_shape, D, D))
+    eig_val = eig_val.flip(-1)
+    eig_vec = eig_vec.transpose(-1, -2).flip(-2)
     # [..., D, D]
 
-    stds = eig_vals.sqrt().expand(*batch_shape, D)
+    std = eig_val.sqrt()
     # [..., D]
 
-    return mean_x, eig_vecs, stds
+    return mean_x, eig_vec, std
 
 
 @beartype

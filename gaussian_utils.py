@@ -34,14 +34,14 @@ def render_gaussian(
 
     bg_color: torch.Tensor,  # [..., C]
 
-    gp_means: torch.Tensor,  # [..., N, 3]
-    gp_rots: torch.Tensor,  # [..., N, 4] quaternion
-    gp_scales: torch.Tensor,  # [..., N, 3]
+    gp_mean: torch.Tensor,  # [..., N, 3]
+    gp_rot_q: torch.Tensor,  # [..., N, 4] quaternion
+    gp_scale: torch.Tensor,  # [..., N, 3]
 
-    gp_shs: typing.Optional[torch.Tensor],  # [..., N, (sh_degress + 1)**2, C]
-    gp_colors: typing.Optional[torch.Tensor],  # [..., N, C]
+    gp_sh: typing.Optional[torch.Tensor],  # [..., N, (sh_degress + 1)**2, C]
+    gp_color: typing.Optional[torch.Tensor],  # [..., N, C]
 
-    gp_opacities: torch.Tensor,  # [..., N, 1]
+    gp_opacity: torch.Tensor,  # [..., N]
 
     device: torch.device,
 ):
@@ -87,28 +87,28 @@ def render_gaussian(
 
     N, C = utils.check_shapes(
         bg_color, (..., C),
-        gp_means, (..., N, 3),
-        gp_rots, (..., N, 4),
-        gp_scales, (..., N, 3),
-        gp_opacities, (..., N, 1),
+        gp_mean, (..., N, 3),
+        gp_rot_q, (..., N, 4),
+        gp_scale, (..., N, 3),
+        gp_opacity, (..., N),
     )
 
-    assert gp_shs is not None or gp_colors is not None
+    assert gp_sh is not None or gp_color is not None
 
     utils.check_shapes(
-        gp_shs, (..., N, (sh_degree + 1)**2, C),
-        gp_colors, (..., N, C),
+        gp_sh, (..., N, (sh_degree + 1)**2, C),
+        gp_color, (..., N, C),
     )
 
     batch_shape = utils.broadcast_shapes(
         camera_transform.shape,
         bg_color.shape[:-1],
-        gp_means.shape[:-2],
-        gp_rots.shape[:-2],
-        gp_scales.shape[:-2],
-        gp_opacities.shape[:-2],
-        utils.try_get_batch_shape(gp_shs, -3),
-        utils.try_get_batch_shape(gp_colors, -2),
+        gp_mean.shape[:-2],
+        gp_rot_q.shape[:-2],
+        gp_scale.shape[:-2],
+        gp_opacity.shape[:-1],
+        utils.try_get_batch_shape(gp_sh, -3),
+        utils.try_get_batch_shape(gp_color, -2),
     )
 
     # ---
@@ -123,16 +123,16 @@ def render_gaussian(
     # [..., 3]
 
     bg_color = bg_color.to(*dd).expand(*batch_shape, C)
-    gp_means = gp_means.to(*dd).expand(*batch_shape, N, 3)
-    gp_rots = gp_rots.to(*dd).expand(*batch_shape, N, 4)
-    gp_scales = gp_scales.to(*dd).expand(*batch_shape, N, 3)
-    gp_opacities = gp_opacities.to(*dd).expand(*batch_shape, N, 1)
+    gp_mean = gp_mean.to(*dd).expand(*batch_shape, N, 3)
+    gp_rot_q = gp_rot_q.to(*dd).expand(*batch_shape, N, 4)
+    gp_scale = gp_scale.to(*dd).expand(*batch_shape, N, 3)
+    gp_opacity = gp_opacity.to(*dd).expand(*batch_shape, N)
 
-    if gp_shs is not None:
-        gp_shs = gp_shs.to(*dd).expand(*batch_shape, N, C)
+    if gp_sh is not None:
+        gp_sh = gp_sh.to(*dd).expand(*batch_shape, N, C)
 
-    if gp_colors is not None:
-        gp_colors = gp_colors.to(*dd).expand(*batch_shape, N, C)
+    if gp_color is not None:
+        gp_color = gp_color.to(*dd).expand(*batch_shape, N, C)
 
     # ---
 
@@ -167,17 +167,17 @@ def render_gaussian(
         )
 
         color, radii = diff_gaussian_rasterization.rasterize_gaussians(
-            means3D=gp_means[batch_idx],
+            means3D=gp_mean[batch_idx],
             means2D=torch.Tensor([]),
 
-            sh=torch.Tensor([]) if gp_shs is None else gp_shs[batch_idx],
+            sh=torch.Tensor([]) if gp_sh is None else gp_sh[batch_idx],
 
-            colors_precomp=torch.Tensor([]) if gp_colors is None else
-            gp_colors[batch_idx],
+            colors_precomp=torch.Tensor([]) if gp_color is None else
+            gp_color[batch_idx],
 
-            opacities=gp_opacities[batch_idx],
-            scales=gp_scales[batch_idx],
-            rotations=gp_rots[batch_idx],
+            opacities=gp_opacity[batch_idx].unsqueeze(-1),
+            scales=gp_scale[batch_idx],
+            rotations=gp_rot_q[batch_idx],
             cov3Ds_precomp=torch.Tensor([]),
             raster_settings=renderer_settings,
         )
@@ -194,46 +194,46 @@ def render_gaussian(
 
 @beartype
 def query_gaussian(
-    gp_means: torch.Tensor,  # [N, 3]
-    gp_rots: torch.Tensor,  # [N, 4] quaternion
-    gp_scales: torch.Tensor,  # [N, 3]
-    gp_colors: torch.Tensor,  # [N, C]
-    gp_opacities: torch.Tensor,  # [..., N, 1]
+    gp_mean: torch.Tensor,  # [N, 3]
+    gp_rot_q: torch.Tensor,  # [N, 4] quaternion
+    gp_scale: torch.Tensor,  # [N, 3]
+    gp_color: torch.Tensor,  # [N, C]
+    gp_opacity: torch.Tensor,  # [..., N, 1]
 
     points: torch.Tensor,  # [..., 3]
 ):
     device = utils.check_devices(
-        gp_means,
-        gp_rots,
-        gp_scales,
-        gp_colors,
-        gp_opacities,
+        gp_mean,
+        gp_rot_q,
+        gp_scale,
+        gp_color,
+        gp_opacity,
         points,
     )
 
     N, C = -1, -2
 
     N, C = utils.check_shapes(
-        gp_means, (N, 3),
-        gp_rots, (N, 4),
-        gp_scales, (N, 3),
-        gp_colors, (N, C),
-        gp_opacities, (N, 1),
+        gp_mean, (N, 3),
+        gp_rot_q, (N, 4),
+        gp_scale, (N, 3),
+        gp_color, (N, C),
+        gp_opacity, (N, 1),
         points, (..., 3),
     )
 
     gp_rot_mats = utils.quaternion_to_rot_mat(
-        gp_rots,
+        gp_rot_q,
         order="WXYZ",
         out_shape=(3, 3),
     )  # [N, 3, 3]
 
     gp_scale_mats = torch.zeros(
-        (N, 3, 3), dtype=gp_scales.dtype, device=device)
+        (N, 3, 3), dtype=gp_scale.dtype, device=device)
 
-    gp_scale_mats[:, 0, 0] = gp_scales[:, 0]
-    gp_scale_mats[:, 1, 1] = gp_scales[:, 1]
-    gp_scale_mats[:, 2, 2] = gp_scales[:, 2]
+    gp_scale_mats[:, 0, 0] = gp_scale[:, 0]
+    gp_scale_mats[:, 1, 1] = gp_scale[:, 1]
+    gp_scale_mats[:, 2, 2] = gp_scale[:, 2]
 
     gp_rs = gp_rot_mats @ gp_scale_mats
     # [N, 3, 3]
@@ -241,7 +241,7 @@ def query_gaussian(
     inv_cov = (gp_rs @ gp_rs.transpose(-1, -2)).inverse()
     # [N, 3, 3]
 
-    rel_points = (points.unsqueeze(-2) - gp_means).unsqueeze(-1)
+    rel_points = (points.unsqueeze(-2) - gp_mean).unsqueeze(-1)
     # [..., N, 3, 1]
 
     k = torch.exp(-0.5 * (
@@ -252,7 +252,7 @@ def query_gaussian(
     ret = torch.einsum(
         "...i,ic->...c",
         k,  # [..., N]
-        gp_colors * gp_opacities,  # [N, C]
+        gp_color * gp_opacity,  # [N, C]
     )  # [..., C]
 
     return ret

@@ -23,6 +23,10 @@ def rasterize_mesh(
 
     cull_backfaces: bool = True,
 ) -> pytorch3d.renderer.mesh.rasterizer.Fragments:
+    # pix_to_face[B, H, W, FPP]
+    # bary_coords[B, H, W, FPP, 3]
+    # pix_dists[B, H, W, FPP]
+
     V, F = -1, -2
 
     V, F = utils.check_shapes(
