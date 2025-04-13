@@ -191,10 +191,10 @@ def main5():
     vps_2.requires_grad = True
 
     with utils.Timer():
-        loss_1 = mesh_data.calc_lap_smoothing_loss(vps_1)
+        loss_1 = mesh_data.calc_lap_smoothness(vps_1)
 
     with utils.Timer():
-        loss_2 = mesh_data.calc_lap_smoothing_loss_pytorch3d(vps_2)
+        loss_2 = mesh_data.calc_uni_lap_smoothness_pytorch3d(vps_2)
 
     print(f"{loss_1=}")
     print(f"{loss_2=}")
@@ -212,10 +212,10 @@ def main5():
     return
 
     with utils.Timer():
-        normal_sim = mesh_data.calc_face_cos_sims(face_normals)
+        normal_sim = mesh_data.calc_face_cos_sim(face_normals)
 
     with utils.Timer():
-        normal_sim_naive = mesh_data.calc_face_cos_sims_naive(face_normals)
+        normal_sim_naive = mesh_data.calc_face_cos_sim_naive(face_normals)
 
     normal_sim_1 = normal_sim.square().mean()
     normal_sim_2 = normal_sim_naive.square().mean()

@@ -75,7 +75,7 @@ def get_area_weighted_vert_nor(
     )
     # [..., F, 3]
 
-    vert_nor = torch.zeros_like(vert_pos)
+    vert_nor = utils.zeros_like(vert_pos)
     # [..., V, 3]
 
     vert_nor.index_add_(-2, faces[:, 0], area_vector)
@@ -105,7 +105,7 @@ def calc_adj_sums(
     idx_1 = adj_rel_list[:, 1]
     # [P]
 
-    ret = torch.zeros_like(vals)
+    ret = utils.zeros_like(vals)
     # [..., V, D]
 
     ret.index_add_(-2, idx_0, vals[..., idx_1, :])
@@ -129,7 +129,7 @@ def calc_adj_sums_naive(
         vals, (..., V, D)
     )
 
-    ret = torch.zeros_like(vals)
+    ret = utils.zeros_like(vals)
     # [..., V, D]
 
     for pi in range(P):
@@ -355,7 +355,7 @@ class MeshData:
         return calc_adj_sums_naive(
             self.e_to_vv, vert_pos)
 
-    def calc_lap_diff(
+    def calc_uni_lap_diff(
         self,
         vert_pos: torch.Tensor,  # [... , V, D]
     ) -> torch.Tensor:  # [..., V, D]
@@ -364,13 +364,13 @@ class MeshData:
         return calc_adj_sums(self.e_to_vv, vert_pos) * \
             self.inv_vert_deg.unsqueeze(-1) - vert_pos
 
-    def calc_lap_smoothing_loss(
+    def calc_lap_smoothness(
         self,
         vert_pos: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # []
-        return utils.vec_norm(self.calc_lap_diff(vert_pos)).mean()
+        return utils.vec_norm(self.calc_uni_lap_diff(vert_pos)).mean()
 
-    def calc_lap_smoothing_loss_pytorch3d(
+    def calc_uni_lap_smoothness_pytorch3d(
         self,
         vert_pos: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # []
@@ -393,12 +393,12 @@ class MeshData:
 
         return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="uniform")
 
-    def calc_lap_smoothing_loss_naive(
+    def calc_lap_smoothness_naive(
         self,
         vert_pos: torch.Tensor,  # [..., V, D]
     ) -> torch.Tensor:  # [..., V, D]
 
-        buffer = torch.zeros_like(vert_pos)
+        buffer = utils.zeros_like(vert_pos)
         # [..., V, D]
 
         for vpi in range(self.edges_cnt):
@@ -412,64 +412,7 @@ class MeshData:
 
         return utils.vec_norm(buffer).mean()
 
-    def calc_face_cos_sims(
-        self,
-        vecs: torch.Tensor,  # [..., F, D]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
-
-        vecs_0 = vecs[..., self.ff[:, 0], :]
-        vecs_1 = vecs[..., self.ff[:, 1], :]
-        # [..., FP, D]
-
-        return utils.vec_dot(vecs_0, vecs_1)
-
-    def calc_face_cos_sims_naive(
-        self,
-        vecs: torch.Tensor,  # [..., F, D]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
-
-        FP = self.adj_face_face_pairs_cnt
-
-        ret = torch.empty(vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
-
-        for fp in range(FP):
-            fa, fb = self.ff[fp, :]
-            ret[..., fp] = utils.vec_dot(vecs[..., fa, :], (vecs[..., fb, :]))
-
-        return ret
-
-    def get_face_diffs(
-        self,
-        face_vecs: torch.Tensor,  # [..., F, D]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
-
-        vecs_0 = face_vecs[..., self.ff[:, 0], :]
-        vecs_1 = face_vecs[..., self.ff[:, 1], :]
-        # [..., FP, D]
-
-        return vecs_0 - vecs_1
-
-    def get_face_diffs_naive(
-        self,
-        face_vecs: torch.Tensor,  # [..., F]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
-
-        FP = self.adj_face_face_pairs_cnt
-
-        ret = torch.empty(face_vecs.shape[:-2] + (FP,), dtype=utils.FLOAT)
-
-        for fp in range(FP):
-            fa, fb = self.ff[fp, :]
-
-            ret[..., fp] = face_vecs[..., fa, :] - (face_vecs[..., fb, :])
-
-        return ret
-
-    def lap_smoothing(
+    def calc_uni_lap_smoothness(
         self,
         vert_pos: torch.Tensor,  # [..., V, 3]
         t: float,
@@ -479,7 +422,7 @@ class MeshData:
 
         return vert_pos * (1 - t) + vert_adj_centers * t
 
-    def cot_lap_diff(
+    def calc_cot_lap_diff(
         self,
         vert_pos: torch.Tensor,  # [..., V, 3]
     ) -> torch.Tensor:  # [..., V, 3]
@@ -489,7 +432,7 @@ class MeshData:
             vert_pos[..., self.e_to_vv[:, 1], :] - \
             vert_pos[..., self.e_to_vv[:, 0], :]
 
-        e_len = utils.vec_norm(e_diff)
+        e_len = utils.vec_norm(e_diff.detach())
         # [..., E]
 
         e_len_a = e_len[..., self.f_to_eee[:, 0]]
@@ -513,16 +456,14 @@ class MeshData:
         cot_c_4 = (e_sq_len_a + e_sq_len_b - e_sq_len_c) * rareas
         # [..., F]
 
-        e_weight = torch.zeros_like(
-            e_len, dtype=vert_pos.dtype, device=vert_pos.device)
+        e_weight = utils.zeros_like(vert_pos, shape=e_len.shape)
         # [..., E]
 
         e_weight.index_add_(-1, self.f_to_eee[:, 0], cot_a_4)
         e_weight.index_add_(-1, self.f_to_eee[:, 1], cot_b_4)
         e_weight.index_add_(-1, self.f_to_eee[:, 2], cot_c_4)
 
-        v_sum_weight = torch.zeros(
-            vert_pos.shape[:-1], dtype=vert_pos.dtype, device=vert_pos.device)
+        v_sum_weight = utils.zeros_like(vert_pos, shape=vert_pos.shape[:-1])
         # [..., V]
 
         v_sum_weight.index_add_(-1, self.e_to_vv[:, 0], e_weight)
@@ -531,7 +472,7 @@ class MeshData:
         weighted_e_diff = e_diff * e_weight.unsqueeze(-1)
         # [..., E, 3]
 
-        buffer = torch.zeros_like(vert_pos)
+        buffer = utils.zeros_like(vert_pos)
         # [..., V, 3]
 
         buffer.index_add_(-2, self.e_to_vv[:, 0], weighted_e_diff, alpha=+1)
@@ -539,7 +480,93 @@ class MeshData:
 
         return buffer / v_sum_weight.unsqueeze(-1)
 
-    def calc_signed_dists(
+    def calc_cot_lap_smoothness(
+        self,
+        vert_pos: torch.Tensor,  # [..., V, 3]
+    ) -> torch.Tensor:  # [..., V]
+        return utils.vec_norm(self.calc_cot_lap_diff(vert_pos)).mean()
+
+    def calc_cot_lap_smoothness_pytorch3d(
+        self,
+        vert_pos: torch.Tensor,  # [..., V, D]
+    ) -> torch.Tensor:  # []
+        import pytorch3d
+        import pytorch3d.loss
+        import pytorch3d.structures
+
+        utils.check_shapes(vert_pos, (..., self.verts_cnt, -1))
+
+        assert 0 <= self.f_to_vvv.min()
+        assert self.f_to_vvv.max() < self.verts_cnt
+
+        mesh = pytorch3d.structures.Meshes(
+            verts=[vert_pos],
+            faces=[self.f_to_vvv],
+            textures=None,
+        ).to(vert_pos.device)
+
+        utils.torch_cuda_sync()
+
+        return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="cot")
+
+    def calc_face_cos_sim(
+        self,
+        vecs: torch.Tensor,  # [..., F, D]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
+
+        vecs_0 = vecs[..., self.ff[:, 0], :]
+        vecs_1 = vecs[..., self.ff[:, 1], :]
+        # [..., FP, D]
+
+        return utils.vec_dot(vecs_0, vecs_1)
+
+    def calc_face_cos_sim_naive(
+        self,
+        vecs: torch.Tensor,  # [..., F, D]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
+
+        FP = self.adj_face_face_pairs_cnt
+
+        ret = utils.empty_like(vecs, shape=vecs.shape[:-2] + (FP,))
+
+        for fp in range(FP):
+            fa, fb = self.ff[fp, :]
+            ret[..., fp] = utils.vec_dot(vecs[..., fa, :], (vecs[..., fb, :]))
+
+        return ret
+
+    def calc_face_diff(
+        self,
+        face_vecs: torch.Tensor,  # [..., F, D]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
+
+        vecs_0 = face_vecs[..., self.ff[:, 0], :]
+        vecs_1 = face_vecs[..., self.ff[:, 1], :]
+        # [..., FP, D]
+
+        return vecs_0 - vecs_1
+
+    def calc_face_diff_naive(
+        self,
+        vecs: torch.Tensor,  # [..., F]
+    ) -> torch.Tensor:  # [..., FP]
+        utils.check_shapes(vecs, (..., self.faces_cnt, -1))
+
+        FP = self.adj_face_face_pairs_cnt
+
+        ret = utils.empty_like(vecs, shape=vecs.shape[:-2] + (FP,))
+
+        for fp in range(FP):
+            fa, fb = self.ff[fp, :]
+
+            ret[..., fp] = vecs[..., fa, :] - (vecs[..., fb, :])
+
+        return ret
+
+    def calc_signed_dist(
         self,
         vert_pos: torch.Tensor,  # [V, 3]
         point_pos: torch.Tensor,  # [..., 3]
@@ -560,7 +587,7 @@ class MeshData:
         vp_c = vp[self.f_to_vvv[:, 2], :]
         # [F, 3]
 
-        rs = torch.empty((F, 3, 3), dtype=vp.dtype, device=vp.device)
+        rs = utils.empty_like(vp, shape=(F, 3, 3))
 
         axis_x = rs[:, :, 0] = vp_b - vp_a
         axis_y = rs[:, :, 1] = vp_c - vp_a
@@ -739,7 +766,7 @@ class MeshData:
         fa = self.ff[:, 0]
         fb = self.ff[:, 1]
 
-        buffer = torch.zeros_like(face_features)
+        buffer = utils.zeros_like(face_features)
 
         buffer.index_add_(-2, fa, face_features[fb], alpha=trans_ratio)
         buffer.index_add_(-2, fb, face_features[fa], alpha=trans_ratio)

@@ -96,7 +96,7 @@ class MyTrainingCore(training_utils.TrainingCore):
     def eval(self):
         self.dataset: gom_utils.Dataset
 
-        out_frames = torch.empty_like(
+        out_frames = utils.empty_like(
             self.dataset.sample.img,
             dtype=utils.FLOAT,
             device=utils.CPU_DEVICE,

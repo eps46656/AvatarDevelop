@@ -19,7 +19,7 @@ def tex_coord_to_img_coord(
     assert 0 < img_h
     assert 0 < img_w
 
-    ret = torch.empty_like(tex_coord)
+    ret = utils.empty_like(tex_coord)
 
     ret[..., 0] = (img_h - 1) * (1 - tex_coord[..., 1])
     ret[..., 1] = (img_w - 1) * tex_coord[..., 0]
@@ -38,7 +38,7 @@ def img_coord_to_tex_coord(
     assert 0 < img_h
     assert 0 < img_w
 
-    ret = torch.empty_like(img_coord)
+    ret = utils.empty_like(img_coord)
 
     ret[:, 0] = img_coord[:, 1] / (img_w - 1)
     ret[:, 1] = 1 - img_coord[:, 0] / (img_h - 1)

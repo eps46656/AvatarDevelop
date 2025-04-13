@@ -40,7 +40,7 @@ def main1():
         batch_size=1,
     )
 
-    out_video = torch.empty_like(video)
+    out_video = utils.empty_like(video)
 
     for frame_i in range(T):
         out_video[frame_i] = mask[frame_i]

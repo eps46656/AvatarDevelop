@@ -315,7 +315,7 @@ def blending(
     binding_pose_rs = utils.batch_eye(
         (J, 3, 3), dtype=utils.FLOAT, device=device)
 
-    binding_pose_ts = torch.empty_like(binding_joint_ts)
+    binding_pose_ts = utils.empty_like(binding_joint_ts)
     binding_pose_ts[..., model_data.kin_tree.root,
                     :] = binding_joint_ts[..., model_data.kin_tree.root, :]
     # [..., J, 3]

@@ -7,7 +7,7 @@ import dataclasses
 import torch
 from beartype import beartype
 
-from .. import dataset_utils, mesh_utils
+from .. import dataset_utils, mesh_utils, utils
 
 
 @beartype
@@ -48,23 +48,19 @@ class Dataset(dataset_utils.Dataset):
     def __getitem__(self, idx: tuple[torch.Tensor]) -> Sample:
         N = idx[0].numel()
 
-        point_positions = torch.empty(
-            (N, 3),
-            dtype=self.vert_pos.dtype,
-            device=self.vert_pos.device,
-        )
+        point_pos = utils.empty_like(self.vert_pos, shape=(N, 3))
 
         for d in range(3):
             torch.normal(self.mean[d], self.std[d], (N,),
-                         out=point_positions[:, d])
+                         out=point_pos[:, d])
 
-        signed_dists = self.mesh_data.calc_signed_dists(
+        signed_dists = self.mesh_data.calc_signed_dist(
             self.vert_pos,
-            point_positions,
+            point_pos,
         )  # [N]
 
         return Sample(
-            point_pos=point_positions,
+            point_pos=point_pos,
             signed_dist=signed_dists,
         )
 

@@ -100,10 +100,9 @@ def elect(
     pixel_to_face = pixel_to_face.expand(*batch_shape, H, W)
     ballot = ballot.expand(*batch_shape, K, H, W)
 
-    face_ballot_box = torch.zeros(
-        (K, faces_cnt + 1),  # F + 1 for -1 pixel to face index
-        dtype=ballot.dtype,
-        device=ballot.device,
+    face_ballot_box = utils.zeros_like(
+        ballot,
+        shape=(K, faces_cnt + 1),  # F + 1 for -1 pixel to face index
     )
 
     for batch_idxes in utils.get_batch_idxes(batch_shape):

@@ -177,7 +177,7 @@ class TrainingCore(training_utils.TrainingCore):
         # call output_rgb_video
         self.dataset: gom_utils.Dataset
 
-        rgb_frames = torch.empty_like(
+        rgb_frames = utils.empty_like(
             self.dataset.sample.img,
             dtype=torch.uint8,
             device=self.__config.device,

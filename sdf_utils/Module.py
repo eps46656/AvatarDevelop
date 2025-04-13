@@ -54,7 +54,7 @@ class Module(torch.nn.Module):
             signed_dist, (...,),
         )
 
-        buffer = torch.empty_like(point_pos)
+        buffer = utils.empty_like(point_pos)
         # [..., 3]
 
         buffer[..., 0] = (point_pos[..., 0] - self.mean[0]) / self.std[0]

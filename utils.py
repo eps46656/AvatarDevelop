@@ -415,6 +415,87 @@ def print_cuda_mem_usage(device=None) -> None:
 
 
 @beartype
+def empty_like(
+    x: torch.Tensor,
+    *,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    if shape is None:
+        shape = x.shape
+
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return torch.empty(shape, dtype=dtype, device=device)
+
+
+@beartype
+def zeros_like(
+    x: torch.Tensor,
+    *,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    if shape is None:
+        shape = x.shape
+
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return torch.zeros(shape, dtype=dtype, device=device)
+
+
+@beartype
+def ones_like(
+    x: torch.Tensor,
+    *,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    if shape is None:
+        shape = x.shape
+
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return torch.ones(shape, dtype=dtype, device=device)
+
+
+@beartype
+def full_like(
+    x: torch.Tensor,
+    full_value: object,
+    *,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    if shape is None:
+        shape = x.shape
+
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return torch.full(shape, full_value, dtype=dtype, device=device)
+
+
+@beartype
 def check_quaternion_order(order: str) -> str:
     assert len(order) == 4
     order = order.upper()
@@ -1612,7 +1693,7 @@ def get_inv_rt(
     )
 
     if out_r is None:
-        out_r = torch.empty_like(r)
+        out_r = empty_like(r)
 
     if out_t is None:
         out_t = torch.empty(
@@ -1801,7 +1882,7 @@ def normalize_image(
         img.clamp(0, k),
         k,
         rounding_mode=None,
-        out=torch.empty_like(img, dtype=dtype, device=device),
+        out=empty_like(img, dtype=dtype, device=device),
     )
 
 

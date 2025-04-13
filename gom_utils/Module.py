@@ -160,8 +160,7 @@ class Module(torch.nn.Module):
         face_coord_rot_qs = utils.rot_mat_to_quaternion(
             face_coord_result.r, order="WXYZ")
 
-        zeros = torch.zeros((), dtype=self.gp_rot_z.dtype,
-                            device=self.gp_rot_z.device).expand(F)
+        zeros = utils.zeros_like(self.gp_rot_z, shape=()).expand(F)
         # [F]
 
         half_gp_rot_thetas = self.gp_rot_z * 0.5
@@ -193,9 +192,8 @@ class Module(torch.nn.Module):
         scale_factor = face_coord_result.area.sqrt()
         # [..., F]
 
-        world_gp_scale = torch.empty(
-            scale_factor.shape[:-1] + (F, 3),
-            dtype=scale_factor.dtype, device=scale_factor.device)
+        world_gp_scale = utils.empty_like(
+            scale_factor, shape=scale_factor.shape[:-1] + (F, 3))
 
         world_gp_scale[..., :, 0] = scale_factor * utils.smooth_clamp(
             x=torch.exp(self.gp_scale_x),  # clamp local scale
@@ -286,8 +284,7 @@ class Module(torch.nn.Module):
 
             sh_degree=0,
 
-            bg_color=torch.ones((C,),
-                                dtype=world_gp_result.gp_color.dtype),
+            bg_color=torch.ones((C,), dtype=world_gp_result.gp_color.dtype),
 
             gp_mean=world_gp_result.gp_mean,
             gp_rot_q=world_gp_result.gp_rot_q,
@@ -323,7 +320,7 @@ class Module(torch.nn.Module):
         if not self.training:
             lap_smoothing_loss = torch.Tensor()
         else:
-            lap_smoothing_loss = mesh_data.calc_lap_smoothing_loss(
+            lap_smoothing_loss = mesh_data.calc_lap_smoothness(
                 avatar_model.vert_pos)
 
         if not self.training:
@@ -331,7 +328,7 @@ class Module(torch.nn.Module):
         else:
             nor_sim_loss = torch.Tensor()
 
-            nor_sim = mesh_data.calc_face_cos_sims(
+            nor_sim = mesh_data.calc_face_cos_sim(
                 world_gp_result.face_coord_result.r[..., :, :3, 2]
                 # the z axis of each face
             )
