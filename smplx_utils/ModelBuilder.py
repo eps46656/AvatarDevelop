@@ -57,9 +57,7 @@ class DeformableModelBuilder(ModelBuilder):
         self.model_data = copy.copy(model_data)
 
         self.model_data.vert_pos = torch.nn.Parameter(
-            self.model_data.vert_pos.to(
-                dtype=torch.float64, copy=True,
-            ))
+            self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
 
         self.register_parameter("vert_pos", self.model_data.vert_pos)
 
@@ -83,9 +81,7 @@ class DeformableModelBuilder(ModelBuilder):
                 d=body_shape_vert_dir.detach().to(*dd).reshape(V, 3 * BS),
                 smoothing=1.0,
                 kernel="thin_plate_spline",
-            )
-
-            self.body_shape_vert_dir_rbf_interp.to(self.model_data.device)
+            ).to(self.model_data.device)
 
         pose_vert_dir = self.model_data.pose_vert_dir
         # [V, 3, (J - 1) * 3 * 3]
@@ -99,9 +95,7 @@ class DeformableModelBuilder(ModelBuilder):
                     V, 3 * (J - 1) * 3 * 3),
                 smoothing=1.0,
                 kernel="thin_plate_spline",
-            )
-
-            self.pose_vert_dir_rbf_interp.to(self.model_data.device)
+            ).to(self.model_data.device)
 
         lbs_weight = self.model_data.lbs_weight
         # [V, J]
@@ -114,11 +108,7 @@ class DeformableModelBuilder(ModelBuilder):
                 d=lbs_weight.detach().to(*dd),  # [V, J]
                 smoothing=1.0,
                 kernel="thin_plate_spline",
-            )
-
-            self.lbs_weight_rbf_interp.to(self.model_data.device)
-
-        self.refresh()
+            ).to(self.model_data.device)
 
     def get_model_data(self) -> ModelData:
         return self.model_data
@@ -143,7 +133,7 @@ class DeformableModelBuilder(ModelBuilder):
         if self.model_data.vert_pos.requires_grad:
             ret.append({
                 "params": [self.model_data.vert_pos],
-                "lr": base_lr,
+                "lr": min(1e-6, base_lr * 1e-2),
             })
 
         return ret

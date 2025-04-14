@@ -10,7 +10,7 @@ from beartype import beartype
 
 from . import (avatar_utils, dataset_utils, dw_interp_utils, gaussian_utils,
                gom_utils, pca_utils, rendering_utils, smplx_utils,
-               texture_utils, training_utils, utils, video_utils)
+               texture_utils, training_utils, utils, vision_utils)
 
 
 @dataclasses.dataclass
@@ -21,10 +21,13 @@ class Config:
 
     batch_size: int
 
+    vert_grad_norm_threshold: float
+
     alpha_rgb: float
-    alpha_lap_smoothing: float
+    alpha_lap_smoothness: float
     alpha_nor_sim: float
     alpha_color_diff: float
+    alpha_gp_scale_diff: float
 
 
 @beartype
@@ -90,20 +93,27 @@ class TrainingCore(training_utils.TrainingCore):
     def calc_loss(self, forward_result: gom_utils.ModuleForwardResult) \
             -> torch.Tensor:
         print(f"{forward_result.rgb_loss=}")
+        print(f"{forward_result.lap_smoothness_loss=}")
+        print(f"{forward_result.nor_sim_loss=}")
+        print(f"{forward_result.color_diff_loss=}")
+        print(f"{forward_result.gp_scale_diff_loss=}")
 
-        weighted_rgb_loss = \
-            self.__config.alpha_rgb * forward_result.rgb_loss
+        weighted_rgb_loss = self.__config.alpha_rgb * \
+            forward_result.rgb_loss.mean()
 
-        weighted_lap_smoothing_loss = \
-            self.__config.alpha_lap_smoothing * forward_result.lap_smoothing_loss
+        weighted_lap_smoothness_loss = self.__config.alpha_lap_smoothness * \
+            forward_result.lap_smoothness_loss.mean()
 
-        weighted_nor_sim_loss = \
-            self.__config.alpha_nor_sim * forward_result.nor_sim_loss
+        weighted_nor_sim_loss = self.__config.alpha_nor_sim * \
+            forward_result.nor_sim_loss.mean()
 
-        weighted_color_diff_loss = \
-            self.__config.alpha_color_diff * forward_result.color_diff_loss
+        weighted_color_diff_loss = self.__config.alpha_color_diff * \
+            forward_result.color_diff_loss.mean()
 
-        return weighted_rgb_loss + weighted_lap_smoothing_loss + weighted_nor_sim_loss + weighted_color_diff_loss
+        weighted_gp_scale_diff_loss = self.__config.alpha_gp_scale_diff * \
+            forward_result.gp_scale_diff_loss.mean()
+
+        return weighted_rgb_loss + weighted_lap_smoothness_loss + weighted_nor_sim_loss + weighted_color_diff_loss + weighted_gp_scale_diff_loss
 
     # --
 
@@ -119,6 +129,8 @@ class TrainingCore(training_utils.TrainingCore):
             batch_size = batch_idxes[0].shape[0]
 
             sample: gom_utils.Sample
+
+            self.module.refresh()
 
             result: gom_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
@@ -143,15 +155,15 @@ class TrainingCore(training_utils.TrainingCore):
 
                 vert_pos = model_builder.model_data.vert_pos
 
-                if vert_pos.grad is not None:
-                    threshold = 1e-8
+                vert_grad_norm_threshold = self.__config.vert_grad_norm_threshold
 
+                if vert_pos.grad is not None and vert_grad_norm_threshold is not None:
                     grad_norm = utils.vec_norm(vert_pos.grad, -1, True)
 
-                    vert_pos.grad *= threshold / grad_norm.clamp(threshold)
+                    vert_pos.grad *= vert_grad_norm_threshold / \
+                        grad_norm.clamp(vert_grad_norm_threshold)
 
             self.optimizer.step()
-            self.module.refresh()
 
         avg_loss = sum_loss / self.dataset.shape.numel()
 
@@ -214,7 +226,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             rgb_frames.index_put_(
                 (idxes,),
-                utils.denormalize_image(
+                vision_utils.denormalize_image(
                     rendered_img,
                     dtype=rgb_frames.dtype,
                     device=rgb_frames.device
@@ -223,11 +235,11 @@ class TrainingCore(training_utils.TrainingCore):
 
             avatar_model: smplx_utils.Model = result.avatar_model
 
-        with video_utils.VideoWriter(
-            path=self.__config.proj_dir / f"rgb_{utils.timestamp_sec()}.mp4",
+        with vision_utils.VideoWriter(
+            path=self.__config.proj_dir / f"rgb_{utils.timestamp_sec()}.avi",
             height=H,
             width=W,
-            color_type=video_utils.ColorType.RGB,
+            color_type=vision_utils.ColorType.RGB,
             fps=25,
         ) as video_writer:
             for i in range(T):
@@ -355,9 +367,10 @@ class TrainingCore(training_utils.TrainingCore):
 
         tex = tex.reshape(tex_h, tex_w, 3)
 
-        utils.write_image(
+        vision_utils.write_image(
             path=self.__config.proj_dir / f"tex_{utils.timestamp_sec()}.png",
-            img=einops.rearrange(tex, "h w c -> c h w"),
+            img=vision_utils.denormalize_image(
+                einops.rearrange(tex, "h w c -> c h w")),
         )
 
     @utils.mem_clear
@@ -552,7 +565,8 @@ class TrainingCore(training_utils.TrainingCore):
 
         tex = tex.reshape(tex_h, tex_w, 3)
 
-        utils.write_image(
+        vision_utils.write_image(
             path=self.__config.proj_dir / f"tex_{utils.timestamp_sec()}.png",
-            img=einops.rearrange(tex, "h w c -> c h w"),
+            img=vision_utils.denormalize_image(
+                einops.rearrange(tex, "h w c -> c h w")),
         )

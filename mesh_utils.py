@@ -236,7 +236,7 @@ class MeshData:
             va, vb, vc = sorted(map(int, faces[f]))
 
             f_to_eee_l[f] = (
-                vv_to_e[(vc, vc)],
+                vv_to_e[(vb, vc)],
                 vv_to_e[(va, vc)],
                 vv_to_e[(va, vb)],
             )
@@ -327,7 +327,11 @@ class MeshData:
     def to(self, *args, **kwargs) -> MeshData:
         d = {
             "e_to_vv": None,
+            "vv_to_e": self.vv_to_e,
+
             "f_to_vvv": None,
+            "f_to_eee": None,
+
             "ff": None,
 
             "vert_deg": None,
@@ -337,8 +341,10 @@ class MeshData:
         for key, val in d.items():
             if val is None:
                 cur_val = getattr(self, key)
-                d[key] = None if cur_val is None else \
-                    cur_val.to(*args, **kwargs)
+
+                if d[key] is None:
+                    d[key] = None if cur_val is None else \
+                        cur_val.to(*args, **kwargs)
 
         return MeshData(**d)
 
@@ -364,11 +370,19 @@ class MeshData:
         return calc_adj_sums(self.e_to_vv, vert_pos) * \
             self.inv_vert_deg.unsqueeze(-1) - vert_pos
 
-    def calc_lap_smoothness(
+    def calc_l1_uni_lap_smoothness(
         self,
         vert_pos: torch.Tensor,  # [..., V, D]
-    ) -> torch.Tensor:  # []
-        return utils.vec_norm(self.calc_uni_lap_diff(vert_pos)).mean()
+    ) -> torch.Tensor:  # [...]
+        return utils.vec_norm(self.calc_uni_lap_diff(vert_pos)).mean(-1)
+
+    def calc_l2_uni_lap_smoothness(
+        self,
+        vert_pos: torch.Tensor,  # [..., V, D]
+    ) -> torch.Tensor:  # [...]
+        V = vert_pos.shape[-2]
+
+        return self.calc_uni_lap_diff(vert_pos).square().sum((-1, -2)) / V
 
     def calc_uni_lap_smoothness_pytorch3d(
         self,
@@ -412,7 +426,7 @@ class MeshData:
 
         return utils.vec_norm(buffer).mean()
 
-    def calc_uni_lap_smoothness(
+    def uni_lap_smoothing(
         self,
         vert_pos: torch.Tensor,  # [..., V, 3]
         t: float,
@@ -480,11 +494,19 @@ class MeshData:
 
         return buffer / v_sum_weight.unsqueeze(-1)
 
-    def calc_cot_lap_smoothness(
+    def calc_l1_cot_lap_smoothness(
         self,
         vert_pos: torch.Tensor,  # [..., V, 3]
     ) -> torch.Tensor:  # [..., V]
-        return utils.vec_norm(self.calc_cot_lap_diff(vert_pos)).mean()
+        return utils.vec_norm(self.calc_cot_lap_diff(vert_pos)).mean(-1)
+
+    def calc_l2_cot_lap_smoothness(
+        self,
+        vert_pos: torch.Tensor,  # [..., V, 3]
+    ) -> torch.Tensor:  # [..., V]
+        V = vert_pos.shape[-2]
+
+        return self.calc_cot_lap_diff(vert_pos).square().sum((-1, -2)) / V
 
     def calc_cot_lap_smoothness_pytorch3d(
         self,
@@ -540,7 +562,7 @@ class MeshData:
     def calc_face_diff(
         self,
         face_vecs: torch.Tensor,  # [..., F, D]
-    ) -> torch.Tensor:  # [..., FP]
+    ) -> torch.Tensor:  # [..., FP, D]
         utils.check_shapes(face_vecs, (..., self.faces_cnt, -1))
 
         vecs_0 = face_vecs[..., self.ff[:, 0], :]

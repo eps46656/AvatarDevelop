@@ -5,8 +5,6 @@ import dataclasses
 import torch
 from beartype import beartype
 
-import pytorch3d.renderer
-
 from .. import (avatar_utils, camera_utils, gaussian_utils, rendering_utils,
                 transform_utils, utils)
 from .utils import FaceCoordResult, get_face_coord
@@ -28,15 +26,13 @@ class ModuleWorldGPResult:
 class ModuleForwardResult:
     avatar_model: avatar_utils.AvatarModel
 
-    mesh_ras_result: pytorch3d.renderer.mesh.rasterizer.Fragments
-    mesh_proj_area: torch.Tensor  # [...]
-
     gp_render_img: torch.Tensor  # [..., C, H, W]
 
-    rgb_loss: float | torch.Tensor
-    lap_smoothing_loss: float | torch.Tensor
-    nor_sim_loss: float | torch.Tensor
-    color_diff_loss: float | torch.Tensor
+    rgb_loss: torch.Tensor  # [...]
+    lap_smoothness_loss: torch.Tensor  # [...]
+    nor_sim_loss: torch.Tensor  # [...]
+    color_diff_loss: torch.Tensor  # [...]
+    gp_scale_diff_loss: torch.Tensor  # [...]
 
 
 @beartype
@@ -102,11 +98,10 @@ class Module(torch.nn.Module):
             (faces_cnt,), -3, dtype=utils.FLOAT))
 
         self.gp_color = torch.nn.Parameter(torch.rand(
-            (faces_cnt, color_channels_cnt),
-            dtype=utils.FLOAT))
+            (faces_cnt, color_channels_cnt), dtype=utils.FLOAT))
         # [F, C]
 
-        self.gp_log_opacity = torch.nn.Parameter(torch.zeros(
+        self.gp_opacity = torch.nn.Parameter(torch.zeros(
             (faces_cnt,), dtype=utils.FLOAT))
         # [F, 1]
 
@@ -127,7 +122,7 @@ class Module(torch.nn.Module):
                 self.gp_scale_y,
                 self.gp_scale_z,
                 self.gp_color,
-                self.gp_log_opacity,
+                self.gp_opacity,
             ],
             "lr": base_lr
         })
@@ -195,31 +190,25 @@ class Module(torch.nn.Module):
         world_gp_scale = utils.empty_like(
             scale_factor, shape=scale_factor.shape[:-1] + (F, 3))
 
-        world_gp_scale[..., :, 0] = scale_factor * utils.smooth_clamp(
-            x=torch.exp(self.gp_scale_x),  # clamp local scale
-            x_lb=0.1,
-            x_rb=3.0,
-
-            slope_l=0.0,
-            slope_r=0.005,
+        world_gp_scale[..., :, 0] = scale_factor * leaky_clamp(
+            x=self.gp_scale_x.exp(),  # clamp local scale
+            lb=0.1,
+            rb=3.0,
+            leaky=0.1,
         )
 
-        world_gp_scale[..., :, 1] = scale_factor * utils.smooth_clamp(
-            x=torch.exp(self.gp_scale_y),  # clamp local scale
-            x_lb=0.1,
-            x_rb=3.0,
-
-            slope_l=0.0,
-            slope_r=0.005,
+        world_gp_scale[..., :, 1] = scale_factor * leaky_clamp(
+            x=self.gp_scale_y.exp(),  # clamp local scale
+            lb=0.1,
+            rb=3.0,
+            leaky=0.1,
         )
 
-        world_gp_scale[..., :, 2] = utils.smooth_clamp(
-            x=scale_factor * torch.exp(self.gp_scale_z),  # clamp global scale
-            x_lb=0.001,
-            x_rb=0.01,
-
-            slope_l=0.0,
-            slope_r=0.005,
+        world_gp_scale[..., :, 2] = leaky_clamp(
+            x=scale_factor * self.gp_scale_z.exp(),  # clamp global scale
+            lb=0.001,
+            rb=0.010,
+            leaky=0.005,
         )
 
         return ModuleWorldGPResult(
@@ -228,7 +217,7 @@ class Module(torch.nn.Module):
             gp_rot_q=world_gp_rot_q,
             gp_scale=world_gp_scale,
             gp_color=self.gp_color,
-            gp_opacity=torch.exp(self.gp_log_opacity),
+            gp_opacity=self.gp_opacity.exp(),
         )
 
     def forward(
@@ -245,7 +234,10 @@ class Module(torch.nn.Module):
 
         H, W = -1, -2
 
-        H, W = utils.check_shapes(img, (..., C, H, W))
+        H, W = utils.check_shapes(
+            img, (..., C, H, W),
+            mask, (..., 1, H, W),
+        )
 
         avatar_model: avatar_utils.AvatarModel = self.avatar_blender(
             blending_param)
@@ -261,22 +253,6 @@ class Module(torch.nn.Module):
             vp[..., faces[:, 1], :],
             vp[..., faces[:, 2], :],
         )
-
-        mesh_ras_result = rendering_utils.rasterize_mesh(
-            vert_pos=avatar_model.vert_pos,
-            faces=avatar_model.mesh_data.f_to_vvv,
-            camera_config=camera_config,
-            camera_transform=camera_transform,
-            faces_per_pixel=1,
-        )
-
-        # mesh_ras_result.pix_to_face[B, H, W, 1]
-        # mesh_ras_result.bary_coords[B, H, W, 1, 3]
-        # mesh_ras_result.pix_dists[B, H, W, 1]
-
-        mesh_proj_area = (mesh_ras_result.pix_to_face != -1).count_nonzero(
-            dim=(1, 2, 3))
-        # [B]
 
         gp_render_result = gaussian_utils.render_gaussian(
             camera_config=camera_config,
@@ -303,64 +279,73 @@ class Module(torch.nn.Module):
 
         mesh_data = avatar_model.mesh_data
 
-        mask = mask.unsqueeze(-3)
-        # [..., 1, H, W]
-
         if not self.training:
             rgb_loss = torch.Tensor()
         else:
             person_masked_img = img * mask + (1 - mask)
 
             rgb_sum_sq_diff = (
-                gp_render_img - person_masked_img).square().sum()
+                gp_render_img - person_masked_img).square().sum((-1, -2, -3))
             # [...]
 
-            rgb_loss = rgb_sum_sq_diff / mesh_proj_area.sum()
+            rgb_loss = rgb_sum_sq_diff / mask.sum((-1, -2, -3))
+            # [...]
 
         if not self.training:
-            lap_smoothing_loss = torch.Tensor()
+            lap_smoothness_loss = torch.Tensor()
         else:
-            lap_smoothing_loss = mesh_data.calc_lap_smoothness(
+            lap_smoothness_loss = mesh_data.calc_l2_cot_lap_smoothness(
                 avatar_model.vert_pos)
+            # [...]
 
         if not self.training:
             nor_sim_loss = torch.Tensor()
         else:
-            nor_sim_loss = torch.Tensor()
-
             nor_sim = mesh_data.calc_face_cos_sim(
                 world_gp_result.face_coord_result.r[..., :, :3, 2]
                 # the z axis of each face
             )
-
             # [..., FP]
 
-            nor_sim_loss = 1 - nor_sim.mean()
+            nor_sim_loss = 1 - nor_sim.square().mean(-1)
+            # [...]
 
         if not self.training:
-            color_diff_loss = 0.0
+            color_diff_loss = torch.Tensor()
         else:
-            """
-            color_diff = mesh_data.calc_face_cos_sims(gp_colors)
+            color_diff = mesh_data.calc_face_cos_sim(
+                world_gp_result.gp_color)
             # [..., FP]
 
-            color_diff_loss = color_diff.square().mean()
-            """
+            color_diff_loss = color_diff.square().mean(-1)
+            # [...]
 
-            color_diff_loss = 0.0
+        if not self.training:
+            gp_scale_diff_loss = torch.Tensor()
+        else:
+            world_gp_x_scale = world_gp_result.gp_scale[..., :, 0]
+            world_gp_y_scale = world_gp_result.gp_scale[..., :, 1]
+
+            word_gp_xy_scale = world_gp_x_scale * world_gp_y_scale
+            # [..., F]
+
+            word_gp_xy_scale_diff = avatar_model.mesh_data.calc_face_diff(
+                word_gp_xy_scale.unsqueeze(-1))
+            # [..., FP, 1]
+
+            gp_scale_diff_loss = word_gp_xy_scale_diff.mean((-1, -2))
+            # [...]
 
         return ModuleForwardResult(
             avatar_model=avatar_model,
 
-            mesh_ras_result=mesh_ras_result,
-            mesh_proj_area=mesh_proj_area,
-
             gp_render_img=gp_render_img,
 
             rgb_loss=rgb_loss,
-            lap_smoothing_loss=lap_smoothing_loss,
+            lap_smoothness_loss=lap_smoothness_loss,
             nor_sim_loss=nor_sim_loss,
             color_diff_loss=color_diff_loss,
+            gp_scale_diff_loss=gp_scale_diff_loss,
         )
 
     def refresh(self) -> None:

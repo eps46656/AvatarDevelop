@@ -9,7 +9,7 @@ import torchvision.transforms.functional
 import tqdm
 from beartype import beartype
 
-from . import utils, video_utils
+from . import utils, vision_utils
 
 
 class ObjectType(enum.Enum):
@@ -108,9 +108,9 @@ def make_blur(
 @beartype
 @utils.mem_clear
 def _read_person_mask(
-    imgs: video_utils.VideoGenerator,  # [C, H, W]
+    imgs: vision_utils.VideoGenerator,  # [C, H, W]
     out_dir: os.PathLike,
-) -> video_utils.VideoReader:  # [1, H, W]
+) -> vision_utils.VideoReader:  # [1, H, W]
     from . import lang_sam_utils
 
     out_dir = utils.to_pathlib_path(out_dir)
@@ -118,8 +118,8 @@ def _read_person_mask(
     person_mask_path = out_dir / PERSON_MASK_FILENAME
 
     def read_and_return():
-        return video_utils.VideoReader(
-            person_mask_path, video_utils.ColorType.GRAY)
+        return vision_utils.VideoReader(
+            person_mask_path, vision_utils.ColorType.GRAY)
 
     if person_mask_path.exists():
         return read_and_return()
@@ -132,45 +132,45 @@ def _read_person_mask(
         batch_size=PREDICT_BATCH_SIZE,
     )
 
-    video_writer = video_utils.VideoWriter(
+    video_writer = vision_utils.VideoWriter(
         person_mask_path,
         height=imgs.height,
         width=imgs.width,
-        color_type=video_utils.ColorType.GRAY,
+        color_type=vision_utils.ColorType.GRAY,
         fps=imgs.fps,
     )
 
     with video_writer:
         for person_mask in tqdm.tqdm(gen):
-            video_writer.write(utils.denormalize_image(person_mask))
+            video_writer.write(vision_utils.denormalize_image(person_mask))
 
     return read_and_return()
 
 
 @beartype
 def _read_blurred_person_mask(
-    masked_imgs: video_utils.VideoGenerator,  # [C, H, W]
+    masked_imgs: vision_utils.VideoGenerator,  # [C, H, W]
     out_dir: os.PathLike,
-) -> video_utils.VideoReader:  # [1, H, W]
+) -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
     blurred_person_mask_path = out_dir / BLURRED_PERSON_MASK_FILENAME
 
     def read_and_return():
-        return video_utils.VideoReader(
-            blurred_person_mask_path, video_utils.ColorType.GRAY)
+        return vision_utils.VideoReader(
+            blurred_person_mask_path, vision_utils.ColorType.GRAY)
 
     if blurred_person_mask_path.exists():
         return read_and_return()
 
-    person_masks: video_utils.VideoReader = \
+    person_masks: vision_utils.VideoReader = \
         _read_person_mask(masked_imgs, out_dir)
 
-    video_writer = video_utils.VideoWriter(
+    video_writer = vision_utils.VideoWriter(
         blurred_person_mask_path,
         height=person_masks.height,
         width=person_masks.width,
-        color_type=video_utils.ColorType.GRAY,
+        color_type=vision_utils.ColorType.GRAY,
         fps=person_masks.fps,
     )
 
@@ -184,10 +184,10 @@ def _read_blurred_person_mask(
 @beartype
 @utils.mem_clear
 def _read_object_mask(
-    masked_imgs: video_utils.VideoGenerator,  # [C, H, W]
+    masked_imgs: vision_utils.VideoGenerator,  # [C, H, W]
     out_dir: os.PathLike,
     object_type: ObjectType,
-) -> video_utils.VideoReader:  # [1, H, W]
+) -> vision_utils.VideoReader:  # [1, H, W]
     from . import lang_sam_utils
 
     out_dir = utils.to_pathlib_path(out_dir)
@@ -195,8 +195,8 @@ def _read_object_mask(
     object_mask_path = out_dir / object_mask_filename(object_type)
 
     def read_and_return():
-        return video_utils.VideoReader(
-            object_mask_path, video_utils.ColorType.GRAY)
+        return vision_utils.VideoReader(
+            object_mask_path, vision_utils.ColorType.GRAY)
 
     if object_mask_path.exists():
         return read_and_return()
@@ -212,47 +212,47 @@ def _read_object_mask(
         batch_size=PREDICT_BATCH_SIZE,
     )  # [T][H, W]
 
-    video_writer = video_utils.VideoWriter(
+    video_writer = vision_utils.VideoWriter(
         object_mask_path,
         height=masked_imgs.height,
         width=masked_imgs.width,
-        color_type=video_utils.ColorType.GRAY,
+        color_type=vision_utils.ColorType.GRAY,
         fps=masked_imgs.fps,
     )
 
     with video_writer:
         for object_mask in tqdm.tqdm(gen):
-            video_writer.write(utils.denormalize_image(object_mask))
+            video_writer.write(vision_utils.denormalize_image(object_mask))
 
     return read_and_return()
 
 
 @beartype
 def _read_blurred_object_mask(
-    masked_imgs: video_utils.VideoGenerator,  # [C, H, W]
+    masked_imgs: vision_utils.VideoGenerator,  # [C, H, W]
     out_dir: os.PathLike,
     object_type: ObjectType,
-) -> video_utils.VideoReader:  # [1, H, W]
+) -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
     blurred_object_mask_path = \
         out_dir / blurred_object_mask_filename(object_type)
 
     def read_and_return():
-        return video_utils.VideoReader(
-            blurred_object_mask_path, video_utils.ColorType.GRAY)
+        return vision_utils.VideoReader(
+            blurred_object_mask_path, vision_utils.ColorType.GRAY)
 
     if blurred_object_mask_path.exists():
         return read_and_return()
 
-    object_masks: video_utils.VideoReader = \
+    object_masks: vision_utils.VideoReader = \
         _read_object_mask(masked_imgs, out_dir, object_type)
 
-    video_writer = video_utils.VideoWriter(
+    video_writer = vision_utils.VideoWriter(
         blurred_object_mask_path,
         height=object_masks.height,
         width=object_masks.width,
-        color_type=video_utils.ColorType.GRAY,
+        color_type=vision_utils.ColorType.GRAY,
         fps=object_masks.fps,
     )
 
@@ -275,11 +275,11 @@ def segment(
 
     assert out_dir.is_dir()
 
-    person_masks: video_utils.VideoGenerator = _read_person_mask(
-        video_utils.SeqVideoGenerator(imgs, fps), out_dir)
+    person_masks: vision_utils.VideoGenerator = _read_person_mask(
+        vision_utils.SeqVideoGenerator(imgs, fps), out_dir)
 
     _read_blurred_person_mask(
-        video_utils.SeqVideoGenerator(imgs, fps), out_dir)
+        vision_utils.SeqVideoGenerator(imgs, fps), out_dir)
 
     masked_imgs = [
         torch.where(
@@ -292,7 +292,7 @@ def segment(
 
     for object_type in tqdm.tqdm(ObjectType):
         _read_blurred_object_mask(
-            video_utils.SeqVideoGenerator(masked_imgs, fps),
+            vision_utils.SeqVideoGenerator(masked_imgs, fps),
             out_dir,
             object_type,
         )

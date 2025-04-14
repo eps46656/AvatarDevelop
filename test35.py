@@ -18,7 +18,7 @@ import pytorch3d.structures
 from . import (camera_utils, config, dataset_utils, face_seg_utils,
                gom_avatar_training_utils, gom_utils, people_snapshot_utils,
                rendering_utils, segment_utils, smplx_utils, training_utils,
-               transform_utils, utils, video_utils)
+               transform_utils, utils, vision_utils)
 
 
 class AlbedoMeshShader(pytorch3d.renderer.mesh.shader.ShaderBase):
@@ -41,12 +41,15 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0410_1"
+PROJ_DIR = DIR / "train_2025_0414_1"
+
+VERT_GRAD_NORM_THRESHOLD = 1e-3
 
 ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHING = 10.0
-ALPHA_NOR_SIM = 1.0
+ALPHA_LAP_SMOOTHNESS = 800.0
+ALPHA_NOR_SIM = 500.0
 ALPHA_COLOR_DIFF = 1.0
+ALPHA_GP_SCALE_DIFF = 1.0
 
 BATCH_SIZE = 4
 
@@ -118,10 +121,14 @@ def load_trainer():
             proj_dir=PROJ_DIR,
             device=DEVICE,
             batch_size=BATCH_SIZE,
+
+            vert_grad_norm_threshold=VERT_GRAD_NORM_THRESHOLD,
+
             alpha_rgb=ALPHA_RGB,
-            alpha_lap_smoothing=ALPHA_LAP_SMOOTHING,
+            alpha_lap_smoothness=ALPHA_LAP_SMOOTHNESS,
             alpha_nor_sim=ALPHA_NOR_SIM,
             alpha_color_diff=ALPHA_COLOR_DIFF,
+            alpha_gp_scale_diff=ALPHA_GP_SCALE_DIFF,
         ),
         module=module,
         dataset=dataset,
@@ -164,9 +171,9 @@ def main1():
 
     mask_dir = DIR / "segment_2025_0412_1"
 
-    masks = [video_utils.read_video_mask(
+    masks = [vision_utils.read_video_mask(
         mask_dir / segment_utils.blurred_object_mask_filename(obj),
-        dtype=torch.float16,
+        dtype=torch.float32,
         device=DEVICE,
     )[0] for obj in obj_list]
 
@@ -196,6 +203,14 @@ def main1():
 
     T, C, H, W = dataset.sample.img.shape
 
+    albedo_tex = pytorch3d.renderer.TexturesUV(
+        maps=[einops.rearrange(albedo_map, "c h w -> h w c")],
+        verts_uvs=[obj_model_data.tex_vert_pos],
+        faces_uvs=[obj_model_data.tex_mesh_data.f_to_vvv],
+        padding_mode="reflection",
+        sampling_mode="bilinear",
+    )
+
     with torch.no_grad():
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
                 dataset, batch_size=8, shuffle=False)):
@@ -217,6 +232,8 @@ def main1():
 
             for i in range(batch_size):
                 cur_avatar_model = result.avatar_model[i]
+
+                cur_avatar_model.mesh_data.show(cur_avatar_model.vert_pos)
 
                 mesh_ras_result = rendering_utils.rasterize_mesh(
                     vert_pos=cur_avatar_model.vert_pos,
@@ -285,7 +302,7 @@ def main2():
     model_data: smplx_utils.ModelData = smplx_model_builder.model_data
 
     face_voting_result = utils.read_pickle(
-        PROJ_DIR / "face_voting_result_1744458415.pkl")
+        PROJ_DIR / "face_voting_result_1744619847.pkl")
 
     face_ballots_cnt = torch.from_numpy(
         face_voting_result["face_ballots_cnt"])
@@ -381,7 +398,7 @@ def main3():
 
     T, C, H, W = subject_data.video.shape
 
-    albedo_map = utils.read_image(
+    albedo_map = vision_utils.read_image(
         PROJ_DIR / "tex_1744290016.png").to(DEVICE, utils.FLOAT)
 
     albedo_tex = pytorch3d.renderer.TexturesUV(
@@ -417,11 +434,11 @@ def main3():
         texels = albedo_tex.sample_textures(fragments)
         # [1, H, W, 1, C]
 
-        out_images[t] = utils.denormalize_image(
+        out_images[t] = vision_utils.denormalize_image(
             einops.rearrange(texels.view(H, W, C), "h w c -> c h w"))
 
     utils.write_video(
-        PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.mp4",
+        PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.xvid",
         out_images,
         subject_data.fps,
     )

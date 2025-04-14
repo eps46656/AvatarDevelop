@@ -189,7 +189,7 @@ def map_to_texture(
         .to(utils.CPU_DEVICE)
     # [F, C]
 
-    gp_opacities = torch.exp(gom_module.gp_log_opacity) \
+    gp_opacities = torch.exp(gom_module.gp_opacity) \
         .to(utils.CPU_DEVICE)
     # [F, 1]
 
@@ -245,7 +245,7 @@ def map_to_texture(
     print(f"{ret.min()=}")
     print(f"{ret.max()=}")
 
-    utils.write_image(
+    vision_utils.write_image(
         DIR / " tex_map.png",
         ret.to(utils.CPU_DEVICE),
     )

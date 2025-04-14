@@ -61,7 +61,7 @@ def main2():
 
     print(f"{subject_data.mask.shape}")
 
-    utils.write_image(
+    vision_utils.write_image(
         DIR / "mask.jpg",
         subject_data.mask[0],
     )

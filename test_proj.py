@@ -63,7 +63,7 @@ def main1():
 
             img[x, y, :] = (255, 0, 0)
 
-    utils.write_image(DIR / "test.png", img)
+    vision_utils.write_image(DIR / "test.png", img)
 
 
 def main2():

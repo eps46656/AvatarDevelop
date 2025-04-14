@@ -227,7 +227,7 @@ def main1():
             if 0 < w_map[h, w]:
                 img[h, w, :] = albedo_map[:, h, w].to(dtype=int).numpy()
 
-    utils.write_image(DIR / "test.png", img, "hwc")
+    vision_utils.write_image(DIR / "test.png", img, "hwc")
 
 
 if __name__ == "__main__":

@@ -244,8 +244,7 @@ def query_gaussian(
     rel_points = (points.unsqueeze(-2) - gp_mean).unsqueeze(-1)
     # [..., N, 3, 1]
 
-    k = torch.exp(-0.5 * (
-        rel_points.transpose(-1, -2) @ inv_cov @ rel_points)) \
+    k = (-0.5 * (rel_points.transpose(-1, -2) @ inv_cov @ rel_points)).exp() \
         .squeeze(-1).squeeze(-1)
     # [..., N, 1, 1] -> [..., N]
 

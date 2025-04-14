@@ -1871,90 +1871,6 @@ def write_pickle(
 
 
 @beartype
-def normalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.float32,
-    device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:
-    return torch.div(
-        img.clamp(0, k),
-        k,
-        rounding_mode=None,
-        out=empty_like(img, dtype=dtype, device=device),
-    )
-
-
-@beartype
-def denormalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.uint8,
-    device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:
-    return (img * k).round().clamp(0, k).to(device, dtype)
-
-
-@beartype
-def read_image(path: os.PathLike):
-    img = torchvision.io.read_image(
-        path, torchvision.io.ImageReadMode.RGB)
-    # [C, H, W]
-
-    return normalize_image(img)
-
-
-@beartype
-def write_image(
-    path: os.PathLike,
-    img: torch.Tensor,  # [C, H, W]
-):
-    assert img.ndim == 3
-
-    path = to_pathlib_path(path)
-
-    os.makedirs(path.parents[0], exist_ok=True)
-
-    img = img.to(CPU_DEVICE)
-
-    img = denormalize_image(img)
-
-    if path.suffix == ".png":
-        torchvision.io.write_png(img, path)
-        return
-
-    if path.suffix == ".jpg" or path.suffix == ".jpeg":
-        torchvision.io.write_jpeg(img, path)
-        return
-
-    raise MismatchException()
-
-
-@beartype
-@mem_clear
-def write_video(
-    path: os.PathLike,
-    video: torch.Tensor,  # [T, C, H, W]
-    fps: float,
-) -> None:
-    T, C, H, W = -1, -2, -3, -4
-
-    T, C, H, W = check_shapes(video, (T, C, H, W))
-
-    fourcc = cv.VideoWriter_fourcc(*"mp4v")
-    writer = cv.VideoWriter(path, fourcc, fps, (W, H))
-
-    for t in range(T):
-        writer.write(cv.cvtColor(einops.rearrange(
-            denormalize_image(video[t]).cpu().numpy(),
-            "c h w -> h w c"), cv.COLOR_RGB2BGR))
-
-    writer.release()
-
-
-@beartype
 def write_tensor_to_file(path: os.PathLike, x: torch.Tensor) -> None:
     path = to_pathlib_path(path)
 
@@ -2019,12 +1935,12 @@ def smooth_clamp(
     normed_x_r = centered_x / (-scale * smoothness_r)
 
     y_l = \
-        ((1 - slope_l) * smoothness_l * scale) * torch.exp(normed_x_l) + \
+        ((1 - slope_l) * smoothness_l * scale) * normed_x_l.exp() + \
         slope_l * centered_x + \
         ((slope_l - 1) * smoothness_l * scale + center)
 
     y_r = \
-        ((slope_r - 1) * smoothness_r * scale) * torch.exp(normed_x_r) + \
+        ((slope_r - 1) * smoothness_r * scale) * normed_x_r.exp() + \
         slope_r * centered_x + \
         ((1 - slope_r) * smoothness_r * scale + center)
 

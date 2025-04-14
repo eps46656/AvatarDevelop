@@ -9,6 +9,7 @@ import time
 import traceback
 import typing
 
+import prompt_toolkit
 import torch
 from beartype import beartype
 
@@ -373,6 +374,15 @@ class Trainer:
         utils.write_file(Trainer._get_cancel_token_path(
             self.__proj_dir), "w", "")
 
+        self.prompt_session = prompt_toolkit.PromptSession(
+            "trainer> ",
+            style=prompt_toolkit.styles.Style.from_dict({
+                "prompt": "ansigreen bold",
+                "input": "ansiblue",
+                "": "ansiyellow",
+            }),
+        )
+
     def show(self):
         print(f"")
         print(f"            prv = {self.__prv}")
@@ -523,7 +533,7 @@ class Trainer:
         getattr(self.training_core, func_name)(**kwargs)
 
     def _cli_handler(self, cmd_parser):
-        cmd = shlex.split(input("trainer> "))
+        cmd = shlex.split(self.prompt_session.prompt())
 
         args = cmd_parser.parse_args(cmd)
 

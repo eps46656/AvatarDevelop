@@ -44,28 +44,31 @@ class ModelData:
         eye_joints_cnt: int,  # EYEJ
 
         vert_pos: torch.Tensor,  # [..., V, 3]
-        vert_nor: typing.Optional[torch.Tensor],  # [..., V, 3]
+        vert_nor: typing.Optional[torch.Tensor] = None,  # [..., V, 3]
 
         tex_vert_pos: torch.Tensor,
         # [..., TV, 2]
 
-        body_shape_vert_dir: torch.Tensor,
+        body_shape_vert_dir: typing.Optional[torch.Tensor],
         # [..., V, 3, BS]
 
         expr_shape_vert_dir: typing.Optional[torch.Tensor] = None,
         # [..., V, 3, ES]
 
-        body_shape_joint_dir: torch.Tensor,
+        body_shape_joint_dir: typing.Optional[torch.Tensor] = None,
         # [..., J, 3, BS]
 
         expr_shape_joint_dir: typing.Optional[torch.Tensor] = None,
         # [..., J, 3, ES]
 
-        joint_t_mean: torch.Tensor,  # [..., J, 3]
+        joint_t_mean: torch.Tensor,
+        # [..., J, 3]
 
-        pose_vert_dir: torch.Tensor,  # [..., V, 3, (J - 1) * 3 * 3]
+        pose_vert_dir: typing.Optional[torch.Tensor] = None,
+        # [..., V, 3, (J - 1) * 3 * 3]
 
-        lbs_weight: torch.Tensor,  # [..., V, J]
+        lbs_weight: typing.Optional[torch.Tensor] = None,
+        # [..., V, J]
 
         lhand_pose_mean: typing.Optional[torch.Tensor] = None,
         # [..., HANDJ, 3]
@@ -85,38 +88,32 @@ class ModelData:
         F = mesh_data.faces_cnt
         assert tex_mesh_data.faces_cnt == F
 
+        BS, ES = -1, -2
+
         utils.check_shapes(
             vert_pos, (..., V, 3),
             vert_nor, (..., V, 3),
 
             tex_vert_pos, (..., TV, 2),
+
+            body_shape_vert_dir, (..., V, 3, BS),
+            expr_shape_vert_dir, (..., V, 3, ES),
+            body_shape_joint_dir, (..., J, 3, BS),
+            expr_shape_joint_dir, (..., J, 3, ES),
+
             pose_vert_dir, (..., V, 3, (J - 1) * 3 * 3),
 
             lbs_weight, (..., V, J),
         )
 
-        BS = 0 if body_shape_vert_dir is None else \
-            utils.check_shapes(body_shape_vert_dir, (..., V, 3, -1))
-
-        ES = 0 if expr_shape_vert_dir is None else \
-            utils.check_shapes(expr_shape_vert_dir, (..., V, 3, -1))
-
-        utils.check_shapes(body_shape_joint_dir, (..., J, 3, BS))
-
-        if expr_shape_joint_dir is not None:
-            utils.check_shapes(expr_shape_joint_dir, (..., J, 3, ES))
-
         assert 1 <= BODYJ
         assert 0 <= JAWJ
         assert 0 <= EYEJ
 
-        if lhand_pose_mean is None:
-            assert rhand_pose_mean is None
-            HANDJ = 0
-        else:
-            assert rhand_pose_mean is not None
-            assert lhand_pose_mean.shape == rhand_pose_mean.shape
-            HANDJ = utils.check_shapes(lhand_pose_mean, (..., -1, 3))
+        HANDJ = utils.check_shapes(
+            lhand_pose_mean, (..., -1, 3),
+            rhand_pose_mean, (..., -1, 3),
+        )
 
         assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
@@ -581,9 +578,12 @@ class ModelData:
             self.tex_vert_pos[..., tex_vert_src_table[:, 1], :]) / 2
         # [..., TV_, 2]
 
-        new_pose_vert_dir = (
-            self.pose_vert_dir[..., vert_src_table[:, 0], :, :] +
-            self.pose_vert_dir[..., vert_src_table[:, 1], :, :]) / 2
+        if self.pose_vert_dir is None:
+            new_pose_vert_dir = None
+        else:
+            new_pose_vert_dir = (
+                self.pose_vert_dir[..., vert_src_table[:, 0], :, :] +
+                self.pose_vert_dir[..., vert_src_table[:, 1], :, :]) / 2
         # [..., V_, 3, (J - 1) * 3 * 3]
 
         new_lbs_weight = (
@@ -673,7 +673,10 @@ class ModelData:
             new_expr_shape_vert_dir = \
                 self.expr_shape_vert_dir[..., vert_src_table, :, :]
 
-        new_pose_vert_dir = self.pose_vert_dir[..., vert_src_table, :, :]
+        if self.pose_vert_dir is None:
+            new_pose_vert_dir = None
+        else:
+            new_pose_vert_dir = self.pose_vert_dir[..., vert_src_table, :, :]
         # [..., V_, 3, (J - 1) * 3 * 3]
 
         new_lbs_weight = self.lbs_weight[..., vert_src_table, :]

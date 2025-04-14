@@ -48,7 +48,7 @@ def main1():
 
     print(f"{img.shape=}")
 
-    utils.write_image(DIR / "test.png", img)
+    vision_utils.write_image(DIR / "test.png", img)
 
 
 def main2():
@@ -95,7 +95,7 @@ def main2():
 
         assert ratio <= 0.04
 
-    utils.write_image(DIR / "test.png", img)
+    vision_utils.write_image(DIR / "test.png", img)
 
 
 if __name__ == "__main__":

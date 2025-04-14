@@ -5,7 +5,8 @@ import typing
 import torch
 from beartype import beartype
 
-from .. import camera_utils, dataset_utils, transform_utils, utils
+from .. import (camera_utils, dataset_utils, transform_utils, utils,
+                vision_utils)
 
 
 @beartype
@@ -77,7 +78,7 @@ class Sample:
             camera_transform=self.camera_transform[*idx],
 
             img=self.img[*idx, ..., :, :, :],
-            mask=self.mask[*idx, ..., :, :],
+            mask=self.mask[*idx, ..., :, :, :],
 
             blending_param=self.blending_param[*idx],
         )
@@ -135,8 +136,7 @@ class Dataset(dataset_utils.Dataset):
     def __getitem__(self, idx) -> Sample:
         ret = self.sample[idx]
 
-        ret.img = utils.normalize_image(ret.img)
-        ret.mask = utils.normalize_image(ret.mask)
+        ret.raw_img = vision_utils.normalize_image(ret.raw_img)
 
         return ret
 

@@ -1,13 +1,12 @@
 import dataclasses
 import os
-import pathlib
 
 import h5py
 import torch
 import tqdm
 from beartype import beartype
 
-from . import camera_utils, smplx_utils, transform_utils, utils, video_utils
+from . import camera_utils, smplx_utils, transform_utils, utils, vision_utils
 
 
 @beartype
@@ -25,18 +24,24 @@ class SubjectData:
 
     blending_param: smplx_utils.BlendingParam
 
+    tex: torch.Tensor  # [C, H, W]
+
 
 @beartype
 def _read_mask(
-    subject_dir: pathlib.Path,
+    subject_dir: os.PathLike,
     fps: float,
     device: torch.device,
 ) -> torch.Tensor:  # [T, 1, H, W]
+    subject_dir = utils.to_pathlib_path(subject_dir)
+
+    assert subject_dir.is_dir()
+
     mask_video_path = subject_dir / "masks.mp4"
 
     def f():
-        return video_utils.read_video_mask(
-            mask_video_path, dtype=torch.float16, device=device)[0]
+        return vision_utils.read_video_mask(
+            mask_video_path, dtype=torch.float32, device=device)[0]
 
     if mask_video_path.exists():
         return f()
@@ -47,15 +52,15 @@ def _read_mask(
 
     T, H, W = masks.shape
 
-    with video_utils.VideoWriter(
+    with vision_utils.VideoWriter(
         mask_video_path,
         height=H,
         width=W,
-        color_type=video_utils.ColorType.RGB,
+        color_type=vision_utils.ColorType.RGB,
         fps=fps,
     ) as video_writer:
         for i in tqdm.tqdm(range(T)):
-            video_writer.write(utils.denormalize_image(torch.from_numpy(
+            video_writer.write(vision_utils.denormalize_image(torch.from_numpy(
                 masks[i]).expand(3, H, W)))
 
     return f()
@@ -63,13 +68,17 @@ def _read_mask(
 
 @beartype
 def _read_camera(
-    subject_dir: pathlib.Path,
+    subject_dir: os.PathLike,
     img_h: int,
     img_w: int,
 ) -> tuple[
     camera_utils.CameraConfig,
     transform_utils.ObjectTransform,  # camera <-> world
 ]:
+    subject_dir = utils.to_pathlib_path(subject_dir)
+
+    assert subject_dir.is_dir()
+
     camera = utils.read_pickle(subject_dir / "camera.pkl")
 
     fx = float(camera['camera_f'][0])
@@ -104,11 +113,15 @@ def _read_camera(
 
 @beartype
 def _read_smpl_blending_param(
-    subject_dir: pathlib.Path,
+    subject_dir: os.PathLike,
     smplx_model_data: smplx_utils.ModelData,
     frames_cnt: int,
     device: torch.device,
 ) -> smplx_utils.BlendingParam:
+    subject_dir = utils.to_pathlib_path(subject_dir)
+
+    assert subject_dir.is_dir()
+
     body_shapes_cnt = smplx_model_data.body_shape_vert_dir.shape[-1]
     poses_cnt = smplx_model_data.body_joints_cnt
     # global_rot + smplx_utils.BODY_POSES_CNT
@@ -181,6 +194,18 @@ def _read_smpl_blending_param(
 
 
 @beartype
+def _read_tex(
+    subject_dir: os.PathLike,
+    device: torch.device,
+):
+    subject_dir = utils.to_pathlib_path(subject_dir)
+
+    assert subject_dir.is_dir()
+
+    return vision_utils.read_image(subject_dir / f"tex-{subject_dir.name}.jpg").to(device)
+
+
+@beartype
 def read_subject(
     subject_dir: os.PathLike,
     model_data: smplx_utils.ModelData,
@@ -194,9 +219,12 @@ def read_subject(
 
     subject_video_path = subject_dir / f"{subject_name}.mp4"
 
-    video, fps = video_utils.read_video(
-        subject_video_path, video_utils.ColorType.RGB)
+    video, fps = vision_utils.read_video(
+        subject_video_path, vision_utils.ColorType.RGB)
     # [T, C, H, W]
+
+    mask = _read_mask(subject_dir, fps, device)
+    # [T, 1, H, W]
 
     img_h, img_w = video.shape[2:]
 
@@ -206,16 +234,17 @@ def read_subject(
     blending_param = _read_smpl_blending_param(
         subject_dir, model_data, video.shape[0], device)
 
-    mask = _read_mask(subject_dir, fps, device)
+    tex = _read_tex(subject_dir, device)
 
     ret = SubjectData(
         fps=fps,
         video=video,
+        mask=mask,
         camera_config=camera_config,
         camera_transform=camera_transform,
         model_data=model_data,
         blending_param=blending_param,
-        mask=mask,
+        tex=tex,
     )
 
     return ret

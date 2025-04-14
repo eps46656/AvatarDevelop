@@ -20,12 +20,15 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0412_1"
+PROJ_DIR = DIR / "train_2025_0414_1"
+
+VERT_GRAD_NORM_THRESHOLD = 1e-3
 
 ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHING = 5.0
-ALPHA_NOR_SIM = 1.0
+ALPHA_LAP_SMOOTHNESS = 800.0
+ALPHA_NOR_SIM = 500.0
 ALPHA_COLOR_DIFF = 1.0
+ALPHA_GP_SCALE_DIFF = 1.0
 
 BATCH_SIZE = 4
 
@@ -90,7 +93,7 @@ def load_trainer():
 
     optimizer = torch.optim.Adam(
         param_groups,
-        lr=1e-3,
+        lr=LR,
         betas=(0.5, 0.5),
     )
 
@@ -110,10 +113,14 @@ def load_trainer():
             proj_dir=PROJ_DIR,
             device=DEVICE,
             batch_size=BATCH_SIZE,
+
+            vert_grad_norm_threshold=VERT_GRAD_NORM_THRESHOLD,
+
             alpha_rgb=ALPHA_RGB,
-            alpha_lap_smoothing=ALPHA_LAP_SMOOTHING,
+            alpha_lap_smoothness=ALPHA_LAP_SMOOTHNESS,
             alpha_nor_sim=ALPHA_NOR_SIM,
             alpha_color_diff=ALPHA_COLOR_DIFF,
+            alpha_gp_scale_diff=ALPHA_GP_SCALE_DIFF,
         ),
         module=module,
         dataset=dataset,

@@ -161,20 +161,20 @@ def main5():
     model_data_path = config.SMPL_FEMALE_MODEL_PATH
     model_config = smplx_utils.smpl_model_config
 
-    model_data: smplx_utils.Model = smplx_utils.Core.from_file(
+    model_data: smplx_utils.Model = smplx_utils.ModelData.from_origin_file(
         model_data_path=model_data_path,
         model_config=model_config,
         device=DEVICE,
     )
 
     V = model_data.vert_pos.shape[-2]
-    F = model_data.faces.shape[-2]
+    F = model_data.faces_cnt
 
     D = 3
 
-    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_face_vert_adj_list(
+    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_faces(
         V,
-        model_data.faces,
+        model_data.mesh_data.f_to_vvv,
         DEVICE
     )
 
@@ -191,10 +191,10 @@ def main5():
     vps_2.requires_grad = True
 
     with utils.Timer():
-        loss_1 = mesh_data.calc_lap_smoothness(vps_1)
+        loss_1 = mesh_data.calc_l1_cot_lap_smoothness(vps_1)
 
     with utils.Timer():
-        loss_2 = mesh_data.calc_uni_lap_smoothness_pytorch3d(vps_2)
+        loss_2 = mesh_data.calc_cot_lap_smoothness_pytorch3d(vps_2)
 
     print(f"{loss_1=}")
     print(f"{loss_2=}")

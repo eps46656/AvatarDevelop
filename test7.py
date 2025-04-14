@@ -178,7 +178,8 @@ def main1():
 
     print(f"{img.shape=}")
 
-    utils.write_image(DIR / "output.png", img.reshape(img_shape + (3,)), "hwc")
+    vision_utils.write_image(
+        DIR / "output.png", img.reshape(img_shape + (3,)), "hwc")
 
 
 if __name__ == "__main__":

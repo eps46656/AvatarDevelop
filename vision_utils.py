@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import enum
 import os
 import typing
-import enum
 
 import cv2 as cv
 import einops
@@ -23,6 +23,68 @@ channels_cnt_table = {
     ColorType.GRAY: 1,
     ColorType.RGB: 3,
 }
+
+
+@beartype
+def normalize_image(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = torch.float32,
+    device: typing.Optional[torch.device] = None,
+) -> torch.Tensor:
+    return torch.div(
+        img.clamp(0, k),
+        k,
+        rounding_mode=None,
+        out=utils.empty_like(img, dtype=dtype, device=device),
+    )
+
+
+@beartype
+def denormalize_image(
+    img: torch.Tensor,
+    *,
+    k: int = 255,
+    dtype: torch.dtype = torch.uint8,
+    device: typing.Optional[torch.device] = None,
+) -> torch.Tensor:
+    return (img * k).round().clamp(0, k).to(device, dtype)
+
+
+@beartype
+def read_image(path: os.PathLike):
+    img = torchvision.io.read_image(
+        path, torchvision.io.ImageReadMode.RGB)
+    # [C, H, W]
+
+    return img
+
+
+@beartype
+def write_image(
+    path: os.PathLike,
+    img: torch.Tensor,  # [C, H, W]
+):
+    assert img.ndim == 3
+
+    assert img.dtype == torch.uint8
+
+    path = utils.to_pathlib_path(path)
+
+    os.makedirs(path.parents[0], exist_ok=True)
+
+    img = img.to(utils.CPU_DEVICE)
+
+    if path.suffix == ".png":
+        torchvision.io.write_png(img, path)
+        return
+
+    if path.suffix == ".jpg" or path.suffix == ".jpeg":
+        torchvision.io.write_jpeg(img, path)
+        return
+
+    raise utils.MismatchException()
 
 
 @beartype
@@ -301,10 +363,10 @@ def read_video(
 def read_video_mask(
     path: os.PathLike,
     *,
-    dtype: typing.Optional[torch.dtype] = torch.float16,
+    dtype: typing.Optional[torch.dtype] = torch.float32,
     device: typing.Optional[torch.device] = None,
 ) -> tuple[
-    typing.Optional[torch.Tensor],  # imgs
+    typing.Optional[torch.Tensor],  # mask[T, 1, H, W]
     float,  # fps
 ]:
     reader = VideoReader(path, ColorType.GRAY)

@@ -34,39 +34,24 @@ class BlendingParam:
         dtype: typing.Optional[torch.dtype] = None,
         device: typing.Optional[torch.device] = None,
     ):
-        if body_shape is not None:
-            BS = utils.check_shapes(body_shape, (..., -1))
+        BS, ES, BODYJ_, JAWJ, EYEJ, HANDJ = -1, -2, -3, -4, -5, -6
 
-        if expr_shape is not None:
-            ES = utils.check_shapes(expr_shape, (..., -1))
+        utils.check_shapes(
+            body_shape, (..., BS),
+            expr_shape, (..., ES),
 
-        if global_transl is not None:
-            utils.check_shapes(global_transl, (..., 3))
+            global_transl, (..., 3),
+            global_rot, (..., 3),
 
-        if global_rot is not None:
-            utils.check_shapes(global_rot, (..., 3))
+            body_pose, (..., BODYJ_, 3),
+            jaw_pose, (..., JAWJ, 3),
+            leye_pose, (..., EYEJ, 3),
+            reye_pose, (..., EYEJ, 3),
+            lhand_pose, (..., HANDJ, 3),
+            rhand_pose, (..., HANDJ, 3),
+        )
 
-        if body_pose is not None:
-            BJ = utils.check_shapes(body_pose, (..., -1, 3)) + 1
-
-        if jaw_pose is not None:
-            JJ = utils.check_shapes(jaw_pose, (..., -1, 3))
-
-        EYEJ = -1
-
-        if leye_pose is not None:
-            EYEJ = utils.check_shapes(leye_pose, (..., EYEJ, 3))
-
-        if reye_pose is not None:
-            EYEJ = utils.check_shapes(reye_pose, (..., EYEJ, 3))
-
-        HANDJ = -1
-
-        if lhand_pose is not None:
-            HANDJ = utils.check_shapes(lhand_pose, (..., HANDJ, 3))
-
-        if rhand_pose is not None:
-            HANDJ = utils.check_shapes(rhand_pose, (..., HANDJ, 3))
+        BODYJ = BODYJ_ + 1
 
         # ---
 

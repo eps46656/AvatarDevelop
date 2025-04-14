@@ -6,7 +6,7 @@ import torch
 from beartype import beartype
 
 from . import (camera_utils, config, gom_utils, people_snapshot_utils,
-               smplx_utils, transform_utils, utils)
+               smplx_utils, transform_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -67,7 +67,7 @@ def main1():
         device=DEVICE,
     )
 
-    subject_data.video = utils.normalize_image(subject_data.video)
+    subject_data.video = vision_utils.normalize_image(subject_data.video)
 
     camera_config = subject_data.camera_config
 
@@ -153,7 +153,7 @@ def main1():
 
         utils.write_video(
             path=DIR / f"output_{epoch_i}.mp4",
-            video=utils.denormalize_image(frames),
+            video=vision_utils.denormalize_image(frames),
             fps=30,
         )
 

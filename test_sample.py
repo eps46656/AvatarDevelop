@@ -68,7 +68,7 @@ def main2():
 
     print(f"{dst_img.shape}")
 
-    utils.write_image(DIR / "new.png", dst_img.numpy(), "chw")
+    vision_utils.write_image(DIR / "new.png", dst_img.numpy(), "chw")
 
 
 if __name__ == "__main__":

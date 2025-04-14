@@ -113,7 +113,7 @@ def main1():
     if isinstance(img, torch.Tensor):
         print(f"{img.shape=}")
 
-    utils.write_image(
+    vision_utils.write_image(
         DIR / "out.png",
         img * 255,
     )

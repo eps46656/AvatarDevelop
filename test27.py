@@ -7,7 +7,7 @@ import tqdm
 from beartype import beartype
 
 from . import (config, dataset_utils, gom_utils, people_snapshot_utils,
-               smplx_utils, training_utils, utils)
+               smplx_utils, training_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -146,7 +146,7 @@ class MyTrainingCore(training_utils.TrainingCore):
 
         utils.write_video(
             path=PROJ_DIR / f"output_{int(time.time())}.mp4",
-            video=utils.denormalize_image(out_frames),
+            video=vision_utils.denormalize_image(out_frames),
             fps=25,
         )
 
