@@ -57,6 +57,29 @@ def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
     return subject_data
 
 
+def create_optimizer(param_groups):
+    return torch.optim.Adam(
+        param_groups,
+        lr=LR,
+        betas=(0.5, 0.5),
+    )
+
+
+def create_scheduler(
+    optimizer
+):
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer,
+        mode="min",
+        factor=pow(0.1, 1/4),
+        patience=5,
+        threshold=0.05,
+        threshold_mode="rel",
+        cooldown=0,
+        min_lr=1e-7,
+    )
+
+
 def load_trainer():
     subject_data = read_subject()
 
@@ -89,24 +112,9 @@ def load_trainer():
 
     # ---
 
-    param_groups = utils.get_param_groups(module, LR)
+    optimizer_factory = create_optimizer
 
-    optimizer = torch.optim.Adam(
-        param_groups,
-        lr=LR,
-        betas=(0.5, 0.5),
-    )
-
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=pow(0.1, 1/4),
-        patience=5,
-        threshold=0.05,
-        threshold_mode="rel",
-        cooldown=0,
-        min_lr=1e-7,
-    )
+    scheduler = create_scheduler
 
     training_core = gom_avatar_training_utils.TrainingCore(
         config=gom_avatar_training_utils.Config(

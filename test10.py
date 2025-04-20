@@ -172,14 +172,14 @@ def main5():
 
     D = 3
 
-    mesh_data: mesh_utils.MeshData = mesh_utils.MeshData.from_faces(
+    mesh_graph: mesh_utils.MeshGraph = mesh_utils.MeshGraph.from_faces(
         V,
-        model_data.mesh_data.f_to_vvv,
+        model_data.mesh_graph.f_to_vvv,
         DEVICE
     )
 
-    vertices_cnt = mesh_data.verts_cnt
-    faces_cnt = mesh_data.faces_cnt
+    vertices_cnt = mesh_graph.verts_cnt
+    faces_cnt = mesh_graph.faces_cnt
 
     vertex_positions = torch.rand((vertices_cnt, 3), dtype=utils.FLOAT)
     face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
@@ -191,10 +191,10 @@ def main5():
     vps_2.requires_grad = True
 
     with utils.Timer():
-        loss_1 = mesh_data.calc_l1_cot_lap_smoothness(vps_1)
+        loss_1 = mesh_graph.calc_l1_cot_lap_smoothness(vps_1)
 
     with utils.Timer():
-        loss_2 = mesh_data.calc_cot_lap_smoothness_pytorch3d(vps_2)
+        loss_2 = mesh_graph.calc_cot_lap_smoothness_pytorch3d(vps_2)
 
     print(f"{loss_1=}")
     print(f"{loss_2=}")
@@ -212,10 +212,10 @@ def main5():
     return
 
     with utils.Timer():
-        normal_sim = mesh_data.calc_face_cos_sim(face_normals)
+        normal_sim = mesh_graph.calc_face_cos_sim(face_normals)
 
     with utils.Timer():
-        normal_sim_naive = mesh_data.calc_face_cos_sim_naive(face_normals)
+        normal_sim_naive = mesh_graph.calc_face_cos_sim_naive(face_normals)
 
     normal_sim_1 = normal_sim.square().mean()
     normal_sim_2 = normal_sim_naive.square().mean()

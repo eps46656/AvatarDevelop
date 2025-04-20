@@ -16,6 +16,7 @@ import typing
 
 import cv2 as cv
 import einops
+import numpy as np
 import PIL
 import torch
 import torchvision
@@ -167,10 +168,6 @@ def deserialize_datetime(
     second_precision: bool,
 ):
     return None if dt_str is None else datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S" if second_precision else "%Y-%m-%d")
-
-
-class UnimplementationError(Exception):
-    pass
 
 
 class MismatchException(Exception):
@@ -335,7 +332,7 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
 
         assert ellipsis_cnt <= 1
 
-        if t is None:
+        if t is None or t.shape.numel() == 0:
             for p_val in p:
                 if isinstance(p_val, int) and p_val < 0:
                     undet_shapes.setdefault(p_val, p_val)
@@ -1066,8 +1063,10 @@ def vec_norm(
     x: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
+    *,
+    out: typing.Optional[torch.Tensor] = None,
 ) -> torch.Tensor:  # [...]
-    return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim)
+    return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim, out=out)
 
 
 @beartype
@@ -1866,6 +1865,8 @@ def write_pickle(
     *,
     mode: str = "wb+",
 ):
+    print(f"Writing pickle to \"{path=}\".")
+
     with create_file(path, mode) as f:
         pickle.dump(data, f)
 
@@ -1945,3 +1946,47 @@ def smooth_clamp(
         ((1 - slope_r) * smoothness_r * scale + center)
 
     return torch.where(centered_x < 0, y_l, y_r)
+
+
+_tensor_serialize_np_dtype_table = {
+    torch.bool: np.bool_,
+
+    torch.int8: np.int8,
+    torch.uint8: np.uint8,
+
+    torch.int16: np.int16,
+    torch.uint16: np.uint16,
+
+    torch.int32: np.int32,
+    torch.uint32: np.uint32,
+
+    torch.int64: np.int64,
+    torch.uint64: np.uint64,
+
+    torch.float16: np.float16,
+    torch.bfloat16: np.float32,
+    torch.float32: np.float32,
+    torch.float64: np.float64,
+
+    torch.complex64: np.complex64,
+    torch.complex128: np.complex128,
+}
+
+
+@beartype
+def tensor_serialize(
+    x: typing.Optional[torch.Tensor],
+    dtype: typing.Optional[np.dtype] = None,
+) -> typing.Optional[np.ndarray]:
+    return None if x is None else \
+        np.array(x.numpy(force=True), dtype=dtype, copy=True)
+
+
+@beartype
+def tensor_deserialize(
+    x: typing.Optional[np.ndarray],
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+) -> typing.Optional[torch.Tensor]:
+    return None if x is None else \
+        torch.from_numpy(x).to(device, dtype, copy=True)

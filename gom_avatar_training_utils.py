@@ -201,7 +201,7 @@ class TrainingCore(training_utils.TrainingCore):
         avatar_model: smplx_utils.Model = \
             self.module.avatar_blender.get_avatar_model()
 
-        avatar_model.mesh_data.show(avatar_model.vert_pos)
+        avatar_model.mesh_graph.show(avatar_model.vert_pos)
 
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
             self.dataset,
@@ -297,7 +297,7 @@ class TrainingCore(training_utils.TrainingCore):
 
                 mesh_ras_result = rendering_utils.rasterize_mesh(
                     vert_pos=cur_avatar_model.vert_pos,
-                    faces=cur_avatar_model.mesh_data.f_to_vvv,
+                    faces=cur_avatar_model.mesh_graph.f_to_vvv,
                     camera_config=sample.camera_config,
                     camera_transform=sample.camera_transform[k],
                     faces_per_pixel=1,
@@ -339,7 +339,7 @@ class TrainingCore(training_utils.TrainingCore):
 
         face_idx_map = texture_utils.calc_face_idx(
             tex_vert_pos=avatar_model.tex_vert_pos,
-            tex_faces=avatar_model.tex_mesh_data.f_to_vvv,
+            tex_faces=avatar_model.tex_mesh_graph.f_to_vvv,
 
             tex_h=tex_h,
             tex_w=tex_w,
@@ -405,8 +405,6 @@ class TrainingCore(training_utils.TrainingCore):
         face_color_all_sum_xxt = torch.zeros(
             (F + 1, C, C), dtype=torch.float64, device=self.__config.device)
 
-        print(f"{F=}")
-
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(self.dataset, batch_size=8)):
             utils.mem_clear()
 
@@ -419,7 +417,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             fragments = rendering_utils.rasterize_mesh(
                 vert_pos=cur_avatar_model.vert_pos,
-                faces=cur_avatar_model.mesh_data.f_to_vvv,
+                faces=cur_avatar_model.mesh_graph.f_to_vvv,
                 camera_config=sample.camera_config,
                 camera_transform=sample.camera_transform,
                 faces_per_pixel=1,
@@ -428,7 +426,7 @@ class TrainingCore(training_utils.TrainingCore):
             pix_to_face = fragments.pix_to_face.reshape(B, H, W)
 
             pix_to_face = torch.where(
-                0.5 <= sample.mask,
+                0.5 <= sample.mask.reshape(B, H, W),
                 pix_to_face,
                 -1,
             )
@@ -463,12 +461,17 @@ class TrainingCore(training_utils.TrainingCore):
         # face_color_pca[F + 1, C, C]
         # face_color_std[F + 1, C]
 
+        use_pca_threshold = 10
+
         face_color_ell_mean = face_color_mean
 
         inv_face_color_ell_axis = torch.where(
-            (2 <= face_color_all_cnt)[..., None, None].expand(F + 1, C, C),
+            (use_pca_threshold <= face_color_all_cnt)[..., None, None]
+            .expand(F + 1, C, C),
+
             (face_color_pca * face_color_std.unsqueeze(-1)).transpose(-1, -2),
-            10 * torch.eye(
+
+            torch.eye(
                 C, dtype=face_color_pca.dtype, device=face_color_pca.device)
             .expand(F + 1, C, C)
         ).inverse()
@@ -492,7 +495,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             fragments = rendering_utils.rasterize_mesh(
                 vert_pos=cur_avatar_model.vert_pos,
-                faces=cur_avatar_model.mesh_data.f_to_vvv,
+                faces=cur_avatar_model.mesh_graph.f_to_vvv,
                 camera_config=sample.camera_config,
                 camera_transform=sample.camera_transform,
                 faces_per_pixel=1,
@@ -537,7 +540,7 @@ class TrainingCore(training_utils.TrainingCore):
 
         face_idx_map = texture_utils.calc_face_idx(
             tex_vert_pos=avatar_model.tex_vert_pos,
-            tex_faces=avatar_model.tex_mesh_data.f_to_vvv,
+            tex_faces=avatar_model.tex_mesh_graph.f_to_vvv,
 
             tex_h=tex_h,
             tex_w=tex_w,
@@ -547,7 +550,8 @@ class TrainingCore(training_utils.TrainingCore):
         face_idx_map = (face_idx_map + (F + 1)) % (F + 1)
 
         face_color = torch.where(
-            (10 <= face_color_all_cnt).unsqueeze(-1).expand(F + 1, 3),
+            (use_pca_threshold <= face_color_all_cnt)
+            .unsqueeze(-1).expand(F + 1, 3),
 
             face_color_inlier_sum_x /
             (1e-2 + face_color_inlier_sum_weight).unsqueeze(-1),

@@ -47,11 +47,11 @@ def main1():
     p[:, 2].uniform_(-k, k)
 
     with utils.Timer():
-        sd_a = model_data.mesh_data.calc_signed_dist(
+        sd_a = model_data.mesh_graph.calc_signed_dist(
             vert_pos, p)
 
     with utils.Timer():
-        sd_b = model_data.mesh_data.calc_signed_dist_trimesh(
+        sd_b = model_data.mesh_graph.calc_signed_dist_trimesh(
             vert_pos, p)
 
     # print(f"{sd_a=}")

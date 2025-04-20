@@ -5,8 +5,8 @@ import dataclasses
 import torch
 from beartype import beartype
 
-from .. import (avatar_utils, camera_utils, gaussian_utils, rendering_utils,
-                transform_utils, utils)
+from .. import (avatar_utils, camera_utils, gaussian_utils, mesh_utils,
+                rendering_utils, transform_utils, utils)
 from .utils import FaceCoordResult, get_face_coord
 
 
@@ -135,19 +135,13 @@ class Module(torch.nn.Module):
 
     def get_world_gp(
         self,
-        vert_pos_a: torch.Tensor,  # [..., F, 3]
-        vert_pos_b: torch.Tensor,  # [..., F, 3]
-        vert_pos_c: torch.Tensor,  # [..., F, 3]
+        mesh_data: mesh_utils.MeshData
     ) -> ModuleWorldGPResult:
         F = self.faces_cnt
 
-        utils.check_shapes(
-            vert_pos_a, (..., F, 3),
-            vert_pos_b, (..., F, 3),
-            vert_pos_c, (..., F, 3),
-        )
+        assert mesh_data.faces_cnt == F
 
-        face_coord_result = get_face_coord(vert_pos_a, vert_pos_b, vert_pos_c)
+        face_coord_result = get_face_coord(mesh_data)
         # face_coord_result.rs[..., F, 3, 3]
         # face_coord_result.ts[..., F, 3]
         # face_coord_result.areas[..., F]
@@ -242,17 +236,13 @@ class Module(torch.nn.Module):
         avatar_model: avatar_utils.AvatarModel = self.avatar_blender(
             blending_param)
 
-        faces = avatar_model.mesh_data.f_to_vvv
+        faces = avatar_model.mesh_graph.f_to_vvv
         # [F, 3]
 
         vp = avatar_model.vert_pos
         # [..., V, 3]
 
-        world_gp_result = self.get_world_gp(
-            vp[..., faces[:, 0], :],
-            vp[..., faces[:, 1], :],
-            vp[..., faces[:, 2], :],
-        )
+        world_gp_result = self.get_world_gp(avatar_model.mesh_data)
 
         gp_render_result = gaussian_utils.render_gaussian(
             camera_config=camera_config,
@@ -277,7 +267,7 @@ class Module(torch.nn.Module):
         gp_render_img = gp_render_result.colors
         # [..., C, H, W]
 
-        mesh_data = avatar_model.mesh_data
+        mesh_graph = avatar_model.mesh_graph
 
         if not self.training:
             rgb_loss = torch.Tensor()
@@ -294,14 +284,14 @@ class Module(torch.nn.Module):
         if not self.training:
             lap_smoothness_loss = torch.Tensor()
         else:
-            lap_smoothness_loss = mesh_data.calc_l2_cot_lap_smoothness(
+            lap_smoothness_loss = mesh_graph.calc_l2_cot_lap_smoothness(
                 avatar_model.vert_pos)
             # [...]
 
         if not self.training:
             nor_sim_loss = torch.Tensor()
         else:
-            nor_sim = mesh_data.calc_face_cos_sim(
+            nor_sim = mesh_graph.calc_face_cos_sim(
                 world_gp_result.face_coord_result.r[..., :, :3, 2]
                 # the z axis of each face
             )
@@ -313,7 +303,7 @@ class Module(torch.nn.Module):
         if not self.training:
             color_diff_loss = torch.Tensor()
         else:
-            color_diff = mesh_data.calc_face_cos_sim(
+            color_diff = mesh_graph.calc_face_cos_sim(
                 world_gp_result.gp_color)
             # [..., FP]
 
@@ -329,7 +319,7 @@ class Module(torch.nn.Module):
             word_gp_xy_scale = world_gp_x_scale * world_gp_y_scale
             # [..., F]
 
-            word_gp_xy_scale_diff = avatar_model.mesh_data.calc_face_diff(
+            word_gp_xy_scale_diff = avatar_model.mesh_graph.calc_face_diff(
                 word_gp_xy_scale.unsqueeze(-1))
             # [..., FP, 1]
 

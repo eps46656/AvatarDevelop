@@ -311,7 +311,7 @@ def make_proj_config_OpenGL(
 
 
 @beartype
-def MakeProjConfig_OpenCV(
+def make_proj_config_OpenCV(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,
@@ -365,18 +365,18 @@ def make_proj_config_PyTorch3D(
         case Coord.NDC:
             img_s = min(camera_config.img_h, camera_config.img_w)
 
-            h_ratio = camera_config.img_h / img_s
-            w_ratio = camera_config.img_w / img_s
+            ratio_h = camera_config.img_h / img_s
+            ratio_w = camera_config.img_w / img_s
 
             proj_config = ProjConfig(
                 camera_proj_transform=transform_utils.ObjectTransform.
                 from_matching("LUF"),
 
-                delta_u=h_ratio,
-                delta_d=h_ratio,
+                delta_u=ratio_h,
+                delta_d=ratio_h,
 
-                delta_l=w_ratio,
-                delta_r=w_ratio,
+                delta_l=ratio_w,
+                delta_r=ratio_w,
 
                 delta_f=+1.0 / camera_config.depth_far,
                 delta_b=-1.0 / camera_config.depth_near,
@@ -406,7 +406,7 @@ def make_proj_config_PyTorch3D(
 
 
 @beartype
-def MakeProjConfig_Unity(
+def make_proj_config_Unity(
     *,
     camera_config: CameraConfig,
     target_coord: Coord,

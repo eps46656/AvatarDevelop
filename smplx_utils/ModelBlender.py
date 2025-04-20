@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+import typing
 
 import torch
 from beartype import beartype
 
-from .. import avatar_utils, utils
+from .. import avatar_utils, mesh_utils, utils
 from .blending_utils import BlendingParam, blending
 from .Model import Model
 from .ModelBuilder import ModelBuilder
@@ -65,11 +66,10 @@ class ModelBlender(avatar_utils.AvatarBlender):
         return Model(
             kin_tree=model_data.kin_tree,
 
-            mesh_data=model_data.mesh_data,
-            tex_mesh_data=model_data.tex_mesh_data,
+            mesh_graph=model_data.mesh_graph,
+            tex_mesh_graph=model_data.tex_mesh_graph,
 
             vert_pos=model_data.vert_pos,
-            vert_nor=None,
 
             tex_vert_pos=model_data.tex_vert_pos,
 
@@ -105,6 +105,14 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
     def get_param_groups(self, base_lr: float) -> list[dict]:
         return utils.get_param_groups(self.model_builder, base_lr)
+
+    def subdivide(
+        self,
+        *,
+        target_edges: typing.Optional[typing.Iterable[int]] = None,
+        target_faces: typing.Optional[typing.Iterable[int]] = None,
+    ) -> mesh_utils.MeshSubdivisionResult:
+        mesh_subdivision_result = self.model_builder.subdivide()
 
     def forward(self, blending_param: BlendingParam):
         return blending(

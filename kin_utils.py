@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import collections
 import heapq
 import typing
 
@@ -21,7 +24,15 @@ class KinTree:
         self.joints_tp = joints_tp
 
     @staticmethod
-    def from_links(links: typing.Sequence[tuple[int, int]], null_value=-1):
+    def empty() -> KinTree:
+        return KinTree(
+            root=-1,
+            parents=list(),
+            joints_tp=list(),
+        )
+
+    @staticmethod
+    def from_links(links: typing.Sequence[tuple[int, int]]) -> KinTree:
         J = len(links)
 
         root = -1
@@ -31,21 +42,21 @@ class KinTree:
         for p, u in links:
             assert 0 <= u and u < J
 
-            if p == null_value:
-                if not (root == -1):
+            if p < 0 or J <= p:
+                if root != -1:
                     raise ValueError(
                         f"Multiple root nodes detected: {root} and {u}.")
 
                 root = u
             else:
-                if not (0 <= p and p < J):
+                if p < 0 or J <= p:
                     raise ValueError(
                         f"Invalid joint index detected: {p}.")
 
                 parents[u] = p
                 indegrees[p] += 1
 
-        if not (root != -1):
+        if root == -1:
             raise ValueError("No root node detected.")
 
         q = [-u for u, indegree in enumerate(indegrees) if indegree == 0]
@@ -77,14 +88,19 @@ class KinTree:
         )
 
     @staticmethod
-    def from_parents(parents: typing.Iterable[int], null_value=-1):
-        return KinTree.from_links(
-            [(p, u) for u, p in enumerate(parents)],
-            null_value)
+    def from_parents(parents: typing.Iterable[int]) -> KinTree:
+        return KinTree.from_links([(p, u) for u, p in enumerate(parents)])
+
+    @staticmethod
+    def from_state_dict(state_dict: typing.Mapping[str, object]) -> KinTree:
+        return KinTree.from_parents(state_dict["parents"])
 
     @property
     def joints_cnt(self) -> int:
         return len(self.parents)
+
+    def state_dict(self) -> collections.OrderedDict[str, object]:
+        return collections.OrderedDict([("parents", self.parents)])
 
     def get_joint_rt(
         self,

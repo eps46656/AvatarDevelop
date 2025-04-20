@@ -9,139 +9,132 @@ class AbstractMesh:
     __MOD = 1000000007
 
     def __init__(self):
-        self.__vertices: dict[int, object] = dict()
+        self.__verts: dict[int, object] = dict()
 
         self.__faces: dict[int, object] = dict()
 
-        self.__vis_to_fi: dict[tuple[int, int, int], int] = dict()
-        self.__fi_to_vis: dict[int, tuple[int, int, int]] = dict()
+        self.__f_to_vvv: dict[int, tuple[int, int, int]] = dict()
+        self.__vvv_to_f: dict[tuple[int, int, int], int] = dict()
 
         self.__graph = graph_utils.Graph()
 
         self.__idx_allocation_seed = random.randint(1, AbstractMesh.__MOD-1)
 
-    def __AllocateIdx(self):
+    def __allocate_idx(self):
         self.__idx_allocation_seed = (self.__idx_allocation_seed * 23) \
             % AbstractMesh.__MOD
 
         return self.__idx_allocation_seed
 
-    def ContainFace(self, vis: tuple[int, int, int]):
-        vis = tuple(sorted(vis))
+    def get_face(self, vvv: tuple[int, int, int]) -> int:
+        return self.__vvv_to_f.get(tuple(sorted(vvv)), -1)
 
-        assert vis[0] != vis[1]
-        assert vis[1] != vis[2]
+    def get_vvv(self, f: int) -> tuple[int, int, int]:
+        return self.__f_to_vvv.get(f)
 
-        assert vis[0] in self.__vertices
-        assert vis[1] in self.__vertices
-        assert vis[2] in self.__vertices
+    def get_adj_verts_from_vert(self, v: int):
+        s = {v}
 
-        return vis in self.__vis_to_fi
+        for f in self.__graph.get_adjs(v):
+            for adj_v in self.__graph.get_adjs(f):
+                if utils.set_add(s, adj_v):
+                    yield adj_v
 
-    def GetFaceIdx(self, vis: tuple[int, int, int]):
-        return self.__vis_to_fi.get(tuple(sorted(vis)))
+    def get_adj_verts_from_face(self, f: int):
+        vvv = self.__f_to_vvv.get(f)
+        return list() if vvv is None else list(vvv)
 
-    def GetVIS(self, fi: int):
-        return self.__fi_to_vis.get(fi)
+    def get_adj_faces_from_vert(self, v: int):
+        assert v in self.__verts
+        return self.__graph.get_adjs(v)
 
-    def GetAdjacentVerticesFromVertex(self, vi: int):
-        s = {vi}
+    def get_adj_faces_from_face(self, f: int):
+        assert f in self.__faces
 
-        for fi in self.__graph.GetAdjacents(vi):
-            for adj_vi in self.__graph.GetAdjacents(fi):
-                if utils.set_add(s, adj_vi):
-                    yield adj_vi
+        va, vb, vc = self.__f_to_vvv[f]
 
-    def GetAdjacentVerticesFromFace(self, fi: int):
-        vis = self.__fi_to_vis.get(fi)
-        return list() if vis is None else list(vis)
+        fas = set(fa for fa in self.__graph.get_adjs(va) if fa != f)
+        fbs = set(fb for fb in self.__graph.get_adjs(vb) if fb != f)
+        fcs = set(fc for fc in self.__graph.get_adjs(vc) if fc != f)
 
-    def GetAdjacentFacesFromVertex(self, vi: int):
-        assert vi in self.__vertices
-        return self.__graph.GetAdjacents(vi)
+        yield from set.intersection(fas, fbs)
+        yield from set.intersection(fbs, fcs)
+        yield from set.intersection(fcs, fas)
 
-    def GetAdjacentFacesFromFace(self, fi: int):
-        assert fi in self.__faces
+    def add_vert(self, vertex_attr: object):
+        v = self.__allocate_idx()
 
-        va, vb, vc = self.__fi_to_vis[fi]
+        self.__verts[v] = vertex_attr
 
-        fisa = set(fia for fia in self.__graph.GetAdjacents(va) if fia != fi)
-        fisb = set(fib for fib in self.__graph.GetAdjacents(vb) if fib != fi)
-        fisc = set(fic for fic in self.__graph.GetAdjacents(vc) if fic != fi)
+        self.__graph.add_vert(v)
 
-        yield from set.intersection(fisa, fisb)
-        yield from set.intersection(fisb, fisc)
-        yield from set.intersection(fisc, fisa)
+        return v
 
-    def AddVertex(self, vertex_attr: object):
-        vi = self.__AllocateIdx()
+    def add_face(
+        self,
+        vvv: tuple[int, int, int],
+        face_attr: object,
+    ):
+        assert vvv[0] in self.__verts
+        assert vvv[1] in self.__verts
+        assert vvv[2] in self.__verts
 
-        self.__vertices[vi] = vertex_attr
+        sorted_vvv = tuple(sorted(vvv))
 
-        self.__graph.add_vert(vi)
+        assert sorted_vvv[0] != sorted_vvv[1]
+        assert sorted_vvv[1] != sorted_vvv[2]
 
-        return vi
+        f = self.__vvv_to_f.get(sorted_vvv, -1)
 
-    def AddFace(self,
-                vis: tuple[int, int, int],
-                face_attr: object):
-        assert vis[0] in self.__vertices
-        assert vis[1] in self.__vertices
-        assert vis[2] in self.__vertices
+        if f != -1:
+            return f, False
 
-        sorted_vis = tuple(sorted(vis))
+        f = self.__allocate_idx()
 
-        assert sorted_vis[0] != sorted_vis[1]
-        assert sorted_vis[1] != sorted_vis[2]
+        self.__faces[f] = face_attr
 
-        fi = self.__vis_to_fi.get(sorted_vis)
+        self.__f_to_vvv[f] = vvv
+        self.__vvv_to_f[sorted_vvv] = f
 
-        if fi is not None:
-            return fi, False
+        self.__graph.add_vert(f)
 
-        fi = self.__AllocateIdx()
+        self.__graph.add_edge(vvv[0], f, bidirectional=True)
+        self.__graph.add_edge(vvv[1], f, bidirectional=True)
+        self.__graph.add_edge(vvv[2], f, bidirectional=True)
 
-        self.__faces[fi] = face_attr
+        return f, True
 
-        self.__fi_to_vis[fi] = vis
-        self.__vis_to_fi[sorted_vis] = fi
-
-        self.__graph.add_vert(fi)
-
-        self.__graph.add_edge(vis[0], fi, bidirectional=True)
-        self.__graph.add_edge(vis[1], fi, bidirectional=True)
-        self.__graph.add_edge(vis[2], fi, bidirectional=True)
-
-        return fi, True
-
-    def RemoveVertex(self, vi: int):
-        if vi not in self.__vertices:
+    def remove_vert(self, v: int):
+        if v not in self.__verts:
             return False
 
-        fis = list(self.__graph.GetAdjacents(vi))
+        fs = list(self.__graph.get_adjs(v))
 
-        for fi in fis:
-            self.RemoveFace(fi)
+        for f in fs:
+            self.remove_face(f)
 
-        self.__vertices.pop(vi)
+        self.__verts.pop(v)
 
         return True
 
-    def RemoveFace(self, fi: int):
-        if not utils.dict_pop(self.__faces, fi):
+    def remove_face(self, f: int) -> bool:
+        if not utils.dict_pop(self.__faces, f):
             return False
 
-        self.__graph.remove_vert(fi)
+        self.__graph.remove_vert(f)
 
         return True
 
-    def Output(self):
+    def output(self) -> tuple[
+        dict[int, object],
+        dict[int, tuple[tuple[int, int, int], object]],
+    ]:
         ret_vs = {
-            vi: vertex_attr
-            for vi, vertex_attr in self.__vertices.items()}
+            v: vert_attr
+            for v, vert_attr in self.__verts.items()}
 
         ret_fs = {
-            fi: (self.__fi_to_vis[fi], face_attr)
-            for fi, face_attr in self.__faces.items()}
+            f: (self.__f_to_vvv[f], face_attr)
+            for f, face_attr in self.__faces.items()}
 
         return ret_vs, ret_fs

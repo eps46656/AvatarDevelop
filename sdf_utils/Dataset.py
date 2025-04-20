@@ -24,7 +24,7 @@ class Dataset(dataset_utils.Dataset):
         mean: tuple[float, float,  float],
         std: tuple[float, float,  float],
         epoch_size: int,
-        mesh_data: mesh_utils.MeshData,
+        mesh_graph: mesh_utils.MeshGraph,
         vert_pos: torch.Tensor,
     ):
         assert 0 < epoch_size
@@ -34,7 +34,7 @@ class Dataset(dataset_utils.Dataset):
 
         self.epoch_size = epoch_size
 
-        self.mesh_data = mesh_data
+        self.mesh_graph = mesh_graph
         self.vert_pos = vert_pos
 
     @property
@@ -54,7 +54,7 @@ class Dataset(dataset_utils.Dataset):
             torch.normal(self.mean[d], self.std[d], (N,),
                          out=point_pos[:, d])
 
-        signed_dists = self.mesh_data.calc_signed_dist(
+        signed_dists = self.mesh_graph.calc_signed_dist(
             self.vert_pos,
             point_pos,
         )  # [N]

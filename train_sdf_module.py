@@ -168,7 +168,7 @@ def main1():
         ),
 
         epoch_size=1024,
-        mesh_data=model_data.mesh_data,
+        mesh_graph=model_data.mesh_graph,
         vert_pos=model_data.vert_pos,
     )
 

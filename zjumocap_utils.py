@@ -9,7 +9,7 @@ class Subject:
     pass
 
 
-def ReadSubject(
+def read_subject(
     subject_file: os.PathLike,
     subject_name: str,
 ):

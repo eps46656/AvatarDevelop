@@ -3,7 +3,7 @@ import dataclasses
 import torch
 from beartype import beartype
 
-from .. import utils
+from .. import mesh_utils, utils
 
 
 @dataclasses.dataclass
@@ -14,33 +14,12 @@ class FaceCoordResult:
 
 
 @beartype
-def get_face_coord(
-    vert_pos_a: torch.Tensor,  # [..., 3]
-    vert_pos_b: torch.Tensor,  # [..., 3]
-    vert_pos_c: torch.Tensor,  # [..., 3]
-) -> FaceCoordResult:
-    vp_a = vert_pos_a
-    vp_b = vert_pos_b
-    vp_c = vert_pos_c
+def get_face_coord(mesh_data: mesh_utils.MeshData) -> FaceCoordResult:
+    vp_a = mesh_data.face_vert_pos[..., 0, :]
+    vp_b = mesh_data.face_vert_pos[..., 1, :]
+    vp_c = mesh_data.face_vert_pos[..., 2, :]
 
-    utils.check_shapes(
-        vp_a, (..., 3),
-        vp_b, (..., 3),
-        vp_c, (..., 3),
-    )
-
-    dd = (
-        utils.check_devices(vp_a, vp_b, vp_c),
-        utils.promote_dtypes(vp_a, vp_b, vp_c),
-    )
-
-    s = utils.broadcast_shapes(vp_a, vp_b, vp_c)
-
-    vp_a = vp_a.to(*dd).expand(s)
-    vp_b = vp_b.to(*dd).expand(s)
-    vp_c = vp_c.to(*dd).expand(s)
-
-    g = (vp_a + vp_b + vp_c) / 3
+    g = mesh_data.face_mean
     # [..., 3]
 
     axis_x = g - vp_a

@@ -336,7 +336,6 @@ def blending(
         lbs_weight=model_data.lbs_weight,
 
         vert_pos=vp,
-        vert_dir=model_data.vert_nor,
 
         binding_pose_r=binding_pose_rs,
         binding_pose_t=binding_pose_ts,
@@ -354,12 +353,10 @@ def blending(
     return Model(
         kin_tree=model_data.kin_tree,
 
-        mesh_data=model_data.mesh_data,
-        tex_mesh_data=model_data.tex_mesh_data,
+        mesh_graph=model_data.mesh_graph,
+        tex_mesh_graph=model_data.tex_mesh_graph,
 
         vert_pos=vp,
-        vert_nor=None if lbs_result.blended_vert_dir is None
-        else utils.vec_normed(lbs_result.blended_vert_dir),
 
         tex_vert_pos=model_data.tex_vert_pos,
 

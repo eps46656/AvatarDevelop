@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import collections
 import copy
+import typing
 
 import torch
 import torchrbf
 from beartype import beartype
 
-from .. import utils
+from .. import mesh_utils, utils
 from .ModelData import ModelData
 
 
@@ -46,6 +48,12 @@ class StaticModelBuilder(ModelBuilder):
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 
+    def state_dict(self) -> collections.OrderedDict[str, object]:
+        return self.model_data.state_dict()
+
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
+        self.model_data.load_state_dict(state_dict)
+
     def forward(self) -> ModelData:
         return self.model_data
 
@@ -74,9 +82,9 @@ class DeformableModelBuilder(ModelBuilder):
         # [V, 3, BS]
 
         if body_shape_vert_dir is None:
-            self.body_shape_vert_dir_rbf_interp = None
+            self.body_shape_vert_dir_interp = None
         else:
-            self.body_shape_vert_dir_rbf_interp = torchrbf.RBFInterpolator(
+            self.body_shape_vert_dir_interp = torchrbf.RBFInterpolator(
                 y=cpu_vert_pos,  # [V, 3]
                 d=body_shape_vert_dir.detach().to(*dd).reshape(V, 3 * BS),
                 smoothing=1.0,
@@ -87,9 +95,9 @@ class DeformableModelBuilder(ModelBuilder):
         # [V, 3, (J - 1) * 3 * 3]
 
         if pose_vert_dir is None:
-            self.pose_vert_dir_rbf_interp = None
+            self.pose_vert_dir_interp = None
         else:
-            self.pose_vert_dir_rbf_interp = torchrbf.RBFInterpolator(
+            self.pose_vert_dir_interp = torchrbf.RBFInterpolator(
                 y=cpu_vert_pos,  # [V, 3]
                 d=pose_vert_dir.detach().to(*dd).reshape(
                     V, 3 * (J - 1) * 3 * 3),
@@ -101,9 +109,9 @@ class DeformableModelBuilder(ModelBuilder):
         # [V, J]
 
         if lbs_weight is None:
-            self.lbs_weight_rbf_interp = None
+            self.lbs_weight_interp = None
         else:
-            self.lbs_weight_rbf_interp = torchrbf.RBFInterpolator(
+            self.lbs_weight_interp = torchrbf.RBFInterpolator(
                 y=cpu_vert_pos,  # [V, 3]
                 d=lbs_weight.detach().to(*dd),  # [V, J]
                 smoothing=1.0,
@@ -121,10 +129,10 @@ class DeformableModelBuilder(ModelBuilder):
         self.model_data = self.model_data.to(*args, **kwargs)
         return self
 
-    def freeze(self):
+    def freeze(self) -> None:
         self.model_data.vert_pos.requires_grad = False
 
-    def unfreeze(self):
+    def unfreeze(self) -> None:
         self.model_data.vert_pos.requires_grad = True
 
     def get_param_groups(self, base_lr: float):
@@ -138,6 +146,40 @@ class DeformableModelBuilder(ModelBuilder):
 
         return ret
 
+    def state_dict(self) -> collections.OrderedDict[str, object]:
+        return collections.OrderedDict([
+            ("model_data", self.model_data.state_dict()),
+
+            ("body_shape_vert_dir_interp",
+             self.body_shape_vert_dir_interp.state_dict()),
+
+            ("pose_vert_dir_interp",
+             self.pose_vert_dir_interp.state_dict()),
+
+            ("lbs_weight_interp",
+             self.lbs_weight_interp.state_dict()),
+        ])
+
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
+        self.model_data.load_state_dict(state_dict["model_data"])
+
+        self.body_shape_vert_dir_interp.load_state_dict(
+            state_dict["body_shape_vert_dir_interp"])
+
+        self.pose_vert_dir_interp.load_state_dict(
+            state_dict["pose_vert_dir_interp"])
+
+        self.lbs_weight_interp.load_state_dict(
+            state_dict["lbs_weight_interp"])
+
+    def subdivide(
+        self,
+        *,
+        target_edges: typing.Optional[typing.Iterable[int]] = None,
+        target_faces: typing.Optional[typing.Iterable[int]] = None,
+    ) -> mesh_utils.MeshSubdivisionResult:
+        mesh_subdivision_result = self.model_data.subdivide()
+
     def forward(self) -> ModelData:
         return self.model_data
 
@@ -148,18 +190,18 @@ class DeformableModelBuilder(ModelBuilder):
 
         vert_pos = self.model_data.vert_pos.to(torch.float)
 
-        if self.body_shape_vert_dir_rbf_interp is not None:
+        if self.body_shape_vert_dir_interp is not None:
             self.model_data.body_shape_vert_dir = \
-                self.body_shape_vert_dir_rbf_interp(vert_pos).view(
+                self.body_shape_vert_dir_interp(vert_pos).view(
                     V, 3, BS)
 
-        if self.pose_vert_dir_rbf_interp is not None:
+        if self.pose_vert_dir_interp is not None:
             self.model_data.pose_vert_dir = \
-                self.pose_vert_dir_rbf_interp(vert_pos).view(
+                self.pose_vert_dir_interp(vert_pos).view(
                     V, 3, (J - 1) * 3 * 3)
 
-        if self.lbs_weight_rbf_interp is not None:
+        if self.lbs_weight_interp is not None:
             self.model_data.lbs_weight = \
-                self.lbs_weight_rbf_interp(vert_pos)  # [V, J]
+                self.lbs_weight_interp(vert_pos)  # [V, J]
 
         utils.print_cur_pos()

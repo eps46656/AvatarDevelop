@@ -71,6 +71,7 @@ def _read_camera(
     subject_dir: os.PathLike,
     img_h: int,
     img_w: int,
+    device: torch.device,
 ) -> tuple[
     camera_utils.CameraConfig,
     transform_utils.ObjectTransform,  # camera <-> world
@@ -95,7 +96,8 @@ def _read_camera(
 
     """
 
-    camera_transform = transform_utils.ObjectTransform.from_matching("RDF")
+    camera_transform = transform_utils.ObjectTransform.from_matching(
+        "RDF", device=device)
 
     camera_config = camera_utils.CameraConfig.from_slope_udlr(
         slope_u=cy / fy,
@@ -220,7 +222,7 @@ def read_subject(
     subject_video_path = subject_dir / f"{subject_name}.mp4"
 
     video, fps = vision_utils.read_video(
-        subject_video_path, vision_utils.ColorType.RGB)
+        subject_video_path, vision_utils.ColorType.RGB, device=device)
     # [T, C, H, W]
 
     mask = _read_mask(subject_dir, fps, device)
@@ -229,7 +231,7 @@ def read_subject(
     img_h, img_w = video.shape[2:]
 
     camera_config, camera_transform = \
-        _read_camera(subject_dir, img_h, img_w)
+        _read_camera(subject_dir, img_h, img_w, device)
 
     blending_param = _read_smpl_blending_param(
         subject_dir, model_data, video.shape[0], device)

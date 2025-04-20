@@ -145,11 +145,11 @@ def load_trainer():
 
     trainer.training_core = training_core
 
-    return trainer
+    return subject_data, trainer
 
 
 def main1():
-    trainer = load_trainer()
+    subject_data, trainer = load_trainer()
 
     trainer.load_latest()
 
@@ -181,7 +181,7 @@ def main1():
 
     K = len(masks)
 
-    F = model_data.mesh_data.faces_cnt
+    F = model_data.mesh_graph.faces_cnt
 
     face_ballots_cnt = torch.zeros(
         (F + 1,),  # F + 1 for -1 pixel to face index
@@ -204,12 +204,17 @@ def main1():
     T, C, H, W = dataset.sample.img.shape
 
     albedo_tex = pytorch3d.renderer.TexturesUV(
-        maps=[einops.rearrange(albedo_map, "c h w -> h w c")],
-        verts_uvs=[obj_model_data.tex_vert_pos],
-        faces_uvs=[obj_model_data.tex_mesh_data.f_to_vvv],
+        maps=[
+            einops.rearrange(subject_data.tex,
+                             "c h w -> h w c").to(utils.FLOAT)
+        ],
+        verts_uvs=[model_data.tex_vert_pos.to(utils.FLOAT)],
+        faces_uvs=[model_data.tex_mesh_graph.f_to_vvv],
         padding_mode="reflection",
         sampling_mode="bilinear",
     )
+
+    out_images = torch.empty((T, C, H, W), dtype=torch.uint8)
 
     with torch.no_grad():
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
@@ -233,11 +238,11 @@ def main1():
             for i in range(batch_size):
                 cur_avatar_model = result.avatar_model[i]
 
-                cur_avatar_model.mesh_data.show(cur_avatar_model.vert_pos)
+                # cur_avatar_model.mesh_graph.show(cur_avatar_model.vert_pos)
 
                 mesh_ras_result = rendering_utils.rasterize_mesh(
                     vert_pos=cur_avatar_model.vert_pos,
-                    faces=cur_avatar_model.mesh_data.f_to_vvv,
+                    faces=cur_avatar_model.mesh_graph.f_to_vvv,
                     camera_config=sample.camera_config,
                     camera_transform=sample.camera_transform[i],
                     faces_per_pixel=1,
@@ -251,6 +256,12 @@ def main1():
                 # -1 -> F       [0, F-1] -> [0, F-1]
 
                 print(f"{idxes[i]=}")
+
+                texels = albedo_tex.sample_textures(mesh_ras_result)
+                # [1, H, W, 1, C]
+
+                out_images[idxes[i]] = einops.rearrange(
+                    texels.view(H, W, C), "h w c -> c h w")
 
                 for k in range(K):
                     cur_mask = masks[k][idxes[i]].to(utils.FLOAT)
@@ -266,6 +277,12 @@ def main1():
 
                     face_neg_ballot_box[:, k].index_add_(
                         0, pix_to_face, ballot.clamp(None, 0))
+
+    vision_utils.write_video(
+        PROJ_DIR / f"output_video_{utils.timestamp_sec()}.avi",
+        out_images,
+        subject_data.fps,
+    )
 
     utils.write_pickle(
         PROJ_DIR / f"face_voting_result_{utils.timestamp_sec()}.pkl",
@@ -286,7 +303,7 @@ def main1():
 
 
 def main2():
-    trainer = load_trainer()
+    subject_data, trainer = load_trainer()
 
     trainer.load_latest()
 
@@ -302,7 +319,7 @@ def main2():
     model_data: smplx_utils.ModelData = smplx_model_builder.model_data
 
     face_voting_result = utils.read_pickle(
-        PROJ_DIR / "face_voting_result_1744619847.pkl")
+        PROJ_DIR / "face_voting_result_1744637898.pkl")
 
     face_ballots_cnt = torch.from_numpy(
         face_voting_result["face_ballots_cnt"])
@@ -334,15 +351,15 @@ def main2():
 
     # ([F + 1, K] + [F + 1, K]) / [F + 1, 1] -> [F + 1, K]
 
-    F = model_data.mesh_data.faces_cnt
+    F = model_data.mesh_graph.faces_cnt
 
-    face_ballot_box = model_data.mesh_data.face_lap_trans(
+    face_ballot_box = model_data.mesh_graph.face_lap_trans(
         face_ballot_box, 0.05)
 
-    face_ballot_box = model_data.mesh_data.face_lap_trans(
+    face_ballot_box = model_data.mesh_graph.face_lap_trans(
         face_ballot_box, 0.05)
 
-    face_ballot_box = model_data.mesh_data.face_lap_trans(
+    face_ballot_box = model_data.mesh_graph.face_lap_trans(
         face_ballot_box, 0.05)
 
     obj_list = [
@@ -385,26 +402,33 @@ def main2():
 
 
 def main3():
+    subject_data, trainer = load_trainer()
+
+    module: gom_utils.Module = trainer.training_core.module
+
+    person_smplx_blender: smplx_utils.ModelBlender = module.avatar_blender
+
     obj = "UPPER_GARMENT"
 
     obj_model_data: smplx_utils.ModelData = smplx_utils.ModelData.from_file(
-        PROJ_DIR / f"obj_model_data<{obj}>.pkl", dtype=utils.FLOAT, device=DEVICE)
+        PROJ_DIR / f"obj_model_data_UPPER_GARMENT_1744638970.pkl", dtype=utils.FLOAT, device=DEVICE)
+
+    person_model_data: smplx_utils.ModelData = \
+        person_smplx_blender.get_avatar_model()
 
     model_builder = smplx_utils.StaticModelBuilder(obj_model_data)
 
     model_blender = smplx_utils.ModelBlender(model_builder)
 
-    subject_data = read_subject(obj_model_data)
-
     T, C, H, W = subject_data.video.shape
 
     albedo_map = vision_utils.read_image(
-        PROJ_DIR / "tex_1744290016.png").to(DEVICE, utils.FLOAT)
+        PROJ_DIR / "tex_1744688649.png").to(DEVICE, utils.FLOAT)
 
     albedo_tex = pytorch3d.renderer.TexturesUV(
         maps=[einops.rearrange(albedo_map, "c h w -> h w c")],
-        verts_uvs=[obj_model_data.tex_vert_pos],
-        faces_uvs=[obj_model_data.tex_mesh_data.f_to_vvv],
+        verts_uvs=[person_model_data.tex_vert_pos.to(utils.FLOAT)],
+        faces_uvs=[person_model_data.tex_mesh_graph.f_to_vvv],
         padding_mode="reflection",
         sampling_mode="bilinear",
     )
@@ -418,11 +442,13 @@ def main3():
         camera_transform = subject_data.camera_transform
         blending_param = subject_data.blending_param[t]
 
-        cur_model: smplx_utils.Model = model_blender(blending_param)
+        # cur_model: smplx_utils.Model = model_blender(blending_param)
+        cur_model = smplx_utils.Model = trainer.training_core.module.avatar_blender(
+            blending_param)
 
         fragments = rendering_utils.rasterize_mesh(
             cur_model.vert_pos,
-            cur_model.mesh_data.f_to_vvv,
+            cur_model.mesh_graph.f_to_vvv,
             subject_data.camera_config,
             camera_transform,
             1,
@@ -434,11 +460,11 @@ def main3():
         texels = albedo_tex.sample_textures(fragments)
         # [1, H, W, 1, C]
 
-        out_images[t] = vision_utils.denormalize_image(
-            einops.rearrange(texels.view(H, W, C), "h w c -> c h w"))
+        out_images[t] = einops.rearrange(
+            texels.view(H, W, C), "h w c -> c h w")
 
-    utils.write_video(
-        PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.xvid",
+    vision_utils.write_video(
+        PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.avi",
         out_images,
         subject_data.fps,
     )
@@ -447,4 +473,4 @@ def main3():
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
         with torch.no_grad():
-            main1()
+            main3()

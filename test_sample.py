@@ -17,16 +17,16 @@ def main1():
     mesh = AbstractMesh.AbstractMesh()
 
     with utils.Timer():
-        va = mesh.AddVertex("va")
+        va = mesh.add_vert("va")
 
     with utils.Timer():
-        vb = mesh.AddVertex("vb")
+        vb = mesh.add_vert("vb")
 
     with utils.Timer():
-        vc = mesh.AddVertex("vb")
+        vc = mesh.add_vert("vb")
 
     with utils.Timer():
-        fa, _ = mesh.AddFace((va, vb, vc), "fa")
+        fa, _ = mesh.add_face((va, vb, vc), "fa")
 
     print(f"{va=}")
     print(f"{vb=}")

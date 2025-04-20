@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import os
 import typing
+import lru_utils
 
 import cv2 as cv
 import einops
@@ -76,6 +77,8 @@ def write_image(
 
     img = img.to(utils.CPU_DEVICE)
 
+    print(f"Writing image to \"{path}\".")
+
     if path.suffix == ".png":
         torchvision.io.write_png(img, path)
         return
@@ -109,6 +112,35 @@ def _frame_to_image(
 
     return torch.from_numpy(einops.rearrange(
         arr, "... h w c -> ... c h w"))
+
+
+@beartype
+def _to_target_color_type(
+    img: torch.Tensor,  # [C, H, W] or [H, W]
+    color_type: ColorType,
+):
+    if img.ndim == 2:
+        img = img.unsqueeze(0)
+
+    assert img.ndim == 3
+
+    match (img.shape[0], color_type):
+        case (1, ColorType.GRAY):
+            img = img
+        case (1, ColorType.RGB):
+            img = img.expand(3, img.shape[1], img.shape[2])
+        case (3, ColorType.GRAY):
+            img = torch.div(
+                img.to(torch.int).sum(0, True),
+                3,
+                rounding_mode="trunc",
+            ).to(torch.uint8)
+        case (3, ColorType.RGB):
+            img = img
+        case _:
+            raise utils.MismatchException()
+
+    return img
 
 
 class VideoGenerator:
@@ -200,6 +232,76 @@ class SeqVideoGenerator(VideoGenerator):
         self.__img_idx += 1
 
         return ret
+
+
+@beartype
+class SimpleVideoWriter:
+    def __init__(
+        self,
+        path: os.PathLike,
+        color_type: ColorType,
+        cache_size: int = 32,
+    ):
+        self.f = utils.create_file(path, "wb+")
+
+        self.color_type = color_type
+
+        self.frame_offsets: list[int] = [0]
+
+        self.cache_manager = lru_utils.LRUCacheManager(
+            self._getframe, float(max(4, cache_size)))
+
+    @property
+    def frames_cnt(self) -> int:
+        return len(self.frame_offsets) - 1
+
+    @property
+    def bytes_cnt(self) -> int:
+        return self.frame_offsets[-1]
+
+    def _getframe(self, frame_idx: int) -> tuple[
+        torch.Tensor,  # [C, H, W]
+        float,  # weight
+    ]:
+        frame_beg = self.frame_offsets[frame_idx]
+        frame_end = self.frame_offsets[frame_idx + 1]
+
+        self.f.seek(frame_beg)
+
+        frame = self.f.read(frame_end - frame_beg)
+
+        match self.color_type:
+            case ColorType.GRAY:
+                mode = torchvision.io.ImageReadMode.GRAY
+
+            case ColorType.RGB:
+                mode = torchvision.io.ImageReadMode.RGB
+
+            case _:
+                raise utils.MismatchException()
+
+        img = torchvision.io.decode_png(
+            torch.from_numpy(np.frombuffer(frame, np.uint8)),
+            mode,
+        )  # [C, H, W]
+
+        if img.ndim == 2:
+            img = img.unsqueeze(0)
+
+        return img, 1.0
+
+    def __getitem__(self, item: int) -> torch.Tensor:  # [C, H, W]
+        return self.cache_manager[item]
+
+    def write(
+        self,
+        img: torch.Tensor,  # [C, H, W]
+    ):
+        frame = torchvision.io.encode_png(_to_target_color_type(img), 3)
+
+        self.f.seek(0, os.SEEK_END)
+        self.f.write(frame)
+        self.frame_offsets.append(self.f.tell())
 
 
 class VideoReader(VideoGenerator):
@@ -398,3 +500,30 @@ def read_video_mask(
         ret[frame_i] = frame.to(dtype=dtype) / 255
 
     return ret, fps
+
+
+@beartype
+@utils.mem_clear
+def write_video(
+    path: os.PathLike,
+    video: torch.Tensor,  # [T, C, H, W]
+    fps: float,
+) -> None:
+    T, C, H, W = -1, -2, -3, -4
+
+    T, C, H, W = utils.check_shapes(video, (T, C, H, W))
+
+    if T == 0:
+        return
+
+    print(f"Writing video to \"{path}\".")
+
+    with VideoWriter(
+        path,
+        height=H,
+        width=W,
+        color_type=ColorType.RGB,
+        fps=fps,
+    ) as writer:
+        for t in range(T):
+            writer.write(video[t])

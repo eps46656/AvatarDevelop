@@ -90,7 +90,7 @@ def rasterize_mesh(
 
         camera_R.append(cur_world_view_mat[:3, :3].T)
         camera_T.append(cur_world_view_mat[:3, 3])
-        camera_K.append(cur_camera_proj_mat.T)
+        camera_K.append(cur_camera_proj_mat)
 
     cameras = pytorch3d.renderer.PerspectiveCameras(
         R=torch.stack(camera_R),
