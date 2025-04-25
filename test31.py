@@ -11,8 +11,8 @@ import tqdm
 from beartype import beartype
 
 from . import (avatar_utils, camera_utils, config, dataset_utils,
-               dw_interp_utils, gaussian_utils, gom_avatar_training_utils,
-               gom_utils, people_snapshot_utils, rendering_utils, smplx_utils,
+               gaussian_utils, gom_avatar_training_utils,
+               gom_utils, kernel_splatting_utils, people_snapshot_utils, rendering_utils, smplx_utils,
                texture_utils, training_utils, transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
@@ -20,13 +20,14 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0414_1"
+PROJ_DIR = DIR / "train_2025_0422_3"
 
 VERT_GRAD_NORM_THRESHOLD = 1e-3
 
 ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHNESS = 800.0
-ALPHA_NOR_SIM = 500.0
+ALPHA_LAP_SMOOTHNESS = 1000.0
+ALPHA_NOR_SIM = 10.0
+ALPHA_EDGE_VAR = 1.0
 ALPHA_COLOR_DIFF = 1.0
 ALPHA_GP_SCALE_DIFF = 1.0
 
@@ -34,7 +35,7 @@ BATCH_SIZE = 4
 
 SUBJECT_NAME = "female-1-casual"
 
-LR = 1e-3
+LR = 1e-4
 
 
 def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
@@ -65,10 +66,8 @@ def create_optimizer(param_groups):
     )
 
 
-def create_scheduler(
-    optimizer
-):
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+def create_scheduler(optimizer: torch.optim.Optimizer):
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer,
         mode="min",
         factor=pow(0.1, 1/4),
@@ -112,28 +111,27 @@ def load_trainer():
 
     # ---
 
-    optimizer_factory = create_optimizer
-
-    scheduler = create_scheduler
-
     training_core = gom_avatar_training_utils.TrainingCore(
         config=gom_avatar_training_utils.Config(
             proj_dir=PROJ_DIR,
             device=DEVICE,
             batch_size=BATCH_SIZE,
 
+            lr=LR,
+
             vert_grad_norm_threshold=VERT_GRAD_NORM_THRESHOLD,
 
             alpha_rgb=ALPHA_RGB,
             alpha_lap_smoothness=ALPHA_LAP_SMOOTHNESS,
             alpha_nor_sim=ALPHA_NOR_SIM,
+            alpha_edge_var=ALPHA_EDGE_VAR,
             alpha_color_diff=ALPHA_COLOR_DIFF,
             alpha_gp_scale_diff=ALPHA_GP_SCALE_DIFF,
         ),
         module=module,
         dataset=dataset,
-        optimizer=optimizer,
-        scheduler=scheduler
+        optimizer_factory=create_optimizer,
+        scheduler_factory=create_scheduler,
     )
 
     # ---

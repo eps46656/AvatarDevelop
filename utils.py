@@ -1,31 +1,53 @@
 from __future__ import annotations
 
+import atexit
 import datetime
 import enum
 import functools
 import gc
+import inspect
 import itertools
 import math
 import os
 import pathlib
 import pickle
 import random
+import shutil
 import sys
 import time
+import traceback
+import types
 import typing
 
 import cv2 as cv
 import einops
 import numpy as np
 import PIL
+import PIL.Image
 import torch
 import torchvision
 from beartype import beartype
 
-EPS = 1e-8
+from . import config
+
+EPS = {
+    np.float16: 1e-3,
+    np.float32: 1e-5,
+    np.float64: 1e-8,
+
+    torch.float16: 1e-3,
+    torch.float32: 1e-5,
+    torch.float64: 1e-8,
+}
 
 RAD = 1.0
 DEG = math.pi / 180.0
+
+BYTE = 1
+KiBYTE = 1024 * BYTE
+MiBYTE = 1024 * KiBYTE
+GiBYTE = 1024 * MiBYTE
+TiBYTE = 1024 * GiBYTE
 
 INT = torch.int32
 FLOAT = torch.float32
@@ -44,9 +66,9 @@ DEPTH_FAR = 100.0
 
 
 class Empty:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         for key, value in kwargs.items():
-            setattr(key, value)
+            setattr(self, key, value)
 
 
 @beartype
@@ -61,9 +83,10 @@ def print_pos(
 
 
 @beartype
-def _print_cur_pos():
+def print_cur_pos():
     time = datetime.datetime.now()
-    frame = sys._getframe(2)
+
+    frame = inspect.currentframe().f_back
 
     print_pos(
         time,
@@ -71,11 +94,6 @@ def _print_cur_pos():
         frame.f_lineno,
         frame.f_code.co_name,
     )
-
-
-@beartype
-def print_cur_pos():
-    _print_cur_pos()
 
 
 @beartype
@@ -128,11 +146,13 @@ def dict_pop(
     return old_size != len(d)
 
 
-def min_max(x, y):
+@beartype
+def min_max(x: typing.Any, y: typing.Any):
     return (x, y) if x <= y else (y, x)
 
 
-def clamp(x, lb, ub):
+@beartype
+def clamp(x: typing.Any, lb: typing.Any, ub: typing.Any):
     assert lb <= ub
     return max(lb, min(x, ub))
 
@@ -155,7 +175,7 @@ def serialize_datetime(
     second_precision: bool,
 ):
     if dt is None:
-        dt = None
+        return None
 
     dt = dt.replace(tzinfo=datetime.timezone.utc)
 
@@ -189,19 +209,72 @@ def _mem_clear() -> None:
 
 
 @beartype
-def mem_clear(func: typing.Optional[typing.Callable] = None):
+def mem_clear(func: typing.Optional[typing.Callable[..., typing.Any]] = None):
     if func is None:
         _mem_clear()
         return
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object):
         _mem_clear()
         ret = func(*args, **kwargs)
         _mem_clear()
         return ret
 
     return wrapper
+
+
+deferable_func_param = typing.ParamSpec("ParamSpec")
+deferable_func_return = typing.TypeVar("TypeVar")
+
+defer_funcs_stack: list[list[typing.Callable[[], typing.Any]]] = [list()]
+
+
+@beartype
+def _pop_defer_funcs() -> None:
+    defer_funcs = defer_funcs_stack.pop()
+
+    for defer_func in reversed(defer_funcs):
+        try:
+            defer_func()
+        except Exception as e:
+            print(traceback.format_exc())
+            print(f"{e=}")
+
+            print(f"{defer_func=}")
+
+            raise e
+
+
+@beartype
+def deferable(
+    func: typing.Callable[deferable_func_param, deferable_func_return]
+) -> typing.Callable[deferable_func_param, deferable_func_return]:
+    @functools.wraps(func)
+    def wrapper(
+        *args: deferable_func_param.args,
+        **kwargs: deferable_func_param.kwargs,
+    ) -> deferable_func_return:
+        defer_funcs_stack.append(list())
+
+        ret = None
+
+        try:
+            ret = func(*args, **kwargs)
+        except Exception as e:
+            print(traceback.format_exc())
+            print(f"{e=}")
+
+        _pop_defer_funcs()
+
+        return ret
+
+    return wrapper
+
+
+@beartype
+def defer(func: typing.Callable[[], typing.Any]) -> None:
+    defer_funcs_stack[-1].append(func)
 
 
 @beartype
@@ -232,10 +305,10 @@ class Timer:
 
         self.end = time.time()
 
-    def __enter__(self):
+    def __enter__(self) -> Timer:
         self.start()
 
-        frame = sys._getframe(1)
+        frame = inspect.currentframe().f_back
 
         self.filename = frame.f_code.co_filename
         self.line_num = frame.f_lineno
@@ -243,7 +316,7 @@ class Timer:
 
         return self
 
-    def __exit__(self, type: object, value: object, traceback: object):
+    def __exit__(self, type, value, traceback) -> None:
         self.stop()
 
         print(
@@ -255,25 +328,31 @@ class DisableStdOut:
     def __init__(self):
         self.original_stdout = None
 
-    def __enter__(self):
+    def __enter__(self) -> DisableStdOut:
         self.original_stdout = sys.stdout
         sys.stdout = open(os.devnull, "w")
 
-    def __exit__(self, type: object, value: object, traceback: object):
+        return self
+
+    def __exit__(self, type, value, traceback) -> None:
         sys.stdout.close()
         sys.stdout = self.original_stdout
         self.original_stdout = None
 
 
 @beartype
-def allocate_id(lb: int, rb: int, s=None):
-    if s is None:
+def allocate_id(
+    lb: int,
+    rb: int,
+    is_ok: typing.Optional[typing.Callable[[int], bool]] = None,
+):
+    if is_ok is None:
         return rand_int(lb, rb)
 
     while True:
         ret = rand_int(lb, rb)
 
-        if ret not in s:
+        if is_ok(ret):
             return ret
 
 
@@ -285,6 +364,38 @@ def all_same(*args: object):
 
     for arg in args:
         assert ret == arg
+
+    return ret
+
+
+@beartype
+def _clear_tmp_dir(tmp_dir: os.PathLike) -> None:
+    try:
+        shutil.rmtree(tmp_dir)
+    except:
+        pass
+
+
+@beartype
+def allocate_tmp_dir(tmp_dir: os.PathLike = config.TMP_DIR) -> pathlib.Path:
+    tmp_dir = to_pathlib_path(tmp_dir)
+
+    ret = None
+
+    def is_ok(num: int) -> bool:
+        nonlocal ret
+
+        try:
+            ret = tmp_dir / f"tmp_{num}"
+            ret.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            return False
+
+        return True
+
+    allocate_id(2**16, 2**28 - 1, is_ok)
+
+    atexit.register(_clear_tmp_dir, ret)
 
     return ret
 
@@ -311,19 +422,29 @@ def check_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> None:
 
 
 @beartype
-def check_shapes(*args: object) -> None | int | tuple[int, ...]:
+def check_shapes(*args: typing.Any) -> None | int | tuple[int, ...]:
     assert len(args) % 2 == 0
 
     undet_shapes: dict[int, int] = dict()
 
     for i in range(0, len(args), 2):
-        t = args[i]
+        obj = args[i]
         p = args[i + 1]
 
-        assert t is None or isinstance(t, tuple) or hasattr(t, "shape"), \
-            f"{type(t)=}"
+        t: typing.Optional[tuple[int, ...]] = None
+
+        if obj is not None:
+            if isinstance(obj, tuple):
+                t = obj
+            else:
+                assert hasattr(obj, "shape"), f"{type(obj)}"
+                t = obj.shape
+
+            assert isinstance(t, tuple), f"{type(t)}"
 
         assert isinstance(p, tuple)
+
+        p: typing.Sequence[types.EllipsisType | int]
 
         for p_val in p:
             assert p_val is ... or isinstance(p_val, int)
@@ -332,7 +453,7 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
 
         assert ellipsis_cnt <= 1
 
-        if t is None or t.shape.numel() == 0:
+        if t is None or math.prod(t) == 0:
             for p_val in p:
                 if isinstance(p_val, int) and p_val < 0:
                     undet_shapes.setdefault(p_val, p_val)
@@ -362,7 +483,9 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
 
         for t_idx, p_idx in zip(t_idx_iter, p_idx_iter):
             t_val = t[t_idx]
-            p_val: int = p[p_idx]
+            p_val = p[p_idx]
+
+            assert isinstance(p_val, int)
 
             if 0 <= p_val:
                 assert t_val == p_val, \
@@ -391,7 +514,7 @@ def check_shapes(*args: object) -> None | int | tuple[int, ...]:
 
 
 @beartype
-def print_cuda_mem_usage(device=None) -> None:
+def print_cuda_mem_usage(device: typing.Optional[torch.device] = None) -> None:
     mem = torch.cuda.memory_allocated(device) * 1.0
 
     unit = "Bytes"
@@ -512,8 +635,6 @@ def get_quaternion_wxyz(
 ]:
     check_shapes(q, (..., 4))
 
-    w, x, y, z = None, None, None, None
-
     for i, k in enumerate(check_quaternion_order(order)):
         match k:
             case "W": w = q[..., i]
@@ -577,12 +698,21 @@ def normed_idx(idx: int, length: int) -> int:
 
 
 @beartype
-def broadcast_shapes(*args: object) \
+def broadcast_shapes(*args: typing.Any) \
         -> torch.Size:
-    shapes = [
-        [int(d) for d in (arg if isinstance(arg, tuple) else arg.shape)]
-        for arg in args if arg is not None
-    ]
+    shapes = list()
+
+    for arg in args:
+        if arg is None:
+            continue
+
+        if isinstance(arg, tuple):
+            t = arg
+        else:
+            assert hasattr(arg, "shape"), f"{type(arg)}"
+            t = arg.shape
+
+        shapes.append([int(d) for d in t])
 
     k = max(len(shape) for shape in shapes)
 
@@ -724,7 +854,7 @@ def try_batch_shrink(
 @beartype
 def ravel_idxes(
     batch_idxes: tuple[torch.Tensor, ...],
-    shape
+    shape,
 ) -> torch.Tensor:
     shape = tuple(shape)
 
@@ -993,9 +1123,11 @@ def ein_scatter(
 
 
 @beartype
-def get_param_groups(module: torch.nn.Module, base_lr: float):
+def get_param_groups(module: object, base_lr: float):
     if hasattr(module, "get_param_groups"):
         return module.get_param_groups(base_lr)
+
+    assert hasattr(module, "parameters")
 
     return [{"params": list(module.parameters()), "lr": base_lr}]
 
@@ -1017,7 +1149,7 @@ def idx_grid(
     *,
     dtype: torch.dtype,
     device: torch.device,
-):
+) -> torch.Tensor:  # [..., D] [i, j, 2] [i, j, k, 3], ...
     shape = tuple(shape)
 
     return torch.cartesian_prod(*(
@@ -1034,7 +1166,7 @@ def rand_unit(
     device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:  # [..., D]
     v = torch.normal(mean=0, std=1, size=size, dtype=dtype, device=device)
-    return v / (EPS + vec_norm(v, -1, True))
+    return v / (vec_norm(v, -1, True) + EPS[v.dtype])
 
 
 @beartype
@@ -1075,7 +1207,7 @@ def vec_sq_norm(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
-    return x.square().sum(dim=dim, keepdim=keepdim)
+    return x.square().sum(dim, keepdim)
 
 
 @beartype
@@ -1085,7 +1217,7 @@ def vec_dot(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
-    ret = torch.linalg.vecdot(x, y, dim=dim)
+    ret: torch.Tensor = torch.linalg.vecdot(x, y, dim=dim)
 
     if keepdim:
         ret = ret.unsqueeze(dim)
@@ -1099,7 +1231,7 @@ def vec_cross(
     y: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
-    return torch.linalg.cross(x, y)
+    return torch.linalg.cross(x, y, dim=dim)
 
 
 @beartype
@@ -1108,7 +1240,7 @@ def vec_normed(
     dim: int = -1,
     length: typing.Optional[int | float | torch.Tensor] = None,
 ) -> torch.Tensor:  # [...]
-    x_norm = (EPS + vec_norm(x, dim, True))
+    x_norm = vec_norm(x, dim, True) + EPS[x.dtype]
     return x / x_norm if length is None else x * (length / x_norm)
 
 
@@ -1132,7 +1264,9 @@ def get_cos_angle(
     x_norm = vec_norm(x, dim, keepdim)
     y_norm = vec_norm(y, dim, keepdim)
 
-    return vec_dot(x, y, dim, keepdim) / (EPS + x_norm * y_norm)
+    z = x_norm * y_norm
+
+    return vec_dot(x, y, dim, keepdim) / (z + EPS[z.dtype])
 
 
 @beartype
@@ -1161,7 +1295,7 @@ def axis_angle_to_quaternion(
     if angle is None:
         angle = axis_norm
 
-    unit_axis = axis / (EPS + axis_norm.unsqueeze(-1))
+    unit_axis = axis / (axis_norm.unsqueeze(-1) + EPS[axis_norm.dtype])
 
     half_angle = angle / 2
 
@@ -1203,7 +1337,7 @@ def quaternion_to_axis_angle(
     y = y * k
     z = z * k
 
-    p = ((1 + EPS) - w.square()).rsqrt()
+    p = ((1 + EPS[w.dtype]) - w.square()).rsqrt()
 
     axis = torch.empty(
         quaternion.shape[:-1] + (3,),
@@ -1230,7 +1364,7 @@ def _axis_angle_to_rot_mat(
     if angle is None:
         angle = axis_norm
 
-    unit_axis = axis / (EPS + axis_norm.unsqueeze(-1))
+    unit_axis = axis / (axis_norm.unsqueeze(-1) + EPS[axis_norm.dtype])
 
     c = angle.cos()
     s = angle.sin()
@@ -1820,12 +1954,12 @@ def to_pathlib_path(path: os.PathLike) -> pathlib.Path:
 
 
 @beartype
-def create_file(path: os.PathLike, mode: str = "w"):
+def create_file(path: os.PathLike, mode="w", *args, **kwargs):
     path = to_pathlib_path(path)
 
-    os.makedirs(path.parents[0], exist_ok=True)
+    path.parents[0].mkdir(parents=True, exist_ok=True)
 
-    return open(path, mode)
+    return open(path, mode=mode, *args, **kwargs)
 
 
 @beartype
@@ -1841,59 +1975,126 @@ def read_file(
 def write_file(
     path: os.PathLike,
     mode: str,
-    data,
+    data: typing.Any,
 ):
     with create_file(path, mode) as f:
         f.write(data)
 
 
 @beartype
+class PickleReader:
+    def __init__(
+        self,
+        path: os.PathLike,
+    ):
+        self.f = open(path, mode="rb", buffering=128 * MiBYTE)
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __enter__(self) -> PickleReader:
+        return self
+
+    def __exit__(self, type, value, traceback) -> None:
+        self.close()
+
+    @property
+    def is_opened(self) -> bool:
+        return not self.f.closed
+
+    @property
+    def mode(self) -> str:
+        return self.f.mode
+
+    def read(self):
+        return pickle.load(self.f, encoding="latin1") \
+            if self.is_opened else None
+
+    def close(self) -> None:
+        self.f.close()
+
+
+@beartype
+class PickleWriter:
+    def __init__(
+        self,
+        path: os.PathLike,
+        mode: str = "wb+",
+    ):
+        self.f = create_file(path, mode=mode, buffering=128 * MiBYTE)
+        assert "b" in self.f.mode
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __enter__(self) -> PickleWriter:
+        return self
+
+    def __exit__(self, type, value, traceback) -> None:
+        self.close()
+
+    @property
+    def is_opened(self) -> bool:
+        return not self.f.closed
+
+    @property
+    def mode(self) -> str:
+        return self.f.mode
+
+    def write(self, data: typing.Any) -> None:
+        assert self.is_opened
+        return pickle.dump(data, self.f)
+
+    def close(self) -> None:
+        self.f.close()
+
+
+@beartype
 def read_pickle(
     path: os.PathLike,
-    *,
-    mode: str = "rb",
-    encoding: str = "latin1",
 ):
-    with open(path, mode=mode) as f:
-        return pickle.load(f, encoding=encoding)
+    with PickleReader(path) as reader:
+        return reader.read()
 
 
 @beartype
 def write_pickle(
     path: os.PathLike,
-    data,
+    data: object,
     *,
     mode: str = "wb+",
-):
+) -> None:
     print(f"Writing pickle to \"{path=}\".")
 
-    with create_file(path, mode) as f:
-        pickle.dump(data, f)
+    with PickleWriter(path, mode) as writer:
+        writer.write(data)
 
 
 @beartype
 def write_tensor_to_file(path: os.PathLike, x: torch.Tensor) -> None:
     path = to_pathlib_path(path)
 
-    os.makedirs(path.parents[0], exist_ok=True)
+    path.parents[0].mkdir(parents=True, exist_ok=True)
 
     if x.dtype.is_floating_point:
         def to_str(val): return f"{float(val):+.7e}"
     else:
         def to_str(val): return str(int(val))
 
+    print(f"Writing tensor to \"{path=}\".")
+
     with create_file(path) as f:
-        def _write_tensor(tensor: torch.Tensor) -> bytes:
-            if tensor.ndim == 0:
-                f.write(to_str(tensor.item()))
+        def _write_tensor(cur_x: torch.Tensor) -> bytes:
+            if cur_x.ndim == 0:
+                f.write(to_str(cur_x.item()))
                 return
 
             f.write("[ ")
 
-            k = x.shape[0]
+            k = cur_x.shape[0]
 
             for i in range(k):
-                _write_tensor(x[i])
+                _write_tensor(cur_x[i])
 
                 if i < k - 1:
                     f.write(", ")
@@ -1976,7 +2177,7 @@ _tensor_serialize_np_dtype_table = {
 @beartype
 def tensor_serialize(
     x: typing.Optional[torch.Tensor],
-    dtype: typing.Optional[np.dtype] = None,
+    dtype: typing.Optional[object] = None,
 ) -> typing.Optional[np.ndarray]:
     return None if x is None else \
         np.array(x.numpy(force=True), dtype=dtype, copy=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import enum
+import functools
 import itertools
 import typing
 
@@ -142,35 +143,43 @@ def calc_adj_sums_naive(
     return ret
 
 
-class MeshSubdivisionFaceSrcEnum(enum.StrEnum):
+class MeshSubdivisionFaceSrcTypeEnum(enum.IntEnum):
     # no subdive
-    VA_VB_VC = "VA_VB_VC"
-
-    # subdive to 4
-    VA_EC_EB = "VA_EC_EB"
-    VB_EA_EC = "VB_EA_EC"
-    VC_EB_EA = "VC_EB_EA"
-    EA_EB_EC = "EA_EB_EC"
+    VA_VB_VC = 0
 
     # subdive to 2, case a, cut edge bc
-    VA_VB_EA = "VA_VB_EA"
-    VC_VA_EA = "VC_VA_EA"
+    VA_VB_EA = 20
+    VC_VA_EA = 21
 
     # subdive to 2, case b, cut edge ca
-    VB_VC_EB = "VB_VC_EB"
-    VA_VB_EB = "VA_VB_EB"
+    VB_VC_EB = 22
+    VA_VB_EB = 23
 
     # subdive to 2, case c, cut edge ab
-    VC_VA_EC = "VC_VA_EC"
-    VB_VC_EC = "VB_VC_EC"
+    VC_VA_EC = 24
+    VB_VC_EC = 25
+
+    # subdive to 4
+    VA_EC_EB = 40
+    VB_EA_EC = 41
+    VC_EB_EA = 42
+    EA_EB_EC = 43
 
 
 @beartype
 @dataclasses.dataclass
 class MeshSubdivisionResult:
     edge_mark: list[bool]
+
     vert_src_table: torch.Tensor
-    face_src_table: list[tuple[int, MeshSubdivisionFaceSrcEnum]]
+    # [V_, 2]
+
+    face_src_table: torch.Tensor
+    # [F_]
+
+    face_src_type_table: torch.Tensor
+    # [F_]
+
     mesh_graph: MeshGraph
 
 
@@ -249,6 +258,8 @@ class MeshGraph:
     ) -> MeshGraph:
         faces_cnt = utils.check_shapes(faces, (-1, 3))
 
+        origin_faces = faces
+
         faces = faces.to(utils.CPU_DEVICE, torch.long)
 
         ee_to_f_d: collections.defaultdict[tuple[int, int], set[int]] = \
@@ -270,17 +281,16 @@ class MeshGraph:
 
         vv_to_e = {(va, vb): e for e, (va, vb) in enumerate(e_to_vv_l)}
 
-        f_to_eee_l: list[tuple[int, int, int]] = \
-            [None for _ in range(faces_cnt)]
+        f_to_eee_l: list[tuple[int, int, int]] = list()
 
         for f in range(faces_cnt):
-            va, vb, vc = sorted(map(int, faces[f]))
+            va, vb, vc = map(int, faces[f])
 
-            f_to_eee_l[f] = (
-                vv_to_e[(vb, vc)],
-                vv_to_e[(va, vc)],
-                vv_to_e[(va, vb)],
-            )
+            f_to_eee_l.append((
+                vv_to_e[utils.min_max(vb, vc)],
+                vv_to_e[utils.min_max(va, vc)],
+                vv_to_e[utils.min_max(va, vb)],
+            ))
 
         ff: set[tuple[int, int]] = set()
 
@@ -297,7 +307,7 @@ class MeshGraph:
             for fa, fb in itertools.combinations(fs, 2):
                 ff.add(utils.min_max(fa, fb))
 
-        faces = faces.to(device, torch.long)
+        faces = origin_faces.to(device, torch.long)
 
         e_to_vv = torch.tensor(
             sorted(ee_to_f_d.keys()),
@@ -345,6 +355,17 @@ class MeshGraph:
             inv_vert_deg=inv_vert_deg,
         )
 
+    @staticmethod
+    def from_state_dict(
+        state_dict: typing.Mapping[str, object],
+        device: torch.device,
+    ) -> MeshGraph:
+        return MeshGraph.from_faces(
+            state_dict["verts_cnt"],
+            utils.tensor_deserialize(state_dict["faces"]),
+            device,
+        )
+
     @property
     def device(self) -> torch.device:
         return self.f_to_vvv.device
@@ -370,52 +391,44 @@ class MeshGraph:
         return self.ff.shape[0]
 
     def to(self, *args, **kwargs) -> MeshGraph:
-        d = {
-            "e_to_vv": None,
-            "vv_to_e": self.vv_to_e,
+        def f(x):
+            return None if x is None else x.to(*args, **kwargs)
 
-            "f_to_vvv": None,
-            "f_to_eee": None,
+        return MeshGraph(
+            e_to_vv=f(self.e_to_vv),
+            vv_to_e=self.vv_to_e,
 
-            "ff": None,
+            f_to_vvv=f(self.f_to_vvv),
+            f_to_eee=f(self.f_to_eee),
 
-            "vert_deg": None,
-            "inv_vert_deg": None,
-        }
+            ff=f(self.ff),
 
-        for key, val in d.items():
-            if val is None:
-                cur_val = getattr(self, key)
-
-                if d[key] is None:
-                    d[key] = None if cur_val is None else \
-                        cur_val.to(*args, **kwargs)
-
-        return MeshGraph(**d)
+            vert_deg=f(self.vert_deg),
+            inv_vert_deg=f(self.inv_vert_deg),
+        )
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([
             ("verts_cnt", self.verts_cnt),
-            ("f_to_vvv", utils.tensor_serialize(self.f_to_vvv)),
+            ("faces", utils.tensor_serialize(self.f_to_vvv)),
         ])
 
-    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
-        mesh_graph: MeshGraph = MeshGraph.from_faces(
-            state_dict["verts_cnt"],
-            state_dict["faces"],
-            self.device,
-        )
+    def load_state_dict(
+            self, state_dict: typing.Mapping[str, object]) -> MeshGraph:
+        mesh_graph = MeshGraph.from_state_dict(state_dict, self.device)
+
+        self.e_to_vv = mesh_graph.e_to_vv
+        self.vv_to_e = mesh_graph.vv_to_e
 
         self.f_to_vvv = mesh_graph.f_to_vvv
         self.f_to_eee = mesh_graph.f_to_eee
 
         self.ff = mesh_graph.ff
 
-        self.e_to_vv = mesh_graph.e_to_vv
-        self.vv_to_e = mesh_graph.vv_to_e
-
         self.vert_deg = mesh_graph.vert_deg
         self.inv_vert_deg = mesh_graph.inv_vert_deg
+
+        return self
 
     def calc_face_cos_sim(
         self,
@@ -511,7 +524,7 @@ class MeshGraph:
         e_to_vv = self.e_to_vv.to(utils.CPU_DEVICE)
         # [VP, 2]
 
-        e_to_fs = [[] for _ in range(self.edges_cnt)]
+        e_to_fs: list[list[int]] = [[] for _ in range(self.edges_cnt)]
 
         for f in range(self.faces_cnt):
             for e in map(int, f_to_eee[f]):
@@ -528,17 +541,18 @@ class MeshGraph:
                 edge_mark[e] = True
                 edge_queue.append(e)
 
-        if target_faces is not None:
-            if target_edges is not None:
-                for e in target_edges:
-                    try_add_edge_to_queue(e)
+        if target_edges is None and target_faces is None:
+            for e in range(self.edges_cnt):
+                try_add_edge_to_queue(e)
 
+        if target_edges is not None:
+            for e in target_edges:
+                try_add_edge_to_queue(e)
+
+        if target_faces is not None:
             for f in target_faces:
                 for e in map(int, f_to_eee[f]):
                     try_add_edge_to_queue(e)
-        elif target_edges is None:
-            for e in range(self.edges_cnt):
-                try_add_edge_to_queue(e)
 
         while 0 < len(edge_queue):
             e = edge_queue.pop()
@@ -550,28 +564,27 @@ class MeshGraph:
                     for e in map(int, f_to_eee[f]):
                         try_add_edge_to_queue(e)
 
-        e_to_new_v: dict[int, int] = dict()
+        e_to_new_v: list[int] = [-1] * self.edges_cnt
 
-        vert_src_table = torch.empty(
-            (self.verts_cnt + edge_mark.count(True), 2), dtype=torch.long)
-
-        for i in range(self.verts_cnt):
-            vert_src_table[i] = i
+        vert_src_table = [(i, i) for i in range(self.verts_cnt)]
 
         for new_v, e in enumerate(
             (e for e, mark in enumerate(edge_mark) if mark),
             self.verts_cnt,
         ):
             e_to_new_v[e] = new_v
-            vert_src_table[new_v] = e_to_vv[e]
+            vert_src_table.append(tuple(int(v) for v in e_to_vv[e]))
 
         new_faces: list[tuple[int, int, int]] = list()
 
-        face_src_table: list[tuple[int, MeshSubdivisionFaceSrcEnum]] = list()
+        face_src_table: list[int] = list()
+        face_src_type_table: list[int] = list()
 
-        def add_face(f, src_enum, new_va, new_vb, new_vc):
+        def add_face(src, src_type, new_va, new_vb, new_vc):
             new_faces.append((new_va, new_vb, new_vc))
-            face_src_table.append((f, src_enum))
+
+            face_src_table.append(src)
+            face_src_type_table.append(src_type.value)
 
         for f, cnt in enumerate(se_cnts):
             va, vb, vc = map(int, f_to_vvv[f])
@@ -580,7 +593,7 @@ class MeshGraph:
             assert cnt == 0 or cnt == 1 or cnt == 3
 
             if cnt == 0:
-                add_face(f, MeshSubdivisionFaceSrcEnum.VA_VB_VC, va, vb, vc)
+                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_VC, va, vb, vc)
                 continue
 
             if cnt == 3:
@@ -588,10 +601,10 @@ class MeshGraph:
                 ub = e_to_new_v[eb]
                 uc = e_to_new_v[ec]
 
-                add_face(f, MeshSubdivisionFaceSrcEnum.VA_VB_VC, va, uc, ub)
-                add_face(f, MeshSubdivisionFaceSrcEnum.VB_EA_EC, vb, ua, uc)
-                add_face(f, MeshSubdivisionFaceSrcEnum.VC_EB_EA, vc, ub, ua)
-                add_face(f, MeshSubdivisionFaceSrcEnum.EA_EB_EC, ua, ub, uc)
+                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VA_EC_EB, va, uc, ub)
+                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VB_EA_EC, vb, ua, uc)
+                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VC_EB_EA, vc, ub, ua)
+                add_face(f, MeshSubdivisionFaceSrcTypeEnum.EA_EB_EC, ua, ub, uc)
 
                 continue
 
@@ -599,44 +612,63 @@ class MeshGraph:
             kb = edge_mark[eb]
             kc = edge_mark[ec]
 
-            match ka * 4 + kb * 2 + kc:
+            match ka * 0b100 + kb * 0b010 + kc * 0b001:
                 case 0b100:
                     ua = e_to_new_v[ea]
 
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VA_VB_EA, va, vb, ua)
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VC_VA_EA, vc, va, ua)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_EA, va, vb, ua)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VC_VA_EA, vc, va, ua)
 
                 case 0b010:
                     ub = e_to_new_v[eb]
 
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VB_VC_EB, vb, vc, ub)
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VA_VB_EB, va, vb, ub)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VB_VC_EB, vb, vc, ub)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_EB, va, vb, ub)
 
                 case 0b001:
-                    uc = e_to_new_v[eb]
+                    uc = e_to_new_v[ec]
 
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VC_VA_EC, vc, va, uc)
-                    add_face(f, MeshSubdivisionFaceSrcEnum.VB_VC_EC, vb, vc, uc)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VC_VA_EC, vc, va, uc)
+                    add_face(
+                        f, MeshSubdivisionFaceSrcTypeEnum.VB_VC_EC, vb, vc, uc)
 
                 case _:
                     raise utils.MismatchException()
 
+        vert_src_table = torch.tensor(
+            vert_src_table, dtype=torch.long, device=self.device)
+        # [V_, 2]
+
+        face_src_table = torch.tensor(
+            face_src_table, dtype=torch.long, device=self.device)
+        # [F_]
+
+        face_src_type_table = torch.tensor(
+            face_src_type_table, dtype=torch.uint8, device=self.device)
+        # [F_]
+
         new_faces = torch.tensor(new_faces, dtype=torch.long)
-        # [F, 3]
 
         if new_faces.numel() == 0:
+            vert_src_table = vert_src_table.expand(0, 2)
             new_faces = new_faces.expand(0, 3)
 
         mesh_graph = MeshGraph.from_faces(
-            vert_src_table.shape[0],
+            len(vert_src_table),
             new_faces,
             self.device,
         )
 
         return MeshSubdivisionResult(
             edge_mark=edge_mark,
-            face_src_table=face_src_table,
             vert_src_table=vert_src_table,
+            face_src_table=face_src_table,
+            face_src_type_table=face_src_type_table,
             mesh_graph=mesh_graph,
         )
 
@@ -703,83 +735,7 @@ class MeshGraph:
 
 
 @beartype
-class MeshDataRawProperty:
-    def __init__(self):
-        self.edge_vert_pos: typing.Optional[torch.Tensor] = None
-        # [..., E, 2, D]
-
-        self.edge_dir: typing.Optional[torch.Tensor] = None
-        # [..., E, D]
-
-        self.edge_norm: typing.Optional[torch.Tensor] = None
-        # [..., E]
-
-        self.edge_sq_norm: typing.Optional[torch.Tensor] = None
-        # [..., E]
-
-        self.face_vert_pos: typing.Optional[torch.Tensor] = None
-        # [..., F, 3, D]
-
-        self.face_mean: typing.Optional[torch.Tensor] = None
-        # [..., F, D]
-
-        self.face_edge_dir: typing.Optional[torch.Tensor] = None
-        # [..., F, 3, D]
-
-        self.face_edge_norm: typing.Optional[torch.Tensor] = None
-        # [..., F, 3]
-
-        self.face_edge_sq_norm: typing.Optional[torch.Tensor] = None
-        # [..., F, 3]
-
-        self.face_peri: typing.Optional[torch.Tensor] = None
-        # [..., F]
-
-        self.face_area_vec: typing.Optional[torch.Tensor] = None
-        # [..., F]
-
-        self.face_norm: typing.Optional[torch.Tensor] = None
-        # [..., F, 3]
-
-        self.face_area: typing.Optional[torch.Tensor] = None
-        # [..., F]
-
-        self.face_sq_area: typing.Optional[torch.Tensor] = None
-        # [..., F]
-
-        self.face_edge_diff: typing.Optional[torch.Tensor] = None
-        # [..., F, 3]
-
-        self.face_cot_angle: typing.Optional[torch.Tensor] = None
-        # [..., F, 3]
-
-        self.uni_lap_diff: typing.Optional[torch.Tensor] = None
-        # [..., V, D]
-
-        self.cot_lap_diff: typing.Optional[torch.Tensor] = None
-        # [..., V, D]
-
-        self.l1_uni_lap_smoothness: typing.Optional[torch.Tensor] = None
-        # [..., V]
-
-        self.l2_uni_lap_smoothness: typing.Optional[torch.Tensor] = None
-        # [..., V]
-
-        self.l1_cot_lap_smoothness: typing.Optional[torch.Tensor] = None
-        # [..., V]
-
-        self.l2_cot_lap_smoothness: typing.Optional[torch.Tensor] = None
-        # [..., V]
-
-        self.face_norm_cos_sim: typing.Optional[torch.Tensor] = None
-        # [..., FP]
-
-        self.face_bary_coord_mat: typing.Optional[torch.Tensor] = None
-        # [..., F, 3, D + 1]
-
-
-@beartype
-class MeshData(torch.nn.Module):
+class MeshData:
     def __init__(
         self,
         mesh_graph: MeshGraph,
@@ -791,8 +747,6 @@ class MeshData(torch.nn.Module):
 
         self.mesh_graph = mesh_graph
         self.vert_pos = vert_pos.to(self.mesh_graph.device)
-
-        self.raw = MeshDataRawProperty()
 
     @property
     def shape(self) -> torch.Size:
@@ -821,9 +775,12 @@ class MeshData(torch.nn.Module):
 
         mesh_data = MeshData(mesh_graph, vert_pos)
 
-        for key, val in self.raw.__dict__.items():
-            if val is not None:
-                setattr(mesh_data.raw, key, val.to(*args, **kwargs))
+        for key, val in MeshData.__dict__.items():
+            if isinstance(val, functools.cached_property):
+                cached_val = getattr(self, key, None)
+
+                if hasattr(cached_val, "to"):
+                    setattr(self, key, cached_val.to(*args, **kwargs))
 
         return mesh_data
 
@@ -849,152 +806,137 @@ class MeshData(torch.nn.Module):
             self.vert_pos.device,
         )
 
-        self.raw = MeshDataRawProperty()
+        self.clear_cache()
 
-    @property
+    def clear_cache(self) -> None:
+        for key, val in MeshData.__dict__.items():
+            if isinstance(val, functools.cached_property):
+                delattr(self, key)
+
+    @functools.cached_property
     def edge_vert_pos(self) -> torch.Tensor:  # [..., E, 2, D]
-        if self.raw.edge_vert_pos is None:
-            self.raw.edge_vert_pos = self.vert_pos[
-                ..., self.mesh_graph.e_to_vv, :]
+        return self.vert_pos[..., self.mesh_graph.e_to_vv, :]
 
-        return self.raw.edge_vert_pos
-
-    @property
+    @functools.cached_property
     def edge_dir(self) -> torch.Tensor:  # [..., E, D]
-        if self.raw.edge_dir is None:
-            evp = self.edge_vert_pos
-            # [..., E, 2, D]
+        evp = self.edge_vert_pos
+        # [..., E, 2, D]
 
-            self.raw.edge_dir = evp[..., 0, :] - evp[..., 1, :]
+        return evp[..., 0, :] - evp[..., 1, :]
 
-        return self.raw.edge_dir
-
-    @property
+    @functools.cached_property
     def edge_norm(self) -> torch.Tensor:  # [..., E]
-        if self.raw.edge_norm is None:
-            self.raw.edge_norm = utils.vec_norm(self.edge_dir)
+        return utils.vec_norm(self.edge_dir)
 
-        return self.raw.edge_norm
-
-    @property
+    @functools.cached_property
     def edge_sq_norm(self) -> torch.Tensor:  # [..., E]
-        if self.raw.edge_sq_norm is None:
-            self.raw.edge_sq_norm = utils.vec_sq_norm(self.edge_dir)
+        return utils.vec_sq_norm(self.edge_dir)
 
-        return self.raw.edge_sq_norm
-
-    @property
+    @functools.cached_property
     def face_vert_pos(self) -> torch.Tensor:  # [..., F, 3, D]
-        if self.raw.face_vert_pos is None:
-            self.raw.face_vert_pos = self.vert_pos[
-                ..., self.mesh_graph.f_to_vvv, :]
+        return self.vert_pos[..., self.mesh_graph.f_to_vvv, :]
 
-        return self.raw.face_vert_pos
-
-    @property
+    @functools.cached_property
     def face_edge_dir(self) -> torch.Tensor:  # [..., F, 3, D]
-        if self.raw.face_edge_dir is None:
-            fvp = self.face_vert_pos
-            # [... F, 3, D]
+        fvp = self.face_vert_pos
+        # [... F, 3, D]
 
-            self.raw.face_edge_dir = utils.empty_like(fvp)
-            # [..., F, 3, D]
+        buffer = utils.empty_like(fvp)
+        # [..., F, 3, D]
 
-            self.raw.face_edge_dir[..., 0, :] = fvp[..., 1, :] - fvp[..., 0, :]
-            self.raw.face_edge_dir[..., 1, :] = fvp[..., 2, :] - fvp[..., 1, :]
-            self.raw.face_edge_dir[..., 2, :] = fvp[..., 0, :] - fvp[..., 2, :]
+        buffer[..., 0, :] = fvp[..., 1, :] - fvp[..., 0, :]
+        buffer[..., 1, :] = fvp[..., 2, :] - fvp[..., 1, :]
+        buffer[..., 2, :] = fvp[..., 0, :] - fvp[..., 2, :]
 
-        return self.raw.face_edge_dir
+        return buffer
 
-    @property
+    @functools.cached_property
     def face_edge_dir_ab(self) -> torch.Tensor:  # [..., F, 3, D]
         return self.face_edge_dir[..., 0, :]
 
-    @property
+    @functools.cached_property
     def face_edge_dir_bc(self) -> torch.Tensor:  # [..., F, 3, D]
         return self.face_edge_dir[..., 1, :]
 
-    @property
+    @functools.cached_property
     def face_edge_dir_ca(self) -> torch.Tensor:  # [..., F, 3, D]
         return self.face_edge_dir[..., 2, :]
 
-    @property
-    def face_edge_norm(self) -> torch.Tensor:  # [..., F, D]
-        if self.raw.face_edge_norm is None:
-            self.raw.face_edge_norm = utils.vec_norm(self.face_edge_dir)
-
-        return self.raw.face_edge_norm
-
-    @property
-    def face_edge_sq_norm(self) -> torch.Tensor:  # [..., F, 3]
-        if self.raw.face_edge_sq_norm is None:
-            self.raw.face_edge_sq_norm = utils.vec_sq_norm(self.face_edge_dir)
-
-        return self.raw.face_edge_sq_norm
-
-    @property
+    @functools.cached_property
     def face_mean(self) -> torch.Tensor:  # [..., F, D]
-        if self.raw.face_mean is None:
-            self.raw.face_mean = self.face_vert_pos.mean(-2)
+        return self.face_vert_pos.mean(-2)
 
-        return self.raw.face_mean
+    @functools.cached_property
+    def face_vert_svd(self) -> tuple[
+        torch.Tensor,  # u[..., F, 3, 3]
+        torch.Tensor,  # s[..., F, min(3, D)]
+        torch.Tensor,  # v[..., F, D, D]
+    ]:
+        return torch.linalg.svd(self.face_vert_pos)
 
-    @property
-    def face_peri(self) -> torch.Tensor:  # [..., F]
-        if self.raw.face_peri is None:
-            self.raw.face_peri = self.face_edge_norm.sum(-1)
+    @functools.cached_property
+    def face_vert_svd_u(self) -> torch.Tensor:  # [..., F, 3, 3]
+        return self.face_vert_svd[0]
 
-        return self.raw.face_peri
+    @functools.cached_property
+    def face_vert_svd_s(self) -> torch.Tensor:  # [..., F, min(3, D)]
+        return self.face_vert_svd[1]
 
-    @property
+    @functools.cached_property
+    def face_vert_svd_vh(self) -> torch.Tensor:  # [..., F, D, D]
+        return self.face_vert_svd[2]
+
+    @functools.cached_property
+    def face_edge_norm(self) -> torch.Tensor:  # [..., F, 3]
+        return utils.vec_norm(self.face_edge_dir)
+
+    @functools.cached_property
+    def face_edge_sum_norm(self) -> torch.Tensor:  # [..., F]
+        return self.face_edge_norm.sum(-1)
+
+    @functools.cached_property
+    def face_edge_sq_norm(self) -> torch.Tensor:  # [..., F, 3]
+        return utils.vec_sq_norm(self.face_edge_dir)
+
+    @functools.cached_property
+    def face_edge_sum_sq_norm(self) -> torch.Tensor:  # [..., F]
+        return self.face_edge_sq_norm.sum(-1)
+
+    @functools.cached_property
     def face_area_vec(self) -> torch.Tensor:  # [..., F]
         assert self.vert_pos.shape[-1] == 3
 
-        if self.raw.face_area_vec is None:
-            self.raw.face_area_vec = utils.vec_cross(
-                self.face_edge_dir_ab, self.face_edge_dir_ab) / 2
+        return utils.vec_cross(self.face_edge_dir_ca, self.face_edge_dir_ab) / 2
 
-        return self.raw.face_area_vec
-
-    @property
+    @functools.cached_property
     def face_norm(self) -> torch.Tensor:  # [..., F, 3]
         assert self.vert_pos.shape[-1] == 3
 
-        if self.raw.face_norm is None:
-            self.raw.face_norm = self.face_area_vec / \
-                self.face_area.unsqueeze(-1)
+        return self.face_area_vec / self.face_area.unsqueeze(-1)
 
-        return self.raw.face_norm
-
-    @property
+    @functools.cached_property
     def face_area(self) -> torch.Tensor:  # [..., F]
-        if self.raw.face_area is None:
-            self.raw.face_area = self.face_sq_area.sqrt()
+        return self.face_sq_area.sqrt()
 
-        return self.raw.face_area
-
-    @property
+    @functools.cached_property
     def face_sq_area(self) -> torch.Tensor:  # [... , F]
-        if self.raw.face_sq_area is None:
-            fen = self.face_edge_norm
-            # [..., F, 3]
+        fen = self.face_edge_norm
+        # [..., F, 3]
 
-            sorted_fen, _ = torch.sort(fen, -1, True)
-            # [..., F, 3]
+        sorted_fen, _ = torch.sort(fen, -1, True)
+        # [..., F, 3]
 
-            ea = sorted_fen[..., 0]
-            eb = sorted_fen[..., 1]
-            ec = sorted_fen[..., 2]
+        ea = sorted_fen[..., 0]
+        eb = sorted_fen[..., 1]
+        ec = sorted_fen[..., 2]
 
-            eab = ea - eb
+        eab = ea - eb
 
-            self.raw.face_sq_area = (
-                (ea + (eb + ec)) * (ec - eab) * (ec + eab) * (ea + (eb - ec))
-            ) / 16
+        return (
+            (ea + (eb + ec)) * (ec - eab) * (ec + eab) * (ea + (eb - ec))
+        ) / 16
 
-        return self.raw.face_sq_area
-
-    @property
+    @functools.cached_property
     def face_edge_diff(self) -> torch.Tensor:  # [..., F, 3]
         # sq_e_a = self.face_edge_sq_norm[..., 0, :]
         # sq_e_b = self.face_edge_sq_norm[..., 1, :]
@@ -1008,36 +950,20 @@ class MeshData(torch.nn.Module):
         # (sq_e_a + sq_e_b + sq_e_c - sq_e_b * 2) * denom
         # (sq_e_a + sq_e_b + sq_e_c - sq_e_c * 2) * denom
 
-        if self.raw.face_edge_diff is None:
-            self.raw.face_edge_diff = \
-                self.face_edge_sq_norm.sum(-1, True) - \
-                self.face_edge_sq_norm * 2
+        return self.face_edge_sq_norm.sum(-1, True) - self.face_edge_sq_norm * 2
 
-        return self.raw.face_edge_diff
-
-    @property
+    @functools.cached_property
     def face_cot_angle(self) -> torch.Tensor:  # [..., F, 3]
-        if self.raw.face_cot_angle is None:
-            self.raw.face_cot_angle = self.face_edge_diff * \
-                (0.25 / self.face_area).unsqueeze(-1)
-            # [..., F, 3]
+        return self.face_edge_diff * (0.25 / self.face_area).unsqueeze(-1)
 
-        return self.raw.face_cot_angle
-
-    @property
+    @functools.cached_property
     def uni_lap_diff(self) -> torch.Tensor:  # [..., V, D]
-        if self.raw.uni_lap_diff is None:
-            self.raw.uni_lap_diff = calc_adj_sums(
-                self.mesh_graph.e_to_vv, self.vert_pos
-            ) * self.mesh_graph.inv_vert_deg.unsqueeze(-1) - self.vert_pos
+        return calc_adj_sums(
+            self.mesh_graph.e_to_vv, self.vert_pos
+        ) * self.mesh_graph.inv_vert_deg.unsqueeze(-1) - self.vert_pos
 
-        return self.raw.uni_lap_diff
-
-    @property
+    @functools.cached_property
     def cot_lap_diff(self) -> torch.Tensor:  # [..., V, D]
-        if self.raw.cot_lap_diff is not None:
-            return self.raw.cot_lap_diff
-
         e_weight = utils.zeros_like(
             self.vert_pos, shape=self.shape + (self.edges_cnt,))
         # [..., E]
@@ -1064,41 +990,23 @@ class MeshData(torch.nn.Module):
         buffer.index_add_(
             -2, self.mesh_graph.e_to_vv[:, 1], weighted_e_diff, alpha=-1)
 
-        self.raw.cot_lap_diff = buffer / v_sum_weight.unsqueeze(-1)
+        return buffer / v_sum_weight.unsqueeze(-1)
 
-        return self.raw.cot_lap_diff
-
-    @property
+    @functools.cached_property
     def l1_uni_lap_smoothness(self) -> torch.Tensor:  # [...]
-        if self.raw.l1_uni_lap_smoothness is None:
-            self.raw.l1_uni_lap_smoothness = \
-                utils.vec_norm(self.uni_lap_diff).mean(-1)
+        return utils.vec_norm(self.uni_lap_diff).mean(-1)
 
-        return self.raw.l1_uni_lap_smoothness
-
-    @property
+    @functools.cached_property
     def l2_uni_lap_smoothness(self) -> torch.Tensor:  # [...]
-        if self.raw.l2_uni_lap_smoothness is None:
-            self.raw.l2_uni_lap_smoothness = \
-                utils.vec_sq_norm(self.uni_lap_diff).mean(-1)
+        return utils.vec_sq_norm(self.uni_lap_diff).mean(-1)
 
-        return self.raw.l2_uni_lap_smoothness
-
-    @property
+    @functools.cached_property
     def l1_cot_lap_smoothness(self) -> torch.Tensor:  # [...]
-        if self.raw.l1_cot_lap_smoothness is None:
-            self.raw.l1_cot_lap_smoothness = \
-                utils.vec_norm(self.cot_lap_diff).mean(-1)
+        return utils.vec_norm(self.cot_lap_diff).mean(-1)
 
-        return self.raw.l1_cot_lap_smoothness
-
-    @property
+    @functools.cached_property
     def l2_cot_lap_smoothness(self) -> torch.Tensor:  # [...]
-        if self.raw.l2_cot_lap_smoothness is None:
-            self.raw.l2_cot_lap_smoothness = \
-                utils.vec_sq_norm(self.cot_lap_diff).mean(-1)
-
-        return self.raw.l2_cot_lap_smoothness
+        return utils.vec_sq_norm(self.cot_lap_diff).mean(-1)
 
     def calc_uni_lap_smoothness_pytorch3d(self) -> torch.Tensor:  # []
         import pytorch3d
@@ -1140,35 +1048,32 @@ class MeshData(torch.nn.Module):
 
         return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="cot")
 
-    @property
+    @functools.cached_property
     def face_norm_cos_sim(self) -> torch.Tensor:  # [..., FP]
-        if self.raw.face_norm_cos_sim is None:
-            self.raw.face_norm_cos_sim = self.mesh_graph.calc_face_cos_sim(
-                self.face_norm)
+        return self.mesh_graph.calc_face_cos_sim(self.face_norm)
 
-        return self.raw.face_norm_cos_sim
+    @functools.cached_property
+    def face_edge_rel_var(self) -> torch.Tensor:
+        return self.face_edge_sum_sq_norm / \
+            self.face_edge_sum_norm.detach().square() * 3 - 1
 
-    @property
+    @functools.cached_property
     def face_bary_coord_mat(self) -> torch.Tensor:  # [..., F, 3, 3]
-        if self.raw.face_bary_coord_mat is None:
-            D = self.vert_pos.shape[-1]
+        D = self.vert_pos.shape[-1]
 
-            fvp = self.face_vert_pos
-            # [..., F, 3, D]
+        fvp = self.face_vert_pos
+        # [..., F, 3, D]
 
-            m = utils.empty_like(self.vert_pos, shape=(
-                self.shape + (self.faces_cnt, D + 1, 3)))
-            # [..., F, D + 1, 3]
+        m = utils.empty_like(self.vert_pos, shape=(
+            self.shape + (self.faces_cnt, D + 1, 3)))
+        # [..., F, D + 1, 3]
 
-            m[..., :D, 0] = fvp[..., 0, :]
-            m[..., :D, 1] = fvp[..., 1, :]
-            m[..., :D, 2] = fvp[..., 2, :]
-            m[..., D, :] = 1
+        m[..., :D, 0] = fvp[..., 0, :]
+        m[..., :D, 1] = fvp[..., 1, :]
+        m[..., :D, 2] = fvp[..., 2, :]
+        m[..., D, :] = 1
 
-            self.raw.face_bary_coord_mat = torch.linalg.pinv(m)
-            # [..., F, 3, D + 1]
-
-        return self.raw.face_bary_coord_mat
+        return torch.linalg.pinv(m)
 
     def calc_unsigned_dist(
         self,

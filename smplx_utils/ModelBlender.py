@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
 import typing
 
@@ -106,13 +107,25 @@ class ModelBlender(avatar_utils.AvatarBlender):
     def get_param_groups(self, base_lr: float) -> list[dict]:
         return utils.get_param_groups(self.model_builder, base_lr)
 
+    def state_dict(self) -> collections.OrderedDict:
+        return collections.OrderedDict([
+            ("model_builder", self.model_builder.state_dict())])
+
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
+        self.model_builder.load_state_dict(state_dict["model_builder"])
+
     def subdivide(
         self,
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
     ) -> mesh_utils.MeshSubdivisionResult:
-        mesh_subdivision_result = self.model_builder.subdivide()
+        model_data_subdivision_result = self.model_builder.subdivide(
+            target_edges=target_edges,
+            target_faces=target_faces,
+        )
+
+        return model_data_subdivision_result.mesh_subdivision_result
 
     def forward(self, blending_param: BlendingParam):
         return blending(

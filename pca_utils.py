@@ -1,5 +1,3 @@
-
-
 import torch
 from beartype import beartype
 
@@ -40,69 +38,109 @@ def feed(
 
 @beartype
 def scatter_feed(
-    idx: torch.Tensor,  # [B]
-    x: torch.Tensor,  # [B, D]
+    idx: torch.Tensor,  # [...]
+    w: torch.Tensor,  # [...]
+    x: torch.Tensor,  # [..., D]
     inplace: bool,
 
-    dst_cnt: torch.Tensor,  # [N]
-    dst_sum_x: torch.Tensor,  # [N, D]
-    dst_sum_xxt: torch.Tensor,  # [N, D, D]
+    dst_sum_w: torch.Tensor,  # [N]
+    dst_sum_sq_w: torch.Tensor,  # [N]
+    dst_sum_w_x: torch.Tensor,  # [N, D]
+    dst_sum_w_xxt: torch.Tensor,  # [N, D, D]
 ) -> tuple[
-    torch.Tensor,  # dst_cnts[N]
-    torch.Tensor,  # dst_sum_x[N, D]
-    torch.Tensor,  # dst_sum_xxt[N, D, D]
+    torch.Tensor,  # dst_sum_w[N]
+    torch.Tensor,  # dst_sum_sq_w[N]
+    torch.Tensor,  # dst_sum_w_x[N, D]
+    torch.Tensor,  # dst_sum_w_xxt[N, D, D]
 ]:
-    B, N, D = -1, -2, -3
+    N, D = -1, -2
 
-    B, N, D = utils.check_shapes(
-        idx, (B,),
-        x, (B, D),
-        dst_cnt, (N,),
-        dst_sum_x, (N, D),
-        dst_sum_xxt, (N, D, D),
+    N, D = utils.check_shapes(
+        idx, (...,),
+        w, (...,),
+        x, (..., D),
+
+        dst_sum_w, (N,),
+        dst_sum_w_x, (N, D),
+        dst_sum_w_xxt, (N, D, D),
     )
 
-    xxt = x.unsqueeze(-1) @ x.unsqueeze(-2)
-    # [..., D, D]
+    shapes = utils.broadcast_shapes(
+        idx,
+        w,
+        x.shape[:-1],
+    )
+
+    B = shapes.numel()
+
+    idx = idx.expand(shapes).reshape(B)
+    w = w.expand(shapes).reshape(B)
+    x = x.expand(*shapes, D).reshape(B, D)
+
+    w_x = w[..., None] * x
+
+    w_xxt = w[..., None, None] * (x[..., :, None] @ x[..., None, :])
+    # [B, D, D]
+
+    sq_w = w.square()
 
     if inplace:
-        dst_cnt += idx.bincount(minlength=N)
+        dst_sum_w.index_add_(
+            0, idx, w.to(dst_sum_w))
 
-        dst_sum_x.index_add_(
-            0, idx, x.to(dst_sum_x.device, dst_sum_x.dtype))
+        dst_sum_sq_w.index_add_(
+            0, idx, sq_w.to(dst_sum_sq_w))
 
-        dst_sum_xxt.index_add_(
-            0, idx, xxt.to(dst_sum_xxt.device, dst_sum_xxt.dtype))
+        dst_sum_w_x.index_add_(
+            0, idx, w_x.to(dst_sum_w_x))
+
+        dst_sum_w_xxt.index_add_(
+            0, idx, w_xxt.to(dst_sum_w_xxt))
     else:
-        dst_cnt = dst_cnt + idx.bincount(minlength=N)
+        dst_sum_w = dst_sum_w.index_add(
+            0, idx, w.to(dst_sum_w))
 
-        dst_sum_x = dst_sum_x.index_add(
-            0, idx, x.to(dst_sum_x.device, dst_sum_x.dtype))
+        dst_sum_sq_w.index_add_(
+            0, idx, sq_w.to(dst_sum_sq_w))
 
-        dst_sum_xxt = dst_sum_xxt.index_add(
-            0, idx, xxt.to(dst_sum_xxt.device, dst_sum_xxt.dtype))
+        dst_sum_w_x = dst_sum_w_x.index_add(
+            0, idx, w_x.to(dst_sum_w_x))
 
-    return dst_cnt, dst_sum_x, dst_sum_xxt
+        dst_sum_w_xxt = dst_sum_w_xxt.index_add(
+            0, idx, w_xxt.to(dst_sum_w_xxt))
+
+    return dst_sum_w, dst_sum_sq_w, dst_sum_w_x, dst_sum_w_xxt
 
 
 @beartype
 def get_pca(
-    cnt: torch.Tensor,  # [...]
-    sum_x: torch.Tensor,  # [..., D]
-    sum_xxt: torch.Tensor,  # [..., D, D]
-):
-    D = utils.check_shapes(
-        sum_x, (..., -1),
-        sum_xxt, (..., -1, -1),
+    sum_w: torch.Tensor,  # [...]
+    sum_sq_w: torch.Tensor,  # [...]
+    sum_w_x: torch.Tensor,  # [..., D]
+    sum_w_xxt: torch.Tensor,  # [..., D, D]
+    *,
+    biased: bool = False,
+) -> tuple[
+    torch.Tensor,  # mean[..., D]
+    torch.Tensor,  # pca[..., D, D]
+    torch.Tensor,  # std[..., D]
+]:
+    utils.check_shapes(
+        sum_w, (...,),
+        sum_sq_w, (...,),
+        sum_w_x, (..., -1),
+        sum_w_xxt, (..., -1, -1),
     )
 
-    cnt = cnt.clamp(2, None)
+    sum_w = 1e-6 + sum_w
 
-    mean_x = sum_x / cnt.unsqueeze(-1)
+    mean_x = sum_w_x / sum_w[..., None]
     # [..., D]
 
-    cov = (sum_xxt - mean_x.unsqueeze(-1) @ sum_x.unsqueeze(-2)) \
-        / (cnt - 1).unsqueeze(-1).unsqueeze(-1)
+    eff_w = sum_w if biased else sum_w - sum_sq_w / sum_w
+
+    cov = (sum_w_xxt - mean_x[..., :, None] @ sum_w_x[..., None, :]) \
+        / eff_w[..., None, None]
     # [..., D, D]
 
     eig_val, eig_vec = torch.linalg.eigh(cov)
@@ -121,54 +159,52 @@ def get_pca(
 
 
 @beartype
-class Calculator:
+class PCACalculator:
     def __init__(
         self,
+        n: int,
         dim: int,
         dtype: torch.dtype,
         device: torch.device,
     ):
-        self.dim = dim
+        self.sum_w = torch.zeros(
+            (n,), dtype=dtype, device=device)
 
-        self.x_cnt = 0
+        self.sum_sq_w = torch.zeros(
+            (n,), dtype=dtype, device=device)
 
-        self.sum_x = torch.zeros(
-            (self.dim,), dtype=dtype, device=device)
+        self.sum_w_x = torch.zeros(
+            (n, dim), dtype=dtype, device=device)
 
-        self.sum_xxt = torch.zeros(
-            (self.dim, self.dim), dtype=dtype, device=device)
+        self.sum_w_xxt = torch.zeros(
+            (n, dim, dim), dtype=dtype, device=device)
 
-    @property
-    def avg_x(self) -> torch.Tensor:
-        if self.x_cnt == 0:
-            return self.sum_x
-
-        return self.sum_x / self.x_cnt
-
-    def reset(self) -> None:
-        self.x_cnt = 0
-        self.sum_x[:, :] = 0
-        self.sum_xxt[:, :] = 0
-
-    def feed(
+    def scatter_feed(
         self,
+        idx: torch.Tensor,  # [...]
+        w: torch.Tensor,  # [...]
         x: torch.Tensor,  # [..., D]
     ) -> None:
-        D = self.dim
+        scatter_feed(
+            idx,
+            w,
+            x,
+            True,
+            self.sum_w,
+            self.sum_sq_w,
+            self.sum_w_x,
+            self.sum_w_xxt,
+        )
 
-        utils.check_shapes(x, (..., D))
-
-        cur_x_cnt = x.numel() / D
-
-        if 0 < cur_x_cnt:
-            self.x_cnt += cur_x_cnt
-            feed(x, True, self.sum_x, self.sum_xxt)
-
-    def get_pca(self) -> tuple[
-        torch.Tensor,  # mean[D],
-        torch.Tensor,  # pca[D, D],
-        torch.Tensor,  # std[D],
+    def get_pca(self, biased: bool) -> tuple[
+        torch.Tensor,  # mean[N, D]
+        torch.Tensor,  # pca[N, D, D]
+        torch.Tensor,  # std[N, D]
     ]:
-        assert 1 < self.x_cnt
-
-        return get_pca(self.x_cnt, self.sum_x, self.sum_xxt)
+        return get_pca(
+            self.sum_w,
+            self.sum_sq_w,
+            self.sum_w_x,
+            self.sum_w_xxt,
+            biased=biased,
+        )

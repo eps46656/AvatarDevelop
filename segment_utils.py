@@ -271,7 +271,7 @@ def segment(
 ):
     out_dir = utils.to_pathlib_path(out_dir)
 
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     assert out_dir.is_dir()
 

@@ -110,7 +110,7 @@ def main3():
     model_config = smplx_utils.smplx_model_config
 
     with utils.Timer():
-        my_smplx_model_data: smplx_utils.Model = smplx_utils.Core.from_origin_file(
+        my_smplx_model_data: smplx_utils.Model = smplx_utils.ModelData.from_origin_file(
             model_data_path=model_data_path,
             model_config=model_config,
             dtype=utils.FLOAT,
@@ -269,7 +269,7 @@ def main3():
 
     print(f"{vertices_err=}")
 
-    vertex_normals = my_smplx_model.vert_nor
+    print(f"{vertices_err.dtype=}")
 
     """
 

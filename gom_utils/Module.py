@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
+import typing
 
 import torch
 from beartype import beartype
@@ -31,6 +33,7 @@ class ModuleForwardResult:
     rgb_loss: torch.Tensor  # [...]
     lap_smoothness_loss: torch.Tensor  # [...]
     nor_sim_loss: torch.Tensor  # [...]
+    edge_var_loss: torch.Tensor  # [...]
     color_diff_loss: torch.Tensor  # [...]
     gp_scale_diff_loss: torch.Tensor  # [...]
 
@@ -99,11 +102,9 @@ class Module(torch.nn.Module):
 
         self.gp_color = torch.nn.Parameter(torch.rand(
             (faces_cnt, color_channels_cnt), dtype=utils.FLOAT))
-        # [F, C]
 
         self.gp_opacity = torch.nn.Parameter(torch.zeros(
             (faces_cnt,), dtype=utils.FLOAT))
-        # [F, 1]
 
     def to(self, *args, **kwargs) -> Module:
         super().to(*args, **kwargs)
@@ -132,6 +133,75 @@ class Module(torch.nn.Module):
     @property
     def faces_cnt(self) -> int:
         return self.gp_color.shape[0]
+
+    def state_dict(self) -> collections.OrderedDict:
+        return collections.OrderedDict([
+            ("avatar_blender", self.avatar_blender.state_dict()),
+
+            ("gp_rot_z", self.gp_rot_z),
+
+            ("gp_scale_x", self.gp_scale_x),
+            ("gp_scale_y", self.gp_scale_y),
+            ("gp_scale_z", self.gp_scale_z),
+
+            ("gp_color", self.gp_color),
+            ("gp_opacity", self.gp_opacity),
+        ])
+
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
+        self.avatar_blender.load_state_dict(
+            state_dict["avatar_blender"])
+
+        self.gp_rot_z = torch.nn.Parameter(
+            state_dict["gp_rot_z"].to(self.gp_rot_z, copy=True))
+
+        self.gp_scale_x = torch.nn.Parameter(
+            state_dict["gp_scale_x"].to(self.gp_scale_x, copy=True))
+
+        self.gp_scale_y = torch.nn.Parameter(
+            state_dict["gp_scale_y"].to(self.gp_scale_y, copy=True))
+
+        self.gp_scale_z = torch.nn.Parameter(
+            state_dict["gp_scale_z"].to(self.gp_scale_z, copy=True))
+
+        self.gp_color = torch.nn.Parameter(
+            state_dict["gp_color"].to(self.gp_color, copy=True))
+
+        self.gp_opacity = torch.nn.Parameter(
+            state_dict["gp_opacity"].to(self.gp_opacity, copy=True))
+
+    def subdivide(
+        self,
+        *,
+        target_edges: typing.Optional[typing.Iterable[int]] = None,
+        target_faces: typing.Optional[typing.Iterable[int]] = None,
+    ) -> Module:
+        mesh_subdivision_result = self.avatar_blender.subdivide(
+            target_edges=target_edges,
+            target_faces=target_faces,
+        )
+
+        face_src_table = mesh_subdivision_result.face_src_table
+
+        self.gp_rot_z = torch.nn.Parameter(self.gp_rot_z[face_src_table])
+        # [F_]
+
+        self.gp_scale_x = torch.nn.Parameter(self.gp_scale_x[face_src_table])
+        # [F_]
+
+        self.gp_scale_y = torch.nn.Parameter(self.gp_scale_y[face_src_table])
+        # [F_]
+
+        self.gp_scale_z = torch.nn.Parameter(self.gp_scale_z[face_src_table])
+        # [F_]
+
+        self.gp_color = torch.nn.Parameter(self.gp_color[face_src_table])
+        # [F_, C]
+
+        self.gp_opacity = torch.nn.Parameter(self.gp_opacity[face_src_table])
+        # [F_]
+
+        return self
 
     def get_world_gp(
         self,
@@ -236,12 +306,6 @@ class Module(torch.nn.Module):
         avatar_model: avatar_utils.AvatarModel = self.avatar_blender(
             blending_param)
 
-        faces = avatar_model.mesh_graph.f_to_vvv
-        # [F, 3]
-
-        vp = avatar_model.vert_pos
-        # [..., V, 3]
-
         world_gp_result = self.get_world_gp(avatar_model.mesh_data)
 
         gp_render_result = gaussian_utils.render_gaussian(
@@ -267,8 +331,6 @@ class Module(torch.nn.Module):
         gp_render_img = gp_render_result.colors
         # [..., C, H, W]
 
-        mesh_graph = avatar_model.mesh_graph
-
         if not self.training:
             rgb_loss = torch.Tensor()
         else:
@@ -284,26 +346,31 @@ class Module(torch.nn.Module):
         if not self.training:
             lap_smoothness_loss = torch.Tensor()
         else:
-            lap_smoothness_loss = mesh_graph.calc_l2_cot_lap_smoothness(
-                avatar_model.vert_pos)
+            lap_smoothness_loss = avatar_model.mesh_data.l2_cot_lap_smoothness
             # [...]
 
         if not self.training:
             nor_sim_loss = torch.Tensor()
         else:
-            nor_sim = mesh_graph.calc_face_cos_sim(
-                world_gp_result.face_coord_result.r[..., :, :3, 2]
-                # the z axis of each face
-            )
+            nor_sim = avatar_model.mesh_data.face_norm_cos_sim
             # [..., FP]
 
             nor_sim_loss = 1 - nor_sim.square().mean(-1)
             # [...]
 
         if not self.training:
+            edge_var_loss = torch.Tensor()
+        else:
+            rel_edge_var = avatar_model.mesh_data.face_edge_rel_var
+            # [..., F]
+
+            edge_var_loss = rel_edge_var.mean(-1)
+            # [...]
+
+        if not self.training:
             color_diff_loss = torch.Tensor()
         else:
-            color_diff = mesh_graph.calc_face_cos_sim(
+            color_diff = avatar_model.mesh_graph.calc_face_cos_sim(
                 world_gp_result.gp_color)
             # [..., FP]
 
@@ -334,6 +401,7 @@ class Module(torch.nn.Module):
             rgb_loss=rgb_loss,
             lap_smoothness_loss=lap_smoothness_loss,
             nor_sim_loss=nor_sim_loss,
+            edge_var_loss=edge_var_loss,
             color_diff_loss=color_diff_loss,
             gp_scale_diff_loss=gp_scale_diff_loss,
         )

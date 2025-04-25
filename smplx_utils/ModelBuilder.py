@@ -8,8 +8,8 @@ import torch
 import torchrbf
 from beartype import beartype
 
-from .. import mesh_utils, utils
-from .ModelData import ModelData
+from .. import utils
+from .ModelData import ModelData, ModelDataSubdivisionResult
 
 
 @beartype
@@ -30,6 +30,17 @@ class ModelBuilder(torch.nn.Module):
     def forward(self) -> ModelData:
         raise NotImplementedError()
 
+    def subdivide(
+        self,
+        *,
+        target_edges: typing.Optional[typing.Iterable[int]] = None,
+        target_faces: typing.Optional[typing.Iterable[int]] = None,
+    ) -> ModelDataSubdivisionResult:
+        raise NotImplementedError()
+
+    def show(self) -> None:
+        self.get_model_data().show()
+
 
 @beartype
 class StaticModelBuilder(ModelBuilder):
@@ -49,10 +60,11 @@ class StaticModelBuilder(ModelBuilder):
         return self
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
-        return self.model_data.state_dict()
+        return collections.OrderedDict([
+            ("model_data", self.model_data.state_dict())])
 
     def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
-        self.model_data.load_state_dict(state_dict)
+        self.model_data.load_state_dict(state_dict["model_data"])
 
     def forward(self) -> ModelData:
         return self.model_data
@@ -67,7 +79,7 @@ class DeformableModelBuilder(ModelBuilder):
         self.model_data.vert_pos = torch.nn.Parameter(
             self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
 
-        self.register_parameter("vert_pos", self.model_data.vert_pos)
+        self.vert_pos = self.model_data.vert_pos
 
         cpu_vert_pos = self.model_data.vert_pos.detach().to(
             device=utils.CPU_DEVICE, dtype=torch.float)
@@ -177,8 +189,20 @@ class DeformableModelBuilder(ModelBuilder):
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> mesh_utils.MeshSubdivisionResult:
-        mesh_subdivision_result = self.model_data.subdivide()
+    ) -> ModelDataSubdivisionResult:
+        model_data_subdivision_result = self.model_data.subdivide(
+            target_edges=target_edges,
+            target_faces=target_faces,
+        )
+
+        self.model_data = model_data_subdivision_result.model_data
+
+        self.model_data.vert_pos = torch.nn.Parameter(
+            self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
+
+        self.vert_pos = self.model_data.vert_pos
+
+        return model_data_subdivision_result
 
     def forward(self) -> ModelData:
         return self.model_data

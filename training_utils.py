@@ -353,7 +353,7 @@ class Trainer:
         self.__proj_dir = utils.to_pathlib_path(proj_dir)
 
         if not self.__proj_dir.exists():
-            os.makedirs(self.__proj_dir, exist_ok=True)
+            self.__proj_dir.mkdir(parents=True, exist_ok=True)
         else:
             assert self.__proj_dir.is_dir()
 
@@ -534,6 +534,9 @@ class Trainer:
 
     def _cli_handler(self, cmd_parser):
         cmd = shlex.split(self.prompt_session.prompt())
+
+        if len(cmd) == 0:
+            return True
 
         args = cmd_parser.parse_args(cmd)
 

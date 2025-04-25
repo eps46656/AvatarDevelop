@@ -15,8 +15,9 @@ import pytorch3d
 import pytorch3d.renderer
 import pytorch3d.structures
 
-from . import (camera_utils, config, dataset_utils, face_seg_utils,
-               gom_avatar_training_utils, gom_utils, people_snapshot_utils,
+from . import (avatar_utils, camera_utils, config, dataset_utils,
+               face_seg_utils, gom_avatar_training_utils, gom_utils,
+               kernel_splatting_utils, mesh_utils, people_snapshot_utils,
                rendering_utils, segment_utils, smplx_utils, training_utils,
                transform_utils, utils, vision_utils)
 
@@ -41,13 +42,14 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0414_1"
+PROJ_DIR = DIR / "train_2025_0422_3"
 
 VERT_GRAD_NORM_THRESHOLD = 1e-3
 
 ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHNESS = 800.0
-ALPHA_NOR_SIM = 500.0
+ALPHA_LAP_SMOOTHNESS = 1000.0
+ALPHA_NOR_SIM = 10.0
+ALPHA_EDGE_VAR = 1.0
 ALPHA_COLOR_DIFF = 1.0
 ALPHA_GP_SCALE_DIFF = 1.0
 
@@ -76,6 +78,27 @@ def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
         config.PEOPLE_SNAPSHOT_DIR / SUBJECT_NAME, model_data, DEVICE)
 
     return subject_data
+
+
+def create_optimizer(param_groups):
+    return torch.optim.Adam(
+        param_groups,
+        lr=LR,
+        betas=(0.5, 0.5),
+    )
+
+
+def create_scheduler(optimizer: torch.optim.Optimizer):
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer,
+        mode="min",
+        factor=pow(0.1, 1/4),
+        patience=5,
+        threshold=0.05,
+        threshold_mode="rel",
+        cooldown=0,
+        min_lr=1e-7,
+    )
 
 
 def load_trainer():
@@ -122,18 +145,21 @@ def load_trainer():
             device=DEVICE,
             batch_size=BATCH_SIZE,
 
+            lr=LR,
+
             vert_grad_norm_threshold=VERT_GRAD_NORM_THRESHOLD,
 
             alpha_rgb=ALPHA_RGB,
             alpha_lap_smoothness=ALPHA_LAP_SMOOTHNESS,
             alpha_nor_sim=ALPHA_NOR_SIM,
+            alpha_edge_var=ALPHA_EDGE_VAR,
             alpha_color_diff=ALPHA_COLOR_DIFF,
             alpha_gp_scale_diff=ALPHA_GP_SCALE_DIFF,
         ),
         module=module,
         dataset=dataset,
-        optimizer=optimizer,
-        scheduler=scheduler
+        optimizer_factory=create_optimizer,
+        scheduler_factory=create_scheduler,
     )
 
     # ---
@@ -179,26 +205,17 @@ def main1():
 
     # [K][T, H, W]
 
+    gom_module: gom_utils.Module = trainer.training_core.module
+
     K = len(masks)
 
-    F = model_data.mesh_graph.faces_cnt
+    avatar_model: avatar_utils.AvatarModel = gom_module.avatar_blender.get_avatar_model()
 
-    face_ballots_cnt = torch.zeros(
-        (F + 1,),  # F + 1 for -1 pixel to face index
-        dtype=torch.int,
-        device=DEVICE,
-    )
-
-    face_pos_ballot_box = torch.zeros(
-        (F + 1, K),  # F + 1 for -1 pixel to face index
-        dtype=utils.FLOAT,
-        device=DEVICE,
-    )
-
-    face_neg_ballot_box = torch.zeros(
-        (F + 1, K),  # F + 1 for -1 pixel to face index
-        dtype=utils.FLOAT,
-        device=DEVICE,
+    face_segmentor = face_seg_utils.FaceSegmentor.from_mesh_graph(
+        avatar_model.mesh_data.mesh_graph,
+        len(obj_list),
+        torch.float64,
+        DEVICE
     )
 
     T, C, H, W = dataset.sample.img.shape
@@ -249,13 +266,12 @@ def main1():
                 )
 
                 pix_to_face: torch.Tensor = \
-                    mesh_ras_result.pix_to_face.reshape(H * W)
+                    mesh_ras_result.pix_to_face.reshape(H, W)
                 # [H * W]
 
-                pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
-                # -1 -> F       [0, F-1] -> [0, F-1]
-
-                print(f"{idxes[i]=}")
+                bary_coord: torch.Tensor = \
+                    mesh_ras_result.bary_coords.reshape(H, W, 3)
+                # [H, W, 3]
 
                 texels = albedo_tex.sample_textures(mesh_ras_result)
                 # [1, H, W, 1, C]
@@ -266,17 +282,14 @@ def main1():
                 for k in range(K):
                     cur_mask = masks[k][idxes[i]].to(utils.FLOAT)
 
-                    ballot = cur_mask.unsqueeze(0) * 2 - 1
+                    ballot = cur_mask * 2 - 1
 
-                    ballot = ballot.view(H * W)
-
-                    face_ballots_cnt += pix_to_face.bincount(minlength=F + 1)
-
-                    face_pos_ballot_box[:, k].index_add_(
-                        0, pix_to_face, ballot.clamp(0, None))
-
-                    face_neg_ballot_box[:, k].index_add_(
-                        0, pix_to_face, ballot.clamp(None, 0))
+                    face_segmentor.vote(
+                        k,
+                        pix_to_face,  # [H, W]
+                        bary_coord,  # [H, W, 3]
+                        ballot,  # [H, W]
+                    )
 
     vision_utils.write_video(
         PROJ_DIR / f"output_video_{utils.timestamp_sec()}.avi",
@@ -286,19 +299,7 @@ def main1():
 
     utils.write_pickle(
         PROJ_DIR / f"face_voting_result_{utils.timestamp_sec()}.pkl",
-        {
-            "face_ballots_cnt": np.array(
-                face_ballots_cnt.numpy(force=True),
-                dtype=np.int32, copy=True),
-
-            "face_pos_ballot_box": np.array(
-                face_pos_ballot_box.numpy(force=True),
-                dtype=np.float64, copy=True),
-
-            "face_neg_ballot_box": np.array(
-                face_neg_ballot_box.numpy(force=True),
-                dtype=np.float64, copy=True),
-        }
+        face_segmentor.state_dict(),
     )
 
 
@@ -318,49 +319,61 @@ def main2():
 
     model_data: smplx_utils.ModelData = smplx_model_builder.model_data
 
-    face_voting_result = utils.read_pickle(
-        PROJ_DIR / "face_voting_result_1744637898.pkl")
+    face_segmentor: face_seg_utils.FaceSegmentor = \
+        face_seg_utils.FaceSegmentor.from_state_dict(utils.read_pickle(
+            PROJ_DIR / "face_voting_result_1745335872.pkl"),
+            None,
+            DEVICE,
+        )
 
-    face_ballots_cnt = torch.from_numpy(
-        face_voting_result["face_ballots_cnt"])
-    # [F + 1]
+    vert_ballot_cnt = face_segmentor.vert_ballot_cnt
+    # [V + 1, K]
 
-    face_pos_ballot_box = torch.from_numpy(
-        face_voting_result["face_pos_ballot_box"])
+    vert_ballot_box = face_segmentor.vert_ballot_box
+    # [V + 1, K]
 
-    face_neg_ballot_box = torch.from_numpy(
-        face_voting_result["face_neg_ballot_box"])
+    std = 50 * 1e-3
+    # 50 mm = 5 cm
 
-    face_ballots_cnt = face_ballots_cnt.to(torch.float64)
-    face_pos_ballot_box = face_pos_ballot_box.to(torch.float64)
-    face_neg_ballot_box = face_neg_ballot_box.to(torch.float64)
+    def kernel(x):
+        return (-(x / std)**2 / 2).exp()
 
-    print(f"{face_ballots_cnt.shape=}")
-    print(f"{face_pos_ballot_box.shape=}")
-    print(f"{face_neg_ballot_box.shape=}")
+    vert_ballot_cnt[:-1] = kernel_splatting_utils.interp(
+        model_data.vert_pos,  # [V, 3]
+        vert_ballot_cnt[:-1],  # [V, K]
+        model_data.vert_pos,  # [V, 3]
+        kernel,
+    )
 
-    print(f"{face_pos_ballot_box.min()=}")
-    print(f"{face_pos_ballot_box.max()=}")
+    vert_ballot_box[:-1] = kernel_splatting_utils.interp(
+        model_data.vert_pos,  # [V, 3]
+        vert_ballot_box[:-1],  # [V, K]
+        model_data.vert_pos,  # [V, 3]
+        kernel,
+    )
 
-    print(f"{face_neg_ballot_box.min()=}")
-    print(f"{face_neg_ballot_box.max()=}")
+    """
+    for i in range(3):
+        vert_ballot_cnt[:-1] = model_data.mesh_graph.vert_lap_trans(
+            vert_ballot_cnt[:-1], 0.05)
 
-    face_ballot_box = ((
-        face_pos_ballot_box + face_neg_ballot_box
-    ) / face_ballots_cnt.unsqueeze(-1))[:-1, :].to(DEVICE)
+        vert_ballot_box[:-1] = model_data.mesh_graph.vert_lap_trans(
+            vert_ballot_box[:-1], 0.05)
+    """
 
-    # ([F + 1, K] + [F + 1, K]) / [F + 1, 1] -> [F + 1, K]
+    face_segmentor.vert_ballot_box = vert_ballot_box
+    face_segmentor.vert_ballot_cnt = vert_ballot_cnt
 
-    F = model_data.mesh_graph.faces_cnt
+    face_segment_result: face_seg_utils.FaceSegmentationResult = \
+        face_segmentor.segment(mesh_utils.MeshData(
+            model_data.mesh_graph,
+            model_data.vert_pos,
+        ))
 
-    face_ballot_box = model_data.mesh_graph.face_lap_trans(
-        face_ballot_box, 0.05)
+    model_data_subdivision_result = model_data.subdivide(
+        mesh_subdivision_result=face_segment_result.mesh_subdivision_result)
 
-    face_ballot_box = model_data.mesh_graph.face_lap_trans(
-        face_ballot_box, 0.05)
-
-    face_ballot_box = model_data.mesh_graph.face_lap_trans(
-        face_ballot_box, 0.05)
+    sub_model_data = model_data_subdivision_result.model_data
 
     obj_list = [
         "UPPER_GARMENT",
@@ -370,35 +383,20 @@ def main2():
 
     K = len(obj_list)
 
-    obj_idx = face_seg_utils.assign(
-        face_ballot_box,  # [F, K]
-        threshold=0.0,
-    ).to(utils.CPU_DEVICE)  # [F]
-
-    face_idx_list = [[] for k in range(K)]
-
-    for f in range(F):
-        i = obj_idx[f]
-
-        if i == -1:
-            continue
-
-        face_idx_list[i].append(f)
-
     for k in range(K):
         obj = obj_list[k]
 
-        print(f"{k=}")
-        print(f"{obj=}")
-
-        model_data_extraction_result = model_data.extract(face_idx_list[k])
+        model_data_extraction_result = sub_model_data.extract(
+            target_faces=face_segment_result.target_faces[k])
 
         obj_model_data = model_data_extraction_result.model_data
 
         obj_model_data.show()
 
-        obj_model_data.save(
-            PROJ_DIR / f"obj_model_data_{obj}_{utils.timestamp_sec()}.pkl")
+        utils.write_pickle(
+            PROJ_DIR / f"obj_model_data_{obj}_{utils.timestamp_sec()}.pkl",
+            obj_model_data.state_dict(),
+        )
 
 
 def main3():
@@ -473,4 +471,4 @@ def main3():
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
         with torch.no_grad():
-            main3()
+            main2()

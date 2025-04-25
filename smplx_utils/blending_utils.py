@@ -231,28 +231,24 @@ class BlendingParam:
         return ret
 
     def combine(self, obj: BlendingParam) -> BlendingParam:
-        table = [
-            "body_shape",
-            "expr_shape",
-            "global_transl",
-            "global_rot",
-            "body_pose",
-            "jaw_pose",
-            "leye_pose",
-            "reye_pose",
-            "lhand_pose",
-            "rhand_pose",
-        ]
+        def f(a, b): return b if a is None else a
 
-        ret = dict()
+        return BlendingParam(
+            body_shape=f(self.body_shape, obj.body_shape),
+            expr_shape=f(self.expr_shape, obj.expr_shape),
 
-        for field_name in table:
-            field_val = getattr(self, field_name)
+            global_transl=f(self.global_transl, obj.global_transl),
+            global_rot=f(self.global_rot, obj.global_rot),
 
-            ret[field_name] = getattr(obj, field_name) \
-                if field_val is None else field_val
+            body_pose=f(self.body_pose, obj.body_pose),
+            jaw_pose=f(self.jaw_pose, obj.jaw_pose),
 
-        return BlendingParam(**ret)
+            leye_pose=f(self.leye_pose, obj.leye_pose),
+            reye_pose=f(self.reye_pose, obj.reye_pose),
+
+            lhand_pose=f(self.lhand_pose, obj.lhand_pose),
+            rhand_pose=f(self.rhand_pose, obj.rhand_pose),
+        )
 
 
 @beartype
@@ -343,12 +339,18 @@ def blending(
         target_pose_t=binding_pose_ts,
     )
 
-    if blending_param.global_transl is not None:
-        lbs_result.target_joint_T[..., :, :3, 3] += \
-            blending_param.global_transl.unsqueeze(-2)
+    if blending_param.global_transl is None:
+        target_joint_T = lbs_result.lbs_opr.target_joint_T
 
-        vp = blending_param.global_transl.unsqueeze(-2) + \
-            lbs_result.blended_vert_pos
+        vp = lbs_result.blended_vert_pos
+    else:
+        global_transl = blending_param.global_transl[..., None, :]
+
+        target_joint_T = lbs_result.lbs_opr.target_joint_T.clone()
+
+        target_joint_T[..., :, :3, 3] += global_transl
+
+        vp = global_transl + lbs_result.blended_vert_pos
 
     return Model(
         kin_tree=model_data.kin_tree,
@@ -360,5 +362,5 @@ def blending(
 
         tex_vert_pos=model_data.tex_vert_pos,
 
-        joint_T=lbs_result.target_joint_T,
+        joint_T=target_joint_T,
     )

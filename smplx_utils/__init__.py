@@ -7,4 +7,4 @@ from .ModelBuilder import (DeformableModelBuilder, ModelBuilder,
                            StaticModelBuilder)
 from .ModelConfig import ModelConfig, smpl_model_config, smplx_model_config
 from .ModelData import (ModelData, ModelDataExtractionResult,
-                        ModelDataMidpointSubdivisionResult)
+                        ModelDataSubdivisionResult)

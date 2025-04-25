@@ -59,6 +59,7 @@ def main1():
     smplx_params_dir = DIR / "sample5/smplx_params"
 
     for frame_idx in range(len(glob.glob(f"{smplx_params_dir}/*.json"))):
+        # filename = smplx_params_dir / f"smplx_param_{frame_idx:0>5}.json"
         filename = smplx_params_dir / f"smplx_param_{frame_idx}.json"
 
         print(f"{filename}")
@@ -77,7 +78,7 @@ def main2():
         with open(filename) as f:
             data = json.load(f)["pose"]
 
-        os.makedirs(f"{dir}/smplx_params", exist_ok=True)
+        (dir / "smplx_params").mkdir(parents=True, exist_ok=True)
 
         with open(f"{dir}/smplx_params/smplx_param_{frame_idx}.json", "w") as f:
             json.dump(data, f)

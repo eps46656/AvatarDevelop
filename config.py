@@ -5,6 +5,10 @@ DIR = FILE.parents[0]
 
 # ---
 
+TMP_DIR = DIR / "tmp"
+
+# ---
+
 SMPL_MODELS_DIR = DIR / "smpl_models"
 
 SMPL_MALE_MODEL_PATH = \

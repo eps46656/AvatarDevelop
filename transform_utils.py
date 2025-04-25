@@ -95,12 +95,12 @@ class ObjectTransform:
         return self.trans.shape[:-2]
 
     @property
-    def device(self) -> torch.device:
-        return self.trans.device
-
-    @property
     def dtype(self) -> torch.dtype:
         return self.trans.dtype
+
+    @property
+    def device(self) -> torch.device:
+        return self.trans.device
 
     def to(self, *args, **kwargs) -> ObjectTransform:
         return ObjectTransform(
