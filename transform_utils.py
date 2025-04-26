@@ -19,10 +19,10 @@ class ObjectTransform:
             inv_trans, (..., 4, 4),
         )
 
-        s = utils.broadcast_shapes(
+        s = (*utils.broadcast_shapes(
             trans.shape[:-2],
             inv_trans.shape[:-2],
-        ) + (4, 4)
+        ), 4, 4)
 
         self.trans = trans.expand(s)
         self.inv_trans = inv_trans.expand(s)
@@ -71,7 +71,7 @@ class ObjectTransform:
             dtype = utils.promote_dtypes(pos, vec_a, vec_b, vec_c)
 
         trans = torch.empty(
-            batch_shape + (4, 4), dtype=dtype, device=device)
+            (*batch_shape, 4, 4), dtype=dtype, device=device)
 
         for dir, vec in zip(dirs, vecs):
             match dir:
@@ -167,7 +167,7 @@ class ObjectTransform:
         )
 
     def expand(self, shape) -> ObjectTransform:
-        s = tuple(shape) + (4, 4)
+        s = (*shape, 4, 4)
 
         return ObjectTransform(
             self.trans.expand(s),

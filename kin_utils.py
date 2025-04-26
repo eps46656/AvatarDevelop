@@ -102,7 +102,7 @@ class KinTree:
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([("parents", self.parents)])
 
-    def get_joint_rt(
+    def get_joint_T(
         self,
         pose_r: torch.Tensor,  # [..., J, D, D]
         pose_t: torch.Tensor,  # [..., J, D]
@@ -122,14 +122,14 @@ class KinTree:
         )
 
         joint_T = torch.empty(
-            batch_shape + (J, D + 1, D + 1),
+            (*batch_shape, J, D + 1, D + 1),
             dtype=utils.promote_dtypes(pose_r, pose_t),
             device=device,
         )
         # [..., J, D + 1, D + 1]
 
-        joint_T[..., :, D, :D] = 0
-        joint_T[..., :, D, D] = 1
+        joint_T[..., D, :D] = 0
+        joint_T[..., D, D] = 1
 
         joint_T[..., self.root, :D, :D] = pose_r[..., self.root, :, :]
         joint_T[..., self.root, :D, D] = pose_t[..., self.root, :]

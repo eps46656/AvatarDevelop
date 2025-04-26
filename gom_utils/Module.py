@@ -252,23 +252,23 @@ class Module(torch.nn.Module):
         # [..., F]
 
         world_gp_scale = utils.empty_like(
-            scale_factor, shape=scale_factor.shape[:-1] + (F, 3))
+            scale_factor, shape=(*scale_factor.shape[:-1], F, 3))
 
-        world_gp_scale[..., :, 0] = scale_factor * leaky_clamp(
+        world_gp_scale[..., 0] = scale_factor * leaky_clamp(
             x=self.gp_scale_x.exp(),  # clamp local scale
             lb=0.1,
             rb=3.0,
             leaky=0.1,
         )
 
-        world_gp_scale[..., :, 1] = scale_factor * leaky_clamp(
+        world_gp_scale[..., 1] = scale_factor * leaky_clamp(
             x=self.gp_scale_y.exp(),  # clamp local scale
             lb=0.1,
             rb=3.0,
             leaky=0.1,
         )
 
-        world_gp_scale[..., :, 2] = leaky_clamp(
+        world_gp_scale[..., 2] = leaky_clamp(
             x=scale_factor * self.gp_scale_z.exp(),  # clamp global scale
             lb=0.001,
             rb=0.010,
@@ -380,8 +380,8 @@ class Module(torch.nn.Module):
         if not self.training:
             gp_scale_diff_loss = torch.Tensor()
         else:
-            world_gp_x_scale = world_gp_result.gp_scale[..., :, 0]
-            world_gp_y_scale = world_gp_result.gp_scale[..., :, 1]
+            world_gp_x_scale = world_gp_result.gp_scale[..., 0]
+            world_gp_y_scale = world_gp_result.gp_scale[..., 1]
 
             word_gp_xy_scale = world_gp_x_scale * world_gp_y_scale
             # [..., F]

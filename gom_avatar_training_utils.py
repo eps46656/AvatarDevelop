@@ -598,7 +598,7 @@ class TrainingCore(training_utils.TrainingCore):
             (use_pca_threshold <= face_color_all_cnt)[..., None, None]
             .expand(F + 1, C, C),
 
-            (face_color_pca * face_color_std.unsqueeze(-1)).transpose(-1, -2),
+            (face_color_pca * face_color_std.unsqueeze(-1)).transpose(-2, -1),
 
             torch.eye(
                 C, dtype=face_color_pca.dtype, device=face_color_pca.device)
@@ -832,7 +832,7 @@ class TrainingCore(training_utils.TrainingCore):
             .expand(TV + 1, C, C),
 
             (tex_vert_color_pca *
-             tex_vert_color_std[:, :, None]).transpose(-1, -2),
+             tex_vert_color_std[:, :, None]).transpose(-2, -1),
 
             torch.eye(
                 C,

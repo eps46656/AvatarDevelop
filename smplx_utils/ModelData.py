@@ -170,8 +170,8 @@ class ModelData:
             jaw_joints_cnt=0,
             eye_joints_cnt=0,
 
-            mesh_graph=mesh_utils.MeshGraph.empty(),
-            tex_mesh_graph=mesh_utils.MeshGraph.empty(),
+            mesh_graph=mesh_utils.MeshGraph.empty(0),
+            tex_mesh_graph=mesh_utils.MeshGraph.empty(0),
 
             joint_t_mean=f(0, 3),
 
@@ -332,19 +332,19 @@ class ModelData:
         tex_mesh_graph = mesh_utils.MeshGraph.from_faces(TV, tex_faces, device)
 
         joint_t_mean = torch.einsum(
-            "...jv,...vx->...jx",
+            "...jv, ...vx -> ...jx",
             joint_regressor,
             vert_pos,
         )
 
         body_shape_joint_dir = torch.einsum(
-            "...jv,...vxb->...jxb",
+            "...jv, ...vxb -> ...jxb",
             joint_regressor,
             body_shape_vert_dir,
         )
 
         expr_shape_joint_dir = torch.einsum(
-            "...jv,...vxb->...jxb",
+            "...jv, ...vxb -> ...jxb",
             joint_regressor,
             expr_shape_vert_dir,
         )

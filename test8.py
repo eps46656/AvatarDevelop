@@ -44,7 +44,7 @@ def CheckIsRotMat(
 ):
     utils.check_shapes(rot_mat, (..., 3, 3))
 
-    rot_mat_t = rot_mat.transpose(-1, -2)
+    rot_mat_t = rot_mat.transpose(-2, -1)
 
     k1 = rot_mat_t @ rot_mat
     k2 = rot_mat @ rot_mat_t

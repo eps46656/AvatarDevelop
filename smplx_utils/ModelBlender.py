@@ -134,6 +134,9 @@ class ModelBlender(avatar_utils.AvatarBlender):
             device=self.model_builder.device,
         )
 
+    def forward2(self, blending_param: BlendingParam):
+        pass
+
     def refresh(self) -> None:
         if hasattr(self.model_builder, "refresh"):
             self.model_builder.refresh()

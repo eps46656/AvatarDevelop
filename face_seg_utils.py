@@ -179,7 +179,7 @@ class FaceSegmentor:
     @staticmethod
     def empty(dtype: torch.dtype, device: torch.device) -> FaceSegmentor:
         return FaceSegmentor(
-            mesh_utils.MeshGraph.empty(),
+            mesh_utils.MeshGraph.empty(0),
             torch.zeros((1, 0), dtype=dtype, device=device),
             torch.zeros((1, 0), dtype=dtype, device=device),
             device,

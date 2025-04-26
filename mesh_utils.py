@@ -236,7 +236,7 @@ class MeshGraph:
         self.inv_vert_deg = inv_vert_deg
 
     @staticmethod
-    def empty(device: torch.device) -> MeshGraph:
+    def empty(verts_cnt: int, device: torch.device) -> MeshGraph:
         return MeshGraph(
             e_to_vv=torch.empty((0, 2), dtype=torch.long, device=device),
             vv_to_e=dict(),
@@ -246,8 +246,10 @@ class MeshGraph:
 
             ff=torch.empty((0, 2), dtype=torch.long, device=device),
 
-            vert_deg=torch.empty((0,), dtype=torch.int32, device=device),
-            inv_vert_deg=torch.empty((0,), dtype=torch.float64, device=device),
+            vert_deg=torch.zeros(
+                (verts_cnt,), dtype=torch.int32, device=device),
+            inv_vert_deg=torch.zeros(
+                (verts_cnt,), dtype=torch.float64, device=device),
         )
 
     @staticmethod
@@ -450,7 +452,8 @@ class MeshGraph:
 
         FP = self.adj_face_face_pairs_cnt
 
-        ret = utils.empty_like(face_vec, shape=face_vec.shape[:-2] + (FP,))
+        ret = utils.empty_like(
+            face_vec, shape=(*face_vec.shape[:-2], FP))
 
         for fp in range(FP):
             fa, fb = self.ff[fp, :]
@@ -479,7 +482,8 @@ class MeshGraph:
 
         FP = self.adj_face_face_pairs_cnt
 
-        ret = utils.empty_like(face_vec, shape=face_vec.shape[:-2] + (FP,))
+        ret = utils.empty_like(
+            face_vec, shape=(*face_vec.shape[:-2], FP))
 
         for fp in range(FP):
             fa, fb = self.ff[fp, :]
@@ -965,7 +969,7 @@ class MeshData:
     @functools.cached_property
     def cot_lap_diff(self) -> torch.Tensor:  # [..., V, D]
         e_weight = utils.zeros_like(
-            self.vert_pos, shape=self.shape + (self.edges_cnt,))
+            self.vert_pos, shape=(*self.shape, self.edges_cnt))
         # [..., E]
 
         for k in range(3):
@@ -1065,7 +1069,7 @@ class MeshData:
         # [..., F, 3, D]
 
         m = utils.empty_like(self.vert_pos, shape=(
-            self.shape + (self.faces_cnt, D + 1, 3)))
+            (*self.shape, self.faces_cnt, D + 1, 3)))
         # [..., F, D + 1, 3]
 
         m[..., :D, 0] = fvp[..., 0, :]

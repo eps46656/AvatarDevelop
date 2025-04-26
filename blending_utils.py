@@ -107,18 +107,18 @@ class LBSOperator:
         target_pose_t = target_pose_t.to(*dd)  # [..., J, D]
 
         binding_joint_T = \
-            kin_tree.get_joint_rt(binding_pose_r, binding_pose_t)
-        # binding_joint_r[..., J, D+1, D+1]
+            kin_tree.get_joint_T(binding_pose_r, binding_pose_t)
+        # binding_joint_r[..., J, D + 1, D + 1]
 
         inv_binding_joint_T = \
             binding_joint_T.inverse()
-        # inv_binding_joint_r[..., J, D+1, D+1]
+        # inv_binding_joint_r[..., J, D + 1, D + 1]
 
-        target_joint_T = kin_tree.get_joint_rt(target_pose_r, target_pose_t)
-        # target_joint_r[..., J, D+1, D+1]
+        target_joint_T = kin_tree.get_joint_T(target_pose_r, target_pose_t)
+        # target_joint_r[..., J, D + 1, D + 1]
 
         del_joint_T = target_joint_T @ inv_binding_joint_T
-        # del_joint_r[..., J, D+1, D+1]
+        # del_joint_r[..., J, D + 1, D + 1]
 
         return LBSOperator(
             binding_pose_r=binding_pose_r,
@@ -168,9 +168,8 @@ class LBSOperator:
 
     def blend(
         self,
-        vec: torch.Tensor,  # [..., V, D]
+        vec: typing.Optional[torch.Tensor],  # [..., V, D]
         lbs_weight: torch.Tensor,  # [..., V, J]
-        calc_trans: bool,
         calc_linear_part: bool,
         calc_const_part: bool,
     ) -> tuple[
@@ -186,6 +185,9 @@ class LBSOperator:
             lbs_weight, (..., V, J),
         )
 
+        if vec is None:
+            D = D_ - 1
+
         assert D + 1 == D_
 
         utils.check_devices(self.del_joint_T, vec, lbs_weight)
@@ -197,52 +199,47 @@ class LBSOperator:
         )
 
         cur_del_joint_T = self.del_joint_T.to(dtype)
-        # [..., J, D+1, D+1]
+        # [..., J, D + 1, D + 1]
 
         lbs_weight = lbs_weight.to(dtype)
         # [..., V, J]
 
+        ret_trans = torch.empty((
+            *utils.broadcast_shapes(
+                lbs_weight.shape[:-2], cur_del_joint_T.shape[:-3]
+            ), V, D + 1, D + 1,
+        ), dtype=dtype, device=self.device)
+        # [..., V, D + 1, D + 1]
+
+        ret_trans[..., :-1, :] = torch.einsum(
+            "...vj, ...jab -> ...vab",
+            lbs_weight,  # [..., V, J]
+            cur_del_joint_T[..., :-1, :],  # [..., J, D, D + 1]
+        )  # [..., V, D, D + 1]
+
+        ret_trans[..., -1, :-1] = 0
+
+        ret_trans[..., -1, -1] = 1
+
+        if vec is None or (not calc_linear_part and not calc_const_part):
+            return ret_trans, None, None
+
         vec = vec.to(dtype)
         # [..., V, D]
-
-        if not calc_trans:
-            ret_trans = None
-        else:
-            ret_trans = torch.empty((
-                utils.broadcast_shapes(
-                    lbs_weight.shape[:-2], cur_del_joint_T.shape[:-3]
-                ), V, D + 1, D + 1,
-            ), dtype=dtype, device=self.device)
-            # [..., V, D + 1, D + 1]
-
-            ret_trans[..., :, :-1, :] = torch.einsum(
-                "...vj,...jab->...vab",
-                lbs_weight,  # [..., V, J]
-                cur_del_joint_T[..., :, :-1, :],  # [..., J, D, D + 1]
-            )  # [..., V, D, D + 1]
-
-            ret_trans[..., :, -1, :-1] = 0
-
-            ret_trans[..., :, -1, -1] = 1
 
         if not calc_linear_part:
             ret_linear = None
         else:
             ret_linear = torch.einsum(
-                "...vj,...jdk,...vk->...vd",
-                lbs_weight,  # [..., V, J]
-                cur_del_joint_T[..., :-1, :-1],  # [..., J, D, D]
-                vec,
+                "...vij, ...vj -> ...vi",
+                ret_trans[..., :-1, :-1],  # [..., V, D, D]
+                vec,  # [..., V, D]
             )  # [..., V, D]
 
         if not calc_const_part:
             ret_const = None
         else:
-            ret_const = torch.einsum(
-                "...vj,...jd->...vd",
-                lbs_weight,
-                cur_del_joint_T[..., :-1, -1],
-            )  # [..., V, D]
+            ret_const = ret_trans[..., :-1, -1]  # [..., V, D]
 
         return ret_trans, ret_linear, ret_const
 

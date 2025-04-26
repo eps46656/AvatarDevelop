@@ -496,7 +496,7 @@ def check_shapes(*args: typing.Any) -> None | int | tuple[int, ...]:
             old_p_val = undet_shapes.setdefault(p_val, t_val)
 
             if old_p_val < 0:
-                undet_shapes[p_val] = t_val
+                old_p_val = undet_shapes[p_val] = t_val
 
             assert old_p_val == t_val, \
                 f"Tensor shape {old_p_val} and {t_val} are inconsistant."
@@ -613,6 +613,26 @@ def full_like(
         device = x.device
 
     return torch.full(shape, full_value, dtype=dtype, device=device)
+
+
+@beartype
+def eye_like(
+    x: torch.Tensor,
+    *,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    if shape is None:
+        shape = x.shape
+
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return batch_eye(shape, dtype=dtype, device=device)
 
 
 @beartype
@@ -1091,8 +1111,8 @@ def ein_scatter(
 
     d = len(c_syms) + 1
 
-    common_shape = broadcast_shapes(
-        dst.shape[:-1], idx.shape[:-1], src.shape[:-1]) + (1,)
+    common_shape = (*broadcast_shapes(
+        dst.shape[:-1], idx.shape[:-1], src.shape[:-1]), 1)
 
     match mode:
         case ScatterMode.SET:
@@ -1138,9 +1158,11 @@ def batch_eye(
     *,
     dtype: torch.dtype = None,
     device: torch.device = None,
-) -> torch.Tensor:  # [..., n, n]
+) -> torch.Tensor:  # [..., n, m]
     N, M = check_shapes(shape, (..., -1, -2))
-    return torch.eye(N, M, dtype=dtype).expand(shape).to(device, dtype, True)
+    x = torch.zeros(shape, dtype=dtype, device=device)
+    x.diagonal(0, -2, -1).fill_(1)
+    return x
 
 
 @beartype
@@ -1176,7 +1198,7 @@ def rand_quaternion(
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:  # [..., 4]
-    return rand_unit(size + (4,), dtype=dtype, device=device)
+    return rand_unit((*size, 4), dtype=dtype, device=device)
 
 
 @beartype
@@ -1307,8 +1329,7 @@ def axis_angle_to_quaternion(
     y = unit_axis[..., 1] * s
     z = unit_axis[..., 2] * s
 
-    ret = torch.empty(x.shape + (4,),
-                      dtype=unit_axis.dtype, device=unit_axis.device)
+    ret = empty_like(unit_axis, shape=(*x.shape, 4))
 
     set_quaternion_wxyz(w, x, y, z, order, ret)
 
@@ -1339,13 +1360,11 @@ def quaternion_to_axis_angle(
 
     p = ((1 + EPS[w.dtype]) - w.square()).rsqrt()
 
-    axis = torch.empty(
-        quaternion.shape[:-1] + (3,),
-        dtype=quaternion.dtype, device=quaternion.device)
+    axis = empty_like(quaternion, shape=(*quaternion.shape[:-1], 3))
 
-    axis[..., 0] = x * p
-    axis[..., 1] = y * p
-    axis[..., 2] = z * p
+    torch.mul(x, p, out=axis[..., 0])
+    torch.mul(y, p, out=axis[..., 1])
+    torch.mul(z, p, out=axis[..., 2])
 
     return axis, w.acos() * 2
 
@@ -1597,7 +1616,7 @@ def rot_mat_to_quaternion(
     tr_n = 1 - tr
 
     a_mat = torch.empty(
-        rot_mat.shape[:-2] + (4,),
+        (*rot_mat.shape[:-2], 4),
         dtype=rot_mat.dtype, device=rot_mat.device)
 
     a0 = a_mat[..., 0] = (1 + tr)
@@ -1611,7 +1630,7 @@ def rot_mat_to_quaternion(
     s3 = a3.clamp(1e-6, None).sqrt() * 2
 
     q_mat = torch.empty(
-        rot_mat.shape[:-2] + (4, 4),
+        (*rot_mat.shape[:-2], 4, 4),
         dtype=rot_mat.dtype, device=rot_mat.device)
 
     q_mat[..., wi, 0] = s0 / 4
@@ -1635,7 +1654,7 @@ def rot_mat_to_quaternion(
     q_mat[..., zi, 3] = s3 / 4
 
     a_idxes = a_mat.argmax(-1, True).unsqueeze(-1)
-    a_idxes = a_idxes.expand(a_idxes.shape[:-2] + (4, 1))
+    a_idxes = a_idxes.expand(*a_idxes.shape[:-2], 4, 1)
     # [..., 4, 1]
 
     ret = q_mat.gather(-1, a_idxes)
@@ -1830,7 +1849,7 @@ def get_inv_rt(
 
     if out_t is None:
         out_t = torch.empty(
-            t.shape + (1,),
+            (*t.shape, 1),
             dtype=promote_dtypes(r, t),
             device=check_devices(out_r, t)
         )

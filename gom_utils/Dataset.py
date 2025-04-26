@@ -77,8 +77,8 @@ class Sample:
             camera_config=self.camera_config,
             camera_transform=self.camera_transform[*idx],
 
-            img=self.img[*idx, ..., :, :, :],
-            mask=self.mask[*idx, ..., :, :, :],
+            img=self.img[*idx, ..., :],
+            mask=self.mask[*idx, ..., :],
 
             blending_param=self.blending_param[*idx],
         )

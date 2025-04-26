@@ -98,7 +98,7 @@ def query(
     )
 
     w_val = torch.einsum(
-        "cn,...n->...c",
+        "cn, ...n -> ...c",
         w,  # [C, N]
         kernel(point_pos[..., None, :] - data_pos),
         # [..., N]
@@ -110,7 +110,7 @@ def query(
     # [DEG]
 
     p_val = torch.einsum(
-        "crd,...rd->...c",
+        "crd, ...rd -> ...c",
 
         p,  # [C, DEG, D]
 

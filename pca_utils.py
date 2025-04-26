@@ -23,8 +23,8 @@ def feed(
         dst_sum_xxt, (D, D),
     )
 
-    inc_sum_x = torch.einsum("...i->i", x)
-    inc_sum_xxt = torch.einsum("...i,...j->ij", x, x)
+    inc_sum_x = torch.einsum("...i -> i", x)
+    inc_sum_xxt = torch.einsum("...i, ...j -> ij", x, x)
 
     if inplace:
         dst_sum_x += inc_sum_x
@@ -79,7 +79,7 @@ def scatter_feed(
 
     w_x = w[..., None] * x
 
-    w_xxt = w[..., None, None] * (x[..., :, None] @ x[..., None, :])
+    w_xxt = w[..., None, None] * (x[..., None] @ x[..., None, :])
     # [B, D, D]
 
     sq_w = w.square()
@@ -139,7 +139,7 @@ def get_pca(
 
     eff_w = sum_w if biased else sum_w - sum_sq_w / sum_w
 
-    cov = (sum_w_xxt - mean_x[..., :, None] @ sum_w_x[..., None, :]) \
+    cov = (sum_w_xxt - mean_x[..., None] @ sum_w_x[..., None, :]) \
         / eff_w[..., None, None]
     # [..., D, D]
 
@@ -149,7 +149,7 @@ def get_pca(
     eig_vec: torch.Tensor  # [..., D, D]
 
     eig_val = eig_val.flip(-1)
-    eig_vec = eig_vec.transpose(-1, -2).flip(-2)
+    eig_vec = eig_vec.transpose(-2, -1).flip(-2)
     # [..., D, D]
 
     std = eig_val.sqrt()

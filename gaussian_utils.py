@@ -35,8 +35,12 @@ def render_gaussian(
     bg_color: torch.Tensor,  # [..., C]
 
     gp_mean: torch.Tensor,  # [..., N, 3]
-    gp_rot_q: torch.Tensor,  # [..., N, 4] quaternion
+
+    gp_rot_q: typing.Optional[torch.Tensor],  # [..., N, 4] quaternion
+
     gp_scale: torch.Tensor,  # [..., N, 3]
+
+    gp_cov3d: typing.Optional[torch.Tensor],  # [..., N, 3, 3]
 
     gp_sh: typing.Optional[torch.Tensor],  # [..., N, (sh_degress + 1)**2, C]
     gp_color: typing.Optional[torch.Tensor],  # [..., N, C]
@@ -91,9 +95,31 @@ def render_gaussian(
         gp_rot_q, (..., N, 4),
         gp_scale, (..., N, 3),
         gp_opacity, (..., N),
+        gp_cov3d, (..., N, 3, 3),
     )
 
     assert gp_sh is not None or gp_color is not None
+
+    if gp_cov3d is None:
+        assert gp_scale is not None and gp_rot_q is not None
+
+        zeros = torch.zeros(
+            1, dtype=gp_scale.dtype, device=device).expand(gp_scale.shape[:-1])
+        # [..., N]
+
+        gp_sq_scale_mat = torch.stack([
+            gp_scale[..., 0].square(), zeros, zeros,
+            zeros, gp_scale[..., 1].square(), zeros,
+            zeros, zeros, gp_scale[..., 2].square(),
+        ], dim=-1).view(*gp_scale.shape[:-1], 3, 3)
+        # [..., N, 3, 3]
+
+        gp_rot_mat = utils.quaternion_to_rot_mat(
+            gp_rot_q, order="WXYZ", out_shape=(3, 3))
+        # [..., N, 3, 3]
+
+        gp_cov3d = gp_rot_mat.transpose(-2, -1) @ gp_sq_scale_mat @ gp_rot_mat
+        # [..., N, 3, 3]
 
     utils.check_shapes(
         gp_sh, (..., N, (sh_degree + 1)**2, C),
@@ -104,8 +130,7 @@ def render_gaussian(
         camera_transform.shape,
         bg_color.shape[:-1],
         gp_mean.shape[:-2],
-        gp_rot_q.shape[:-2],
-        gp_scale.shape[:-2],
+
         gp_opacity.shape[:-1],
         utils.try_get_batch_shape(gp_sh, -3),
         utils.try_get_batch_shape(gp_color, -2),
@@ -137,7 +162,7 @@ def render_gaussian(
     # ---
 
     colors = torch.empty(
-        batch_shape + (C, camera_config.img_h, camera_config.img_w),
+        (*batch_shape, C, camera_config.img_h, camera_config.img_w),
         dtype=utils.FLOAT, device=device)
 
     for batch_idx in utils.get_batch_idxes(batch_shape):
@@ -151,10 +176,10 @@ def render_gaussian(
             bg=bg_color[batch_idx],  # torch.Tensor [3]
             scale_modifier=1.0,  # float
 
-            viewmatrix=world_view_mat[batch_idx].transpose(-1, -2),
+            viewmatrix=world_view_mat[batch_idx].transpose(-2, -1),
             # torch.Tensor[4, 4]
 
-            projmatrix=world_ndc_mat[batch_idx].transpose(-1, -2),
+            projmatrix=world_ndc_mat[batch_idx].transpose(-2, -1),
             # torch.Tensor[4, 4]
 
             sh_degree=sh_degree,
@@ -238,18 +263,18 @@ def query_gaussian(
     gp_rs = gp_rot_mats @ gp_scale_mats
     # [N, 3, 3]
 
-    inv_cov = (gp_rs @ gp_rs.transpose(-1, -2)).inverse()
+    inv_cov = (gp_rs @ gp_rs.transpose(-2, -1)).inverse()
     # [N, 3, 3]
 
     rel_points = (points.unsqueeze(-2) - gp_mean).unsqueeze(-1)
     # [..., N, 3, 1]
 
-    k = (-0.5 * (rel_points.transpose(-1, -2) @ inv_cov @ rel_points)).exp() \
+    k = (-0.5 * (rel_points.transpose(-2, -1) @ inv_cov @ rel_points)).exp() \
         .squeeze(-1).squeeze(-1)
     # [..., N, 1, 1] -> [..., N]
 
     ret = torch.einsum(
-        "...i,ic->...c",
+        "...i, ic -> ...c",
         k,  # [..., N]
         gp_color * gp_opacity,  # [N, C]
     )  # [..., C]
