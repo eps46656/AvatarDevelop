@@ -62,20 +62,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
         )
 
     def get_avatar_model(self) -> avatar_utils.AvatarModel:
-        model_data = self.model_builder.get_model_data()
-
-        return Model(
-            kin_tree=model_data.kin_tree,
-
-            mesh_graph=model_data.mesh_graph,
-            tex_mesh_graph=model_data.tex_mesh_graph,
-
-            vert_pos=model_data.vert_pos,
-
-            tex_vert_pos=model_data.tex_vert_pos,
-
-            joint_T=None,
-        )
+        return self(self.default_blending_param)
 
     @property
     def body_shapes_cnt(self):
@@ -84,13 +71,6 @@ class ModelBlender(avatar_utils.AvatarBlender):
     @property
     def expr_shapes_cnt(self):
         return self.model_builder.get_model_data().expr_shapes_cnt
-
-    def set_default_blending_param(self, blending_param: BlendingParam):
-        for field in dataclasses.fields(BlendingParam):
-            value = getattr(blending_param, field)
-
-            if value is not None:
-                setattr(self.default_blending_param, field, value)
 
     @property
     def device(self):

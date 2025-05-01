@@ -119,7 +119,7 @@ def _to_target_color_type(
     color_type: ColorType,
 ):
     if img.ndim == 2:
-        img = img.unsqueeze(0)
+        img = img[None, :, :]
 
     assert img.ndim == 3
 
@@ -329,7 +329,7 @@ class VideoWriter:
         assert img.dtype == torch.uint8
 
         if img.ndim == 2:
-            img = img.unsqueeze(0)
+            img = img[None, :, :]
 
         match (img.shape[0], self.color_type):
             case (1, ColorType.GRAY):

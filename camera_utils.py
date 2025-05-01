@@ -599,7 +599,7 @@ def make_proj_mat_with_config(
 
     assert err <= 1e-4, f"{err=}"
 
-    return (std_to_dst @ M.to(device, dtype)) @ src_to_std
+    return utils.mat_mul(std_to_dst, M, src_to_std, device=device).to(dtype)
 
 
 @beartype

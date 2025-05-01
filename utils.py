@@ -72,6 +72,13 @@ class Empty:
 
 
 @beartype
+class ArgPack:
+    def __init__(self, *args: typing.Any, **kwargs: typing.Any):
+        self.args = args
+        self.kwargs = kwargs
+
+
+@beartype
 def print_pos(
     time: datetime.datetime,
     filename: str,
@@ -632,7 +639,7 @@ def eye_like(
     if device is None:
         device = x.device
 
-    return batch_eye(shape, dtype=dtype, device=device)
+    return eye(shape, dtype=dtype, device=device)
 
 
 @beartype
@@ -892,12 +899,24 @@ def ravel_idxes(
 
 
 @beartype
-def promote_dtypes(*args: object) -> torch.dtype:
+def promote_dtypes(*args: typing.Any) -> torch.dtype:
+    def _promote_dtype(
+        x: typing.Optional[torch.dtype],
+        y: typing.Optional[torch.dtype],
+    ):
+        if x is None:
+            return y
+
+        if y is None:
+            return x
+
+        return torch.promote_types(x, y)
+
     return functools.reduce(
-        torch.promote_types,
+        _promote_dtype,
         (arg if isinstance(arg, torch.dtype) else arg.dtype
          for arg in args if arg is not None),
-        torch.bool,
+        None,
     )
 
 
@@ -925,221 +944,17 @@ def check_devices(*args: object) -> torch.device:
     return ret
 
 
-class OnlySelf:
-    def __hash__(self) -> int:
-        return hash(id(self))
-
-    def __eq__(self, obj) -> bool:
-        return self is obj
-
-    def __ne__(self, obj) -> bool:
-        return self is not obj
-
-
 @beartype
-def view_to(
-    x: torch.Tensor,
-    device: typing.Optional[torch.device] = None,
+def einsum(
+    expr: str,
+    *args: torch.Tensor,
     dtype: typing.Optional[torch.dtype] = None,
-):
-    origin_shape = x.shape
-    return batch_shrink(x).to(device, dtype).expand(origin_shape)
+    device: typing.Optional[torch.device] = None,
+) -> torch.Tensor:
+    if dtype is None:
+        dtype = promote_dtypes(*args)
 
-
-@beartype
-def ein_rearrange(
-    x: torch.Tensor,
-    input: typing.Sequence[object],
-    output: typing.Sequence[object],
-):
-    it = list(input)
-    ot = list(output)
-
-    def get_ellipsis_idx(t):
-        syms = set()
-        ret = -1
-
-        for idx, sym in enumerate(t):
-            if sym is ...:
-                assert ret == -1
-                ret = idx
-                continue
-
-            assert sym not in syms
-            syms.add(sym)
-
-        return syms, ret
-
-    it_syms, it_ellipsis_idx = get_ellipsis_idx(it)
-    ot_syms, ot_ellipsis_idx = get_ellipsis_idx(ot)
-
-    assert it_syms.issubset(ot_syms)
-
-    if all_same(0 <= it_ellipsis_idx, 0 <= ot_ellipsis_idx):
-        ellipsis_len = x.ndim - len(it) + 1
-        assert 0 <= ellipsis_len
-    else:
-        ellipsis_len = 0
-
-    sym_idx_table = dict()
-
-    for idx, sym in enumerate(it):
-        if sym is ...:
-            continue
-
-        if idx < it_ellipsis_idx:
-            sym_idx_table[sym] = idx
-        else:
-            sym_idx_table[sym] = ellipsis_len - 1 + idx
-
-    permute_list = list()
-
-    for sym in ot:
-        if sym is ...:
-            permute_list += range(
-                it_ellipsis_idx, it_ellipsis_idx + ellipsis_len)
-            continue
-
-        if sym not in sym_idx_table:
-            sym_idx_table[sym] = x.ndim
-            x = x.unsqueeze(-1)
-
-        permute_list.append(sym_idx_table[sym])
-
-    return x.permute(*permute_list)
-
-
-class ScatterMode(enum.StrEnum):
-    SET = "set"
-    ADD = "add"
-
-
-@beartype
-def ein_scatter(
-    *,
-    dst: torch.Tensor,
-    dst_expr: typing.Sequence[object],
-
-    idx: torch.Tensor,
-    idx_expr: typing.Sequence[object],
-
-    src: torch.Tensor,
-    src_expr: typing.Sequence[object],
-
-    inplace: bool,
-    mode: ScatterMode,
-):
-    def f(expr):
-        none_idx = -1
-        ell_idx = -1
-        syms = set()
-
-        for idx, sym in enumerate(expr):
-            if sym is None:
-                assert none_idx == -1
-                none_idx = idx
-            elif sym is ...:
-                assert ell_idx == -1
-                ell_idx = idx
-            else:
-                assert sym not in syms
-                syms.add(sym)
-
-        return none_idx, syms
-
-    dst_expr = list(dst_expr)
-    src_expr = list(src_expr)
-    idx_expr = list(idx_expr)
-
-    if ... not in dst_expr:
-        dst_expr.insert(0, ...)
-
-    if ... not in idx_expr:
-        idx_expr.insert(0, ...)
-
-    if ... not in src_expr:
-        src_expr.insert(0, ...)
-
-    dst_expr_none_idx, dst_expr_syms = f(dst_expr)
-    idx_expr_none_idx, idx_expr_syms = f(idx_expr)
-    src_expr_none_idx, src_expr_syms = f(src_expr)
-
-    assert dst_expr_none_idx != -1
-    assert idx_expr_none_idx == -1
-    assert src_expr_none_idx == -1
-
-    idx_src_expr_syms = idx_expr_syms | src_expr_syms
-
-    c_syms = sorted(idx_src_expr_syms - dst_expr_syms)
-
-    common_expr = (..., *sorted(dst_expr_syms), *c_syms, None)
-
-    if not inplace:
-        dst = dst.clone()
-
-    ret = dst
-
-    print(f"{dst.shape=}")
-    print(f"{idx.shape=}")
-    print(f"{src.shape=}")
-
-    print(f"{common_expr=}")
-
-    print(f"{dst_expr=}")
-    print(f"{idx_expr=}")
-    print(f"{src_expr=}")
-
-    dst = ein_rearrange(dst, dst_expr, common_expr)
-    idx = ein_rearrange(idx, idx_expr, common_expr)
-    src = ein_rearrange(src, src_expr, common_expr)
-
-    print(f"{dst.shape=}")
-    print(f"{idx.shape=}")
-    print(f"{src.shape=}")
-
-    print(f"{dst.shape=}")
-    print(f"{idx.shape=}")
-    print(f"{src.shape=}")
-
-    """
-
-    dst[..., 1, ..., 1, *]
-    idx[...,    ...   , 1]
-    src[...,    ...   , 1]
-
-    """
-
-    d = len(c_syms) + 1
-
-    common_shape = (*broadcast_shapes(
-        dst.shape[:-1], idx.shape[:-1], src.shape[:-1]), 1)
-
-    match mode:
-        case ScatterMode.SET:
-            assert len(c_syms) == 1
-
-            dst = batch_expand(dst, common_shape[:-d], -d).squeeze(-2)
-            idx = idx.expand(common_shape).squeeze(-1)
-            src = src.expand(common_shape).squeeze(-1)
-
-            print(f"{dst.shape=}")
-            print(f"{idx.shape=}")
-            print(f"{src.shape=}")
-
-            dst.scatter_(-1, idx, src)
-
-        case ScatterMode.ADD:
-            dst = batch_expand(dst, common_shape[:-1], -1)
-            idx = batch_expand(idx, common_shape[:-1], -1)
-            src = batch_expand(src, common_shape[:-1], -1)
-
-            print(f"{dst.shape=}")
-            print(f"{idx.shape=}")
-            print(f"{src.shape=}")
-
-            dst.scatter_add_(-1, idx, view_to(src, dst.device, dst.dtype))
-
-    return ret
+    return torch.einsum(expr, *(arg.to(device, dtype) for arg in args))
 
 
 @beartype
@@ -1153,7 +968,7 @@ def get_param_groups(module: object, base_lr: float):
 
 
 @beartype
-def batch_eye(
+def eye(
     shape,  # [..., N, N]
     *,
     dtype: torch.dtype = None,
@@ -1163,6 +978,37 @@ def batch_eye(
     x = torch.zeros(shape, dtype=dtype, device=device)
     x.diagonal(0, -2, -1).fill_(1)
     return x
+
+
+@beartype
+def make_diag(
+    diag_elems: torch.Tensor,  # [..., D, ...]
+    dim: int = -1,
+    shape: typing.Optional[tuple[int, int]] = None,  # (N, M)
+) -> torch.Tensor:  # [..., N, M, ...]
+    dim = normed_idx(dim, diag_elems.ndim)
+
+    sa = diag_elems.shape[:dim]
+    d = diag_elems.shape[dim]
+    sb = diag_elems.shape[dim + 1:]
+
+    if shape is None:
+        shape = (d, d)
+
+    assert 0 < shape[0]
+    assert 0 < shape[1]
+
+    zeros = zeros_like(diag_elems, shape=(1,)).expand(*sa, *sb)
+
+    l: list[torch.Tensor] = [zeros] * (shape[0] * shape[1])
+
+    ia = [slice(None) for _ in range(len(sa))]
+    ib = [slice(None) for _ in range(len(sb))]
+
+    for i in range(min(*shape, diag_elems.shape[-1])):
+        l[(shape[1] + 1) * i] = diag_elems[*ia, i, *ib]
+
+    return torch.stack(l, dim).reshape(*sa, *shape, *sb)
 
 
 @beartype
@@ -1317,7 +1163,7 @@ def axis_angle_to_quaternion(
     if angle is None:
         angle = axis_norm
 
-    unit_axis = axis / (axis_norm.unsqueeze(-1) + EPS[axis_norm.dtype])
+    unit_axis = axis / (axis_norm[..., None] + EPS[axis_norm.dtype])
 
     half_angle = angle / 2
 
@@ -1383,7 +1229,7 @@ def _axis_angle_to_rot_mat(
     if angle is None:
         angle = axis_norm
 
-    unit_axis = axis / (axis_norm.unsqueeze(-1) + EPS[axis_norm.dtype])
+    unit_axis = axis / (axis_norm[..., None] + EPS[axis_norm.dtype])
 
     c = angle.cos()
     s = angle.sin()
@@ -1653,14 +1499,14 @@ def rot_mat_to_quaternion(
     q_mat[..., yi, 3] = m21_add_m12 / s3
     q_mat[..., zi, 3] = s3 / 4
 
-    a_idxes = a_mat.argmax(-1, True).unsqueeze(-1)
+    a_idxes = a_mat.argmax(-1, True)[..., None]
     a_idxes = a_idxes.expand(*a_idxes.shape[:-2], 4, 1)
     # [..., 4, 1]
 
     ret = q_mat.gather(-1, a_idxes)
     # [..., 4, 1]
 
-    ret = ret.squeeze(-1)
+    ret = ret[..., 0]
     # [..., 4]
 
     if out is None:
@@ -1756,6 +1602,245 @@ def homo_normalize(
 
 
 @beartype
+def eval_mat_mul(
+    shape_l: tuple[int, ...],  # [..., P, Q]
+    shape_r: tuple[int, ...],  # [..., Q, R]
+) -> tuple[
+    tuple[int, ...],  # [..., P, R]
+    float,
+]:
+    P, Q, R = -1, -2, -3
+
+    P, Q, R = check_shapes(
+        shape_l, (..., P, Q),
+        shape_r, (..., Q, R),
+    )
+
+    s = broadcast_shapes(shape_l[:-2], shape_r[:-2])
+
+    ret_shape = (*s, P, R)
+    ret_cost = float(math.prod(s) * P * Q * R)
+
+    return ret_shape, ret_cost
+
+
+@beartype
+def eval_mat_mul_dp(
+    shapes: typing.Sequence[tuple[int, ...]],
+) -> tuple[
+    list[list[int]],  # dp_i
+    list[list[tuple[int, ...]]],  # dp_shape
+    list[list[float]],  # dp_cost
+]:
+    N = len(shapes)
+
+    assert 0 < N
+
+    dp_i: list[list[int]] = [[0 for j in range(N + 1)] for i in range(N + 1)]
+
+    dp_shape: list[list[tuple[int, ...]]] = \
+        [[() for j in range(N + 1)] for i in range(N + 1)]
+
+    for i in range(N):
+        dp_shape[i][i + 1] = shapes[i]
+
+    dp_cost: list[list[float]] = [
+        [0.0 for j in range(N + 1)] for i in range(N + 1)]
+
+    alpha = 0.6
+
+    for l in range(2, N + 1):
+        for i in range(N - l + 1):
+            j = i + l
+
+            best_i = -1
+            best_cost = math.inf
+            best_shape = None
+
+            for k in range(i + 1, j):
+                shape_l, cost_l = dp_shape[i][k], dp_cost[i][k]
+                shape_r, cost_r = dp_shape[k][j], dp_cost[k][j]
+
+                reduced_shape, reduced_cost = eval_mat_mul(shape_l, shape_r)
+
+                cost = (cost_l + cost_r) * (1 - alpha) + \
+                    max(cost_l, cost_r) * alpha + \
+                    reduced_cost
+
+                if cost < best_cost:
+                    best_i = k
+                    best_cost = cost
+                    best_shape = reduced_shape
+
+            dp_i[i][j] = best_i
+            dp_cost[i][j] = best_cost
+            dp_shape[i][j] = best_shape
+
+    return dp_i, dp_shape, dp_cost
+
+
+@beartype
+def _mat_mul(
+    args: typing.Any,
+    dtype: torch.dtype,
+    device: typing.Optional[torch.device],
+    order: str,
+    out: typing.Optional[torch.Tensor],
+):
+    if isinstance(args, torch.Tensor):
+        return args.to(device, dtype)
+
+    args = [_mat_mul(arg, dtype, device, order, None) for arg in args]
+
+    if len(args) == 2:
+        return torch.matmul(args[0], args[1], out=out)
+
+    if order == "lr":
+        acc = args[0]
+
+        for i in range(1, len(args) - 1):
+            acc = torch.matmul(acc, args[i])
+
+        return torch.matmul(acc, args[-1], out=out)
+
+    if order == "rl":
+        acc = args[-1]
+
+        for i in range(len(args) - 2, 0, -1):
+            acc = torch.matmul(args[i], acc)
+
+        return torch.matmul(args[0], acc, out=out)
+
+    dp_i, dp_shape, dp_cost = eval_mat_mul_dp([arg.shape for arg in args])
+
+    def _f(i, j):
+        if i + 1 == j:
+            return args[i].to(device, dtype)
+
+        cur_pivot = dp_i[i][j]
+
+        return torch.matmul(_f(i, cur_pivot), _f(cur_pivot, j))
+
+    pivot = dp_i[0][len(args)]
+
+    return torch.matmul(_f(0, pivot), _f(pivot, len(args)), out=out)
+
+
+@beartype
+def arrange_args(
+    args: typing.Any,
+    eliminate_none: bool,
+) -> tuple[
+    int, torch.dtype, typing.Optional[torch.Tensor | list]
+]:
+    if args is None:
+        if eliminate_none:
+            return 0, None, None
+
+        return 1, None, None
+
+    if (
+        isinstance(args, int) or
+        isinstance(args, float) or
+        isinstance(args, torch.Tensor)
+    ):
+        return 1, args.dtype, args
+
+    while True:
+        if not isinstance(args, typing.Sequence):
+            assert isinstance(args, typing.Iterable)
+            args = list(args)
+
+        if 1 <= len(args):
+            break
+
+        if len(args) == 0:
+            return 0, None, None
+
+        args = args[0]
+
+    ret_n = 0
+    ret_dtype = None
+    ret_args = list()
+
+    for arg in args:
+        cur_n, cur_dtype, cur_args = arrange_args(arg, eliminate_none)
+
+        if cur_n == 0:
+            continue
+
+        ret_n += cur_n
+        ret_dtype = promote_dtypes(ret_dtype, cur_dtype)
+        ret_args.append(cur_args)
+
+    if ret_n == 0:
+        return 0, None, None
+
+    if ret_n == 1:
+        return 1, ret_dtype, ret_args[0]
+
+    return ret_n, ret_dtype, ret_args
+
+
+@beartype
+def add(
+    *args: typing.Any,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+    out: typing.Optional[torch.Tensor] = None,
+):
+    args = [arg for arg in args if arg is not None]
+
+    if dtype is not None:
+        dtype = promote_dtypes(*args)
+
+    N = len(args)
+
+    assert 0 < N
+
+    ret = args[0].to(device, dtype)
+
+    if N == 1:
+        return ret
+
+    for i in range(1, N - 1):
+        ret = ret + args[i]
+
+    return torch.add(ret, args[-1], out=out)
+
+
+@beartype
+def mat_mul(
+    *args: typing.Any,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+    order: str = "auto",  # auto, lr, rl
+    out: typing.Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    order = order.lower()
+
+    assert order in {"lr", "rl", "auto"}
+
+    n, p_dtype, args = arrange_args(args, True)
+
+    assert 1 <= n
+
+    if n == 1:
+        return args
+
+    if dtype is None:
+        dtype = p_dtype
+
+    return _mat_mul(
+        args=args,
+        dtype=dtype,
+        device=device,
+        order=order,
+        out=out
+    )
+
+
+@beartype
 def do_rt(
     r: torch.Tensor,  # [..., P, Q]
     t: torch.Tensor,  # [..., P]
@@ -1771,14 +1856,7 @@ def do_rt(
         v, (..., Q),
     )
 
-    v = (r @ v.unsqueeze(-1)).squeeze(-1) + t
-
-    if out is None:
-        out = v
-    else:
-        out.copy_(v)
-
-    return out
+    return torch.add(mat_mul(r, v[..., None])[..., 0], t, out=out)
 
 
 @beartype
@@ -1810,20 +1888,11 @@ def merge_rt(
     b_r = b_r.to(dtype)
     b_t = b_t.to(dtype)
 
-    if out_r is None:
-        out_r = a_r @ b_r
-    else:
-        torch.matmul(a_r, b_r, out=out_r)
-
+    out_r = mat_mul(a_r, b_r, out=out_r)
     # [..., P, R]
 
-    inv_ts = (a_r @ b_t.unsqueeze(-1)).squeeze(-1) + a_t
+    out_t = torch.add(mat_mul(a_r, b_t[..., None])[..., 0], a_t, out=out_t)
     # [..., P]
-
-    if out_t is None:
-        out_t = inv_ts
-    else:
-        out_t.copy_(inv_ts)
 
     return out_r, out_t
 
@@ -1859,12 +1928,12 @@ def get_inv_rt(
 
     torch.matmul(
         out_r,
-        -t.unsqueeze(-1),
+        -t[..., None],
         out=out_t,
     )
     # [..., D, 1]
 
-    return out_r, out_t.squeeze(-1)
+    return out_r, out_t[..., 0]
 
 
 @beartype
@@ -1877,7 +1946,7 @@ def do_homo(
         v, (..., -2),
     )
 
-    return homo_normalize((h @ v.unsqueeze(-1)).squeeze(-1))
+    return homo_normalize(mat_mul(h, v[..., None])[..., 0])
 
 
 @beartype
@@ -1912,7 +1981,7 @@ def dlt(
         k = dist / odist
 
         h = torch.eye(D + 1, dtype=points.dtype, device=points.device) * k
-        h[:-1, -1] = -k * mean.squeeze(-1)
+        h[:-1, -1] = -k * mean[..., 0]
         h[-1, -1] = 1
 
         return h
@@ -1931,33 +2000,33 @@ def dlt(
         src_h = _get_normalize_h(src[:, :-1], math.sqrt(P-1))
         # src_h[P, P]
 
-        dst_h = _get_normalize_h(dst[:, :-1], math.sqrt(Q-1))
+        dst_h = _get_normalize_h(dst[:, :-1], math.sqrt(Q - 1))
         # dst_h[Q, Q]
 
-        rep_src = (src_h @ src.unsqueeze(-1)).squeeze(-1)
-        rep_dst = (dst_h @ dst.unsqueeze(-1)).squeeze(-1)
+        rep_src = mat_mul(src_h, src[..., None])[..., 0]
+        rep_dst = mat_mul(dst_h, dst[..., None])[..., 0]
     else:
         rep_src = src
         rep_dst = dst
 
-    A = torch.empty([N*(Q-1), Q*P],
+    A = torch.empty([N * (Q - 1), Q * P],
                     dtype=torch.promote_types(rep_src.dtype, rep_dst.dtype))
 
     A[:, :-P] = 0
 
-    for q in range(Q-1):
-        A[q::Q-1, P*q:P*q+P] = rep_src
+    for q in range(Q - 1):
+        A[q::Q - 1, P * q:P * q + P] = rep_src
 
-    A[:, -P:] = (rep_src.unsqueeze(-2) * -rep_dst[:, :-1, None]) \
-        .reshape(N*(Q-1), P)
-    # [N*(Q-1), P] = (N, 1, P) * (N, Q-1, 1) = (N, Q-1, P) = (N*(Q-1), P)
+    A[:, -P:] = (rep_src[..., None, :] * -rep_dst[:, :-1, None]) \
+        .reshape(N * (Q - 1), P)
+    # [N*(Q - 1), P] = (N, 1, P) * (N, Q - 1, 1) = (N, Q - 1, P) = (N*(Q - 1), P)
 
     Vh: torch.Tensor = torch.linalg.svd(A)[2]
 
     H = Vh[-1, :].reshape(Q, P)
 
     if normalize:
-        H = torch.inverse(dst_h) @ H @ src_h
+        H = mat_mul(torch.inverse(dst_h), H, src_h)
 
     if calc_err:
         err = math.sqrt((do_homo(H, src) - dst).square().sum() / N)

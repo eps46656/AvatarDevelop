@@ -16,8 +16,8 @@ import pytorch3d.renderer
 import pytorch3d.structures
 
 from . import (avatar_utils, camera_utils, config, dataset_utils,
-               face_seg_utils, gom_avatar_training_utils, gom_utils,
-               kernel_splatting_utils, mesh_utils, people_snapshot_utils,
+               gom_avatar_training_utils, gom_utils,
+               kernel_splatting_utils, mesh_seg_utils, mesh_utils, people_snapshot_utils,
                rendering_utils, segment_utils, smplx_utils, training_utils,
                transform_utils, utils, vision_utils)
 
@@ -58,6 +58,8 @@ BATCH_SIZE = 4
 LR = 1e-3
 
 SUBJECT_NAME = "female-1-casual"
+
+MESH_SEG_PROJ = "mesh_seg_2025_0501_0154_1"
 
 
 def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
@@ -117,6 +119,7 @@ def load_trainer():
     # ---
 
     smplx_model_builder = smplx_utils.DeformableModelBuilder(
+        temp_model_data=subject_data.model_data,
         model_data=subject_data.model_data,
     ).to(DEVICE)
 
@@ -205,13 +208,88 @@ def main1():
 
     # [K][T, H, W]
 
+    K = len(masks)
+
     gom_module: gom_utils.Module = trainer.training_core.module
 
-    K = len(masks)
+    smplx_blender: smplx_utils.ModelBlender = gom_module.avatar_blender
+
+    smplx_model_builder: smplx_utils.DeformableModelBuilder = \
+        smplx_blender.model_builder
+
+    print(f"{smplx_model_builder.model_data.vert_pos.shape=}")
+
+    smplx_model_builder.refresh()
+
+    print(f"{smplx_model_builder.model_data.vert_pos.shape=}")
+
+    origin_model_data = smplx_model_builder.model_data
+
+    # origin_model_data.show()
+
+    print(f"{smplx_model_builder.model_data.vert_pos.shape=}")
+
+    utils.write_pickle(
+        DIR / MESH_SEG_PROJ / "origin_model_data.pkl",
+        origin_model_data.state_dict(),
+    )
+
+    print(f"{smplx_model_builder.model_data.vert_pos.shape=}")
+
+    """
+    smplx_model_builder.remesh(utils.ArgPack(
+        target_length=0.01,
+        iterations=5,
+    ))
+    """
+
+    edge_len_threshold = 20 * 1e-3
+
+    while True:
+        utils.mem_clear()
+
+        cur_model_data = smplx_model_builder.model_data
+
+        print(f"{cur_model_data.vert_pos.shape=}")
+
+        mesh_data = mesh_utils.MeshData(
+            cur_model_data.mesh_graph,
+            cur_model_data.vert_pos,
+        )
+
+        print(f"{mesh_data.vert_pos.shape=}")
+
+        target_edges = {
+            ei
+            for ei, edge_len in enumerate(mesh_data.edge_norm)
+            if edge_len_threshold < edge_len
+        }
+
+        print(f"{len(target_edges)=}")
+
+        if len(target_edges) == 0:
+            break
+
+        gom_module.subdivide(target_edges=target_edges)
+
+        utils.torch_cuda_sync()
+
+        utils.mem_clear()
+
+        smplx_model_builder.refresh()
+
+    model_data = smplx_model_builder.model_data
+
+    # model_data.show()
+
+    utils.write_pickle(
+        DIR / MESH_SEG_PROJ / "model_data.pkl",
+        model_data.state_dict(),
+    )
 
     avatar_model: avatar_utils.AvatarModel = gom_module.avatar_blender.get_avatar_model()
 
-    face_segmentor = face_seg_utils.FaceSegmentor.from_mesh_graph(
+    face_segmentor = mesh_seg_utils.MeshSegmentor.from_mesh_graph(
         avatar_model.mesh_data.mesh_graph,
         len(obj_list),
         torch.float64,
@@ -219,19 +297,6 @@ def main1():
     )
 
     T, C, H, W = dataset.sample.img.shape
-
-    albedo_tex = pytorch3d.renderer.TexturesUV(
-        maps=[
-            einops.rearrange(subject_data.tex,
-                             "c h w -> h w c").to(utils.FLOAT)
-        ],
-        verts_uvs=[model_data.tex_vert_pos.to(utils.FLOAT)],
-        faces_uvs=[model_data.tex_mesh_graph.f_to_vvv],
-        padding_mode="reflection",
-        sampling_mode="bilinear",
-    )
-
-    out_images = torch.empty((T, C, H, W), dtype=torch.uint8)
 
     with torch.no_grad():
         for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
@@ -273,12 +338,6 @@ def main1():
                     mesh_ras_result.bary_coords.reshape(H, W, 3)
                 # [H, W, 3]
 
-                texels = albedo_tex.sample_textures(mesh_ras_result)
-                # [1, H, W, 1, C]
-
-                out_images[idxes[i]] = einops.rearrange(
-                    texels.view(H, W, C), "h w c -> c h w")
-
                 for k in range(K):
                     cur_mask = masks[k][idxes[i]].to(utils.FLOAT)
 
@@ -291,12 +350,6 @@ def main1():
                         ballot,  # [H, W]
                     )
 
-    vision_utils.write_video(
-        PROJ_DIR / f"output_video_{utils.timestamp_sec()}.avi",
-        out_images,
-        subject_data.fps,
-    )
-
     utils.write_pickle(
         PROJ_DIR / f"face_voting_result_{utils.timestamp_sec()}.pkl",
         face_segmentor.state_dict(),
@@ -304,24 +357,15 @@ def main1():
 
 
 def main2():
-    subject_data, trainer = load_trainer()
+    model_data = smplx_utils.ModelData.from_state_dict(
+        utils.read_pickle(DIR / MESH_SEG_PROJ / "model_data.pkl"),
+        dtype=utils.FLOAT,
+        device=DEVICE,
+    )
 
-    trainer.load_latest()
-
-    training_core: gom_avatar_training_utils.TrainingCore = \
-        trainer.training_core
-
-    smplx_model_blender: smplx_utils.ModelBlender = \
-        training_core.module.avatar_blender
-
-    smplx_model_builder: smplx_utils.DeformableModelBuilder = \
-        smplx_model_blender.model_builder
-
-    model_data: smplx_utils.ModelData = smplx_model_builder.model_data
-
-    face_segmentor: face_seg_utils.FaceSegmentor = \
-        face_seg_utils.FaceSegmentor.from_state_dict(utils.read_pickle(
-            PROJ_DIR / "face_voting_result_1745335872.pkl"),
+    face_segmentor: mesh_seg_utils.MeshSegmentor = \
+        mesh_seg_utils.MeshSegmentor.from_state_dict(utils.read_pickle(
+            PROJ_DIR / "face_voting_result_1746034470.pkl"),
             None,
             DEVICE,
         )
@@ -364,7 +408,7 @@ def main2():
     face_segmentor.vert_ballot_box = vert_ballot_box
     face_segmentor.vert_ballot_cnt = vert_ballot_cnt
 
-    face_segment_result: face_seg_utils.FaceSegmentationResult = \
+    face_segment_result: mesh_seg_utils.FaceSegmentationResult = \
         face_segmentor.segment(mesh_utils.MeshData(
             model_data.mesh_graph,
             model_data.vert_pos,
@@ -471,4 +515,4 @@ def main3():
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
         with torch.no_grad():
-            main2()
+            main1()

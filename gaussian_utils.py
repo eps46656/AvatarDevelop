@@ -1,4 +1,5 @@
 import dataclasses
+import pathlib
 import typing
 
 import torch
@@ -8,6 +9,10 @@ import diff_gaussian_rasterization
 
 from . import camera_utils, transform_utils, utils
 
+FILE = pathlib.Path(__file__)
+DIR = FILE.parents[0]
+
+
 camera_view_transform = transform_utils.ObjectTransform.from_matching("RDF")
 # camera <-> view
 
@@ -16,34 +21,40 @@ camera_ndc_transform = transform_utils.ObjectTransform.from_matching("RDF")
 
 
 @beartype
+def get_sh_degree(sh_features_cnt: int) -> int:
+    sh_degree = int(sh_features_cnt**0.5 - 1)
+    assert (sh_degree + 1)**2 == sh_features_cnt
+    return sh_degree
+
+
+@beartype
 @dataclasses.dataclass
 class RenderGaussianResult:
-    colors: torch.Tensor  # [..., C, H, W]
+    color: torch.Tensor  # [..., C, H, W]
     radii: torch.Tensor
 
 
 @beartype
 def render_gaussian(
+    *,
     camera_config: camera_utils.CameraConfig,
 
     camera_transform: transform_utils.ObjectTransform,
-    # camera <-> world
-    # [...]
-
-    sh_degree: int,  # 0 ~ 2
+    # (camera <-> world)[...]
 
     bg_color: torch.Tensor,  # [..., C]
 
     gp_mean: torch.Tensor,  # [..., N, 3]
 
-    gp_rot_q: typing.Optional[torch.Tensor],  # [..., N, 4] quaternion
+    gp_rot_q: typing.Optional[torch.Tensor] = None,  # [..., N, 4] quaternion
+    gp_scale: typing.Optional[torch.Tensor] = None,  # [..., N, 3]
+    gp_cov3d: typing.Optional[torch.Tensor] = None,  # [..., N, 3, 3]
+    gp_cov3d_u: typing.Optional[torch.Tensor] = None,  # [..., N, 6]
 
-    gp_scale: torch.Tensor,  # [..., N, 3]
+    gp_sh: typing.Optional[torch.Tensor] = None,
+    # [..., N, (sh_degress + 1)**2, C]
 
-    gp_cov3d: typing.Optional[torch.Tensor],  # [..., N, 3, 3]
-
-    gp_sh: typing.Optional[torch.Tensor],  # [..., N, (sh_degress + 1)**2, C]
-    gp_color: typing.Optional[torch.Tensor],  # [..., N, C]
+    gp_color: typing.Optional[torch.Tensor] = None,  # [..., N, C]
 
     gp_opacity: torch.Tensor,  # [..., N]
 
@@ -83,53 +94,65 @@ def render_gaussian(
 
     # ---
 
-    assert 0 <= sh_degree <= 2
-
-    # ---
-
     N, C = -1, -2
 
     N, C = utils.check_shapes(
         bg_color, (..., C),
         gp_mean, (..., N, 3),
+
         gp_rot_q, (..., N, 4),
         gp_scale, (..., N, 3),
-        gp_opacity, (..., N),
         gp_cov3d, (..., N, 3, 3),
+        gp_cov3d_u, (..., N, 6),
+
+        gp_opacity, (..., N),
     )
 
     assert gp_sh is not None or gp_color is not None
 
-    if gp_cov3d is None:
-        assert gp_scale is not None and gp_rot_q is not None
+    if gp_cov3d_u is None:
+        if gp_cov3d is None:
+            assert gp_scale is not None and gp_rot_q is not None
 
-        zeros = torch.zeros(
-            1, dtype=gp_scale.dtype, device=device).expand(gp_scale.shape[:-1])
-        # [..., N]
+            gp_sq_scale_mat = utils.make_diag(gp_scale)
+            # [..., N, 3, 3]
 
-        gp_sq_scale_mat = torch.stack([
-            gp_scale[..., 0].square(), zeros, zeros,
-            zeros, gp_scale[..., 1].square(), zeros,
-            zeros, zeros, gp_scale[..., 2].square(),
-        ], dim=-1).view(*gp_scale.shape[:-1], 3, 3)
-        # [..., N, 3, 3]
+            gp_rot_mat = utils.quaternion_to_rot_mat(
+                gp_rot_q, order="WXYZ", out_shape=(3, 3))
+            # [..., N, 3, 3]
 
-        gp_rot_mat = utils.quaternion_to_rot_mat(
-            gp_rot_q, order="WXYZ", out_shape=(3, 3))
-        # [..., N, 3, 3]
+            gp_cov3d = utils.mat_mul(
+                gp_rot_mat, gp_sq_scale_mat, gp_rot_mat.transpose(-2, -1))
+            # [..., N, 3, 3]
 
-        gp_cov3d = gp_rot_mat.transpose(-2, -1) @ gp_sq_scale_mat @ gp_rot_mat
-        # [..., N, 3, 3]
+        gp_cov3d_u = utils.empty_like(
+            gp_cov3d, shape=(*gp_cov3d.shape[:-2], 6))
 
-    utils.check_shapes(
-        gp_sh, (..., N, (sh_degree + 1)**2, C),
+        gp_cov3d_u[..., 0] = gp_cov3d[..., 0, 0]
+        gp_cov3d_u[..., 1] = gp_cov3d[..., 0, 1]
+        gp_cov3d_u[..., 2] = gp_cov3d[..., 0, 2]
+        gp_cov3d_u[..., 3] = gp_cov3d[..., 1, 1]
+        gp_cov3d_u[..., 4] = gp_cov3d[..., 1, 2]
+        gp_cov3d_u[..., 5] = gp_cov3d[..., 2, 2]
+
+    FT = utils.check_shapes(
+        gp_sh, (..., N, -1, C),
         gp_color, (..., N, C),
-    )
+    )  # (sh_degree + 1)**2
+
+    if gp_color is None:
+        sh_degree = get_sh_degree(FT)
+    else:
+        sh_degree = 0
+
+    assert 0 <= sh_degree <= 2, f"{sh_degree=}"
 
     batch_shape = utils.broadcast_shapes(
         camera_transform.shape,
         bg_color.shape[:-1],
         gp_mean.shape[:-2],
+
+        gp_cov3d_u.shape[:-2],
 
         gp_opacity.shape[:-1],
         utils.try_get_batch_shape(gp_sh, -3),
@@ -149,8 +172,7 @@ def render_gaussian(
 
     bg_color = bg_color.to(*dd).expand(*batch_shape, C)
     gp_mean = gp_mean.to(*dd).expand(*batch_shape, N, 3)
-    gp_rot_q = gp_rot_q.to(*dd).expand(*batch_shape, N, 4)
-    gp_scale = gp_scale.to(*dd).expand(*batch_shape, N, 3)
+    gp_cov3d_u = gp_cov3d_u.to(*dd).expand(*batch_shape, N, 6)
     gp_opacity = gp_opacity.to(*dd).expand(*batch_shape, N)
 
     if gp_sh is not None:
@@ -161,9 +183,14 @@ def render_gaussian(
 
     # ---
 
-    colors = torch.empty(
+    color = torch.empty(
         (*batch_shape, C, camera_config.img_h, camera_config.img_w),
-        dtype=utils.FLOAT, device=device)
+        dtype=gp_color.dtype, device=device)
+
+    radii = torch.empty(
+        (*batch_shape, camera_config.img_h, camera_config.img_w),
+        dtype=torch.int32, device=device,
+    )
 
     for batch_idx in utils.get_batch_idxes(batch_shape):
         renderer_settings = diff_gaussian_rasterization.GaussianRasterizationSettings(
@@ -191,92 +218,33 @@ def render_gaussian(
             debug=False,
         )
 
-        color, radii = diff_gaussian_rasterization.rasterize_gaussians(
-            means3D=gp_mean[batch_idx],
+        cur_color, cur_radii = diff_gaussian_rasterization.rasterize_gaussians(
+            means3D=gp_mean[batch_idx].contiguous(),
+
             means2D=torch.Tensor([]),
 
-            sh=torch.Tensor([]) if gp_sh is None else gp_sh[batch_idx],
+            sh=torch.Tensor([]) if gp_sh is None else
+            gp_sh[batch_idx].contiguous(),
 
             colors_precomp=torch.Tensor([]) if gp_color is None else
-            gp_color[batch_idx],
+            gp_color[batch_idx].contiguous(),
 
-            opacities=gp_opacity[batch_idx].unsqueeze(-1),
-            scales=gp_scale[batch_idx],
-            rotations=gp_rot_q[batch_idx],
-            cov3Ds_precomp=torch.Tensor([]),
+            opacities=gp_opacity[batch_idx, None].contiguous(),
+
+            scales=torch.Tensor([]),
+            rotations=torch.Tensor([]),
+            cov3Ds_precomp=gp_cov3d_u[batch_idx].contiguous(),
+
             raster_settings=renderer_settings,
         )
+        # cur_color[C, H, W]
 
-        # color[C, H, W]
+        print(f"{cur_color.shape=}")
+        print(f"{cur_radii.shape=}")
 
-        colors[batch_idx] = color
+        color[batch_idx] = cur_color
 
     return RenderGaussianResult(
-        colors=colors,
+        color=color,
         radii=radii,
     )
-
-
-@beartype
-def query_gaussian(
-    gp_mean: torch.Tensor,  # [N, 3]
-    gp_rot_q: torch.Tensor,  # [N, 4] quaternion
-    gp_scale: torch.Tensor,  # [N, 3]
-    gp_color: torch.Tensor,  # [N, C]
-    gp_opacity: torch.Tensor,  # [..., N, 1]
-
-    points: torch.Tensor,  # [..., 3]
-):
-    device = utils.check_devices(
-        gp_mean,
-        gp_rot_q,
-        gp_scale,
-        gp_color,
-        gp_opacity,
-        points,
-    )
-
-    N, C = -1, -2
-
-    N, C = utils.check_shapes(
-        gp_mean, (N, 3),
-        gp_rot_q, (N, 4),
-        gp_scale, (N, 3),
-        gp_color, (N, C),
-        gp_opacity, (N, 1),
-        points, (..., 3),
-    )
-
-    gp_rot_mats = utils.quaternion_to_rot_mat(
-        gp_rot_q,
-        order="WXYZ",
-        out_shape=(3, 3),
-    )  # [N, 3, 3]
-
-    gp_scale_mats = torch.zeros(
-        (N, 3, 3), dtype=gp_scale.dtype, device=device)
-
-    gp_scale_mats[:, 0, 0] = gp_scale[:, 0]
-    gp_scale_mats[:, 1, 1] = gp_scale[:, 1]
-    gp_scale_mats[:, 2, 2] = gp_scale[:, 2]
-
-    gp_rs = gp_rot_mats @ gp_scale_mats
-    # [N, 3, 3]
-
-    inv_cov = (gp_rs @ gp_rs.transpose(-2, -1)).inverse()
-    # [N, 3, 3]
-
-    rel_points = (points.unsqueeze(-2) - gp_mean).unsqueeze(-1)
-    # [..., N, 3, 1]
-
-    k = (-0.5 * (rel_points.transpose(-2, -1) @ inv_cov @ rel_points)).exp() \
-        .squeeze(-1).squeeze(-1)
-    # [..., N, 1, 1] -> [..., N]
-
-    ret = torch.einsum(
-        "...i, ic -> ...c",
-        k,  # [..., N]
-        gp_color * gp_opacity,  # [N, C]
-    )  # [..., C]
-
-    return ret

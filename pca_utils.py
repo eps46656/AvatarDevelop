@@ -23,8 +23,8 @@ def feed(
         dst_sum_xxt, (D, D),
     )
 
-    inc_sum_x = torch.einsum("...i -> i", x)
-    inc_sum_xxt = torch.einsum("...i, ...j -> ij", x, x)
+    inc_sum_x = utils.einsum("...i -> i", x)
+    inc_sum_xxt = utils.einsum("...i, ...j -> ij", x, x)
 
     if inplace:
         dst_sum_x += inc_sum_x

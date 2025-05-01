@@ -17,25 +17,22 @@ class AvatarModel:
 
         kin_tree: kin_utils.KinTree,
 
-        mesh_graph: mesh_utils.MeshGraph,
-        tex_mesh_graph: mesh_utils.MeshGraph,
+        mesh_graph: typing.Optional[mesh_utils.MeshGraph],
+        tex_mesh_graph: typing.Optional[mesh_utils.MeshGraph],
 
         joint_T: torch.Tensor,  # [..., J, 4, 4]
 
         vert_pos: torch.Tensor,  # [..., V, 3]
 
-        tex_vert_pos: torch.Tensor,  # [..., TV, 2]
+        tex_vert_pos: typing.Optional[torch.Tensor],  # [..., TV, 2]
 
         vert_trans: torch.Tensor,  # [..., V, 4, 4]
     ):
         J = kin_tree.joints_cnt
 
-        V, F = mesh_graph.verts_cnt, mesh_graph.faces_cnt
-        TV, TF = tex_mesh_graph.verts_cnt, tex_mesh_graph.faces_cnt
+        V, TV = -1, -2
 
-        assert F == 0 or TF == 0 or F == TF
-
-        utils.check_shapes(
+        V, TV = utils.check_shapes(
             joint_T, (..., J, 4, 4),
 
             vert_pos, (..., V, 3),
@@ -43,6 +40,15 @@ class AvatarModel:
 
             vert_trans, (..., V, 4, 4),
         )
+
+        if mesh_graph is not None:
+            assert mesh_graph.verts_cnt == V
+
+        if tex_mesh_graph is not None:
+            assert tex_mesh_graph.verts_cnt == TV
+
+        if mesh_graph is not None and tex_mesh_graph is not None:
+            assert mesh_graph.faces_cnt == tex_mesh_graph.faces_cnt
 
         # ---
 

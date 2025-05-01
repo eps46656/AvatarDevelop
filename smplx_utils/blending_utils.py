@@ -131,6 +131,10 @@ class BlendingParam:
         return utils.try_batch_expand(self.raw_rhand_pose, self.shape, -2)
 
     @property
+    def poses(self) -> torch.Tensor:
+        return utils.try_batch_expand(self.get_poses(), self.shape, -2)
+
+    @property
     def device(self):
         return self.body_shape.device
 
@@ -210,7 +214,7 @@ class BlendingParam:
 
         poses = [
             utils.try_batch_expand(
-                self.global_rot, self.shape, -1).unsqueeze(-2),
+                self.global_rot, self.shape, -1)[..., None, :],
             utils.try_batch_expand(self.body_pose, self.shape, -2),
             utils.try_batch_expand(self.jaw_pose, self.shape, -2),
             utils.try_batch_expand(self.leye_pose, self.shape, -2),
@@ -252,63 +256,63 @@ class BlendingParam:
 
 
 @beartype
+def get_shape_vert_dir(
+    shape_vert_dir: torch.Tensor,  # [..., D, S]
+    shape: torch.Tensor,  # [..., S]
+) -> torch.Tensor:  # [..., D]
+    S, D = -1, -2
+
+    S, D = utils.check_shapes(
+        shape_vert_dir, (..., D, S),
+        shape, (..., S),
+    )
+
+    if shape_vert_dir.numel() == 0 or shape.numel() == 0:
+        return utils.zeros_like(shape_vert_dir, shape=())
+
+    return utils.einsum(
+        "...ds, ...s -> ...d", shape_vert_dir, shape[..., None, :])
+
+
+@beartype
 def blending(
     model_data: ModelData,
     blending_param: BlendingParam,
     device: torch.device,
 ) -> Model:
-    vp = model_data.vert_pos
-    # [..., V, 3]
+    J = model_data.kin_tree.joints_cnt
+    V = model_data.vert_pos.shape[-2]
 
-    V = vp.shape[-2]
+    pre_lbs_vp_trans_t = utils.zeros_like(model_data.vert_pos, shape=())
 
-    if blending_param.body_shape is None:
-        body_shape_vp_trans_t = utils.zeros_like(vp, shape=())
-    else:
-        body_shape_vp_trans_t = torch.einsum(
-            "...vxb, ...b -> ...vx",
-            model_data.body_shape_vert_dir,
-            blending_param.body_shape)
+    if blending_param.body_shape is not None:
+        pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + get_shape_vert_dir(
+            model_data.body_shape_vert_dir, blending_param.body_shape)
+        # [..., V, 3]
 
-    if model_data.expr_shape_vert_dir is None or \
-            blending_param.expr_shape is None:
-        expr_shape_vp_trans_t = utils.zeros_like(vp, shape=())
-    else:
-        expr_shape_vp_trans_t = torch.einsum(
-            "...vxb, ...b -> ...vx",
-            model_data.expr_shape_vert_dir,
-            blending_param.expr_shape)
+    if blending_param.expr_shape is not None:
+        pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + get_shape_vert_dir(
+            model_data.expr_shape_vert_dir, blending_param.expr_shape)
+        # [..., V, 3]
 
-    # [..., V, 3]
+    binding_joint_t = model_data.joint_t_mean
 
-    if blending_param.body_shape is None:
-        body_shape_joint_trans_t = utils.zeros_like(
-            model_data.joint_t_mean, shape=())
-    else:
-        body_shape_joint_trans_t = torch.einsum(
+    if blending_param.body_shape is not None:
+        binding_joint_t = binding_joint_t + utils.einsum(
             "...jxb, ...b -> ...jx",
             model_data.body_shape_joint_dir,
             blending_param.body_shape,
         )
+        # [..., J, 3]
 
-    if model_data.expr_shape_joint_dir is None or \
-            blending_param.expr_shape is None:
-        expr_shape_joint_trans_t = utils.zeros_like(
-            model_data.joint_t_mean, shape=())
-    else:
-        expr_shape_joint_trans_t = torch.einsum(
+    if model_data.expr_shape_joint_dir is not None and \
+            blending_param.expr_shape is not None:
+        binding_joint_t = binding_joint_t + utils.einsum(
             "...jxb,...b->...jx",
             model_data.expr_shape_joint_dir,
             blending_param.expr_shape,
         )
-
-    binding_joint_t = \
-        model_data.joint_t_mean + \
-        body_shape_joint_trans_t + \
-        expr_shape_joint_trans_t
-    # [..., J, 3]
-
-    J = model_data.kin_tree.joints_cnt
+        # [..., J, 3]
 
     binding_pose_r = utils.eye_like(binding_joint_t, shape=(J, 3, 3))
 
@@ -334,16 +338,11 @@ def blending(
         *pose_feature.shape[:-3], (J - 1) * 3 * 3)
     # [..., (J - 1) * 3 * 3]
 
-    pose_vp_trans_t = torch.einsum(
+    pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + utils.einsum(
         "...vxp, ...p -> ...vx",
         model_data.pose_vert_dir,  # [..., V, 3, (J - 1) * 3 * 3]
         pose_feature,  # [..., (J - 1) * 3 * 3]
     )
-
-    pre_lbs_vp_trans_t = \
-        body_shape_vp_trans_t + \
-        expr_shape_vp_trans_t + \
-        pose_vp_trans_t
     # [..., V, 3]
 
     lbs_opr: blending_utils.LBSOperator = blending_utils.LBSOperator.from_binding_and_target(
@@ -385,8 +384,7 @@ def blending(
     total_vp_trans[..., :3, :3] = lbs_vp_trans_r
     total_vp_trans[..., :3, 3] = \
         (lbs_vp_trans_r @ pre_lbs_vp_trans_t[..., None])[..., 0] + \
-        lbs_vp_trans_t + \
-        global_transl
+        lbs_vp_trans_t + global_transl[..., None, :]
 
     total_vp_trans_r = total_vp_trans[..., :3, :3]
     total_vp_trans_t = total_vp_trans[..., :3, 3]
@@ -402,12 +400,13 @@ def blending(
 
     """
 
-    target_vp = utils.do_rt(total_vp_trans_r, total_vp_trans_t, vp)
+    target_vp = utils.do_rt(
+        total_vp_trans_r, total_vp_trans_t, model_data.vert_pos)
     # [..., V, 3]
 
     target_joint_T = lbs_opr.target_joint_T.clone()
 
-    target_joint_T[..., :, :3, 3] += global_transl
+    target_joint_T[..., :, :3, 3] += global_transl[..., None, :]
 
     return Model(
         kin_tree=model_data.kin_tree,

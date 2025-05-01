@@ -151,7 +151,7 @@ class FaceSegmentationResult:
 
 
 @beartype
-class FaceSegmentor:
+class MeshSegmentor:
     def __init__(
         self,
         mesh_graph: mesh_utils.MeshGraph,
@@ -177,8 +177,8 @@ class FaceSegmentor:
             self.vert_ballot_box = self.vert_ballot_box.to(device)
 
     @staticmethod
-    def empty(dtype: torch.dtype, device: torch.device) -> FaceSegmentor:
-        return FaceSegmentor(
+    def empty(dtype: torch.dtype, device: torch.device) -> MeshSegmentor:
+        return MeshSegmentor(
             mesh_utils.MeshGraph.empty(0),
             torch.zeros((1, 0), dtype=dtype, device=device),
             torch.zeros((1, 0), dtype=dtype, device=device),
@@ -191,8 +191,8 @@ class FaceSegmentor:
         objs_cnt: int,
         dtype: torch.dtype,
         device: torch.device,
-    ) -> FaceSegmentor:
-        return FaceSegmentor(
+    ) -> MeshSegmentor:
+        return MeshSegmentor(
             mesh_graph,
 
             torch.zeros((mesh_graph.verts_cnt + 1, objs_cnt),
@@ -207,8 +207,8 @@ class FaceSegmentor:
         state_dict: typing.Mapping[str, object],
         dtype: typing.Optional[torch.dtype],
         device: torch.device,
-    ) -> FaceSegmentor:
-        return FaceSegmentor(
+    ) -> MeshSegmentor:
+        return MeshSegmentor(
             mesh_utils.MeshGraph.from_state_dict(
                 state_dict["mesh_graph"], device),
 
@@ -229,8 +229,8 @@ class FaceSegmentor:
         }
 
     def load_state_dict(
-            self, state_dict: typing.Mapping[str, object]) -> FaceSegmentor:
-        face_segmentor: FaceSegmentor = FaceSegmentor.from_state_dict(
+            self, state_dict: typing.Mapping[str, object]) -> MeshSegmentor:
+        face_segmentor: MeshSegmentor = MeshSegmentor.from_state_dict(
             state_dict, self.mesh_graph.device)
 
         self.mesh_graph = face_segmentor.mesh_graph

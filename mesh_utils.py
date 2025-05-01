@@ -7,6 +7,11 @@ import functools
 import itertools
 import typing
 
+# import pymeshlab
+# import pymesh
+
+import open3d as o3d
+
 import torch
 import tqdm
 import trimesh
@@ -724,18 +729,27 @@ class MeshGraph:
     def show(
         self,
         vert_pos: torch.Tensor,  # [V, 3]
-    ):
+    ) -> None:
         V = self.vert_deg.shape[0]
 
         utils.check_shapes(vert_pos, (V, 3))
 
+        vert_pos = vert_pos.detach().to(utils.CPU_DEVICE)
+
         tm = trimesh.Trimesh(
-            vertices=vert_pos.detach().to(utils.CPU_DEVICE),
+            vertices=vert_pos,
             faces=self.f_to_vvv.to(utils.CPU_DEVICE),
             validate=True,
         )
 
-        tm.show()
+        pc = trimesh.points.PointCloud(vert_pos)
+
+        scene = trimesh.Scene()
+
+        scene.add_geometry(tm)
+        scene.add_geometry(pc)
+
+        scene.show()
 
 
 @beartype
@@ -916,7 +930,7 @@ class MeshData:
     def face_norm(self) -> torch.Tensor:  # [..., F, 3]
         assert self.vert_pos.shape[-1] == 3
 
-        return self.face_area_vec / self.face_area.unsqueeze(-1)
+        return self.face_area_vec / self.face_area[..., None]
 
     @functools.cached_property
     def face_area(self) -> torch.Tensor:  # [..., F]
@@ -958,13 +972,13 @@ class MeshData:
 
     @functools.cached_property
     def face_cot_angle(self) -> torch.Tensor:  # [..., F, 3]
-        return self.face_edge_diff * (0.25 / self.face_area).unsqueeze(-1)
+        return self.face_edge_diff * (0.25 / self.face_area)[..., None]
 
     @functools.cached_property
     def uni_lap_diff(self) -> torch.Tensor:  # [..., V, D]
         return calc_adj_sums(
             self.mesh_graph.e_to_vv, self.vert_pos
-        ) * self.mesh_graph.inv_vert_deg.unsqueeze(-1) - self.vert_pos
+        ) * self.mesh_graph.inv_vert_deg[..., None] - self.vert_pos
 
     @functools.cached_property
     def cot_lap_diff(self) -> torch.Tensor:  # [..., V, D]
@@ -984,7 +998,7 @@ class MeshData:
         v_sum_weight.index_add_(-1, self.mesh_graph.e_to_vv[:, 0], e_weight)
         v_sum_weight.index_add_(-1, self.mesh_graph.e_to_vv[:, 1], e_weight)
 
-        weighted_e_diff = self.edge_dir.detach() * e_weight.unsqueeze(-1)
+        weighted_e_diff = self.edge_dir.detach() * e_weight[..., None]
 
         buffer = utils.zeros_like(self.vert_pos)
         # [..., V, D]
@@ -994,7 +1008,7 @@ class MeshData:
         buffer.index_add_(
             -2, self.mesh_graph.e_to_vv[:, 1], weighted_e_diff, alpha=-1)
 
-        return buffer / v_sum_weight.unsqueeze(-1)
+        return buffer / v_sum_weight[..., None]
 
     @functools.cached_property
     def l1_uni_lap_smoothness(self) -> torch.Tensor:  # [...]
@@ -1079,6 +1093,85 @@ class MeshData:
 
         return torch.linalg.pinv(m)
 
+    def remesh(self, target_length: float, iterations: int) -> MeshData:
+        """
+        ms = pymeshlab.MeshSet()
+
+        ms.add_mesh(pymeshlab.Mesh(
+            vertex_matrix=self.vert_pos.numpy(force=True),
+            face_matrix=self.mesh_graph.f_to_vvv.numpy(force=True)
+        ), "cur_mesh")
+
+        ms.apply_filter(
+            'meshing_isotropic_explicit_remeshing',
+            targetlen=pymeshlab.PureValue(target_length),
+            iterations=iterations,
+        )
+
+        new_mesh = ms.current_mesh()
+
+        new_vert_pos = torch.from_numpy(new_mesh.vertex_matrix()).to(
+            self.vert_pos)
+
+        new_f_to_vvv = torch.from_numpy(new_mesh.face_matrix()).to(
+            self.mesh_graph.f_to_vvv)
+
+        """
+
+        """
+        mesh = pymesh.form_mesh(
+            self.vert_pos.numpy(force=True),
+            self.mesh_graph.f_to_vvv.numpy(force=True))
+
+        mesh = pymesh.remove_isolated_vertices(mesh)
+        mesh = pymesh.remove_duplicated_faces(mesh)
+        mesh = pymesh.remove_degenerated_triangles(mesh)
+
+        new_mesh = pymesh.isotropic_remeshing(
+            mesh, target_edge_length=target_length, iterations=iterations)
+
+        new_vert_pos = torch.from_numpy(new_mesh.vertices).to(
+            self.vert_pos)
+
+        new_f_to_vvv = torch.from_numpy(new_mesh.faces).to(
+            self.mesh_graph.f_to_vvv)
+
+        """
+
+        mesh = o3d.geometry.TriangleMesh()
+
+        mesh.vertices = o3d.utility.Vector3dVector(
+            self.vert_pos.numpy(force=True))
+        mesh.triangles = o3d.utility.Vector3iVector(
+            self.mesh_graph.f_to_vvv.numpy(force=True))
+
+        mesh.remove_duplicated_vertices()
+        mesh.remove_degenerate_triangles()
+        mesh.remove_non_manifold_edges()
+
+        mesh = mesh.filter_smooth_simple(
+            number_of_iterations=iterations)
+
+        mesh = mesh.simplify_quadric_decimation(self.mesh_graph.faces_cnt)
+
+        new_vert_pos = torch.tensor(
+            mesh.vertices,
+            dtype=self.vert_pos.dtype,
+            device=self.vert_pos.device)
+
+        new_f_to_vvv = torch.tensor(
+            mesh.triangles,
+            dtype=self.mesh_graph.f_to_vvv.dtype,
+            device=self.mesh_graph.f_to_vvv.device)
+
+        new_mesh_data = MeshData(MeshGraph.from_faces(
+            new_vert_pos.shape[0],
+            new_f_to_vvv,
+            self.mesh_graph.device,
+        ), new_vert_pos)
+
+        return new_mesh_data
+
     def calc_unsigned_dist(
         self,
         point_pos: torch.Tensor,  # [..., D]
@@ -1104,7 +1197,7 @@ class MeshData:
         kc = ks[..., 2]
         # [..., F]
 
-        p_to_v_dist = utils.vec_norm(pp.unsqueeze(-2) - self.vert_pos)
+        p_to_v_dist = utils.vec_norm(pp[..., None, :] - self.vert_pos)
         # ([..., 3] -> [..., 1, 3]) - [..., V, 3]
         # [..., V, 3]
         # [..., V]
@@ -1128,7 +1221,7 @@ class MeshData:
             kz.gather(-1, min_p_to_fi) < 0,  # [..., 1]
             -min_p_to_f,  # [..., 1]
             min_p_to_f,  # [..., 1]
-        ).squeeze(-1)
+        )[..., 0]
 
         return ret
 
@@ -1157,7 +1250,7 @@ class MeshData:
         kz = ks[..., 2]
         # [..., F]
 
-        p_to_v_dist = utils.vec_norm(pp.unsqueeze(-2) - self.vert_pos)
+        p_to_v_dist = utils.vec_norm(pp[..., None, :] - self.vert_pos)
         # ([..., 3] -> [..., 1, 3]) - [..., V, 3]
         # [..., V, 3]
         # [..., V]
@@ -1181,7 +1274,7 @@ class MeshData:
             kz.gather(-1, min_p_to_fi) < 0,  # [..., 1]
             -min_p_to_f,  # [..., 1]
             min_p_to_f,  # [..., 1]
-        ).squeeze(-1)
+        )[..., 0]
 
         return ret
 
@@ -1211,8 +1304,7 @@ class MeshData:
             ], dtype=utils.FLOAT).inverse()
 
             ks = (t @ torch.tensor(
-                [[p[0]], [p[1]], [p[2]], [1]], dtype=utils.FLOAT)) \
-                .unsqueeze(-1)
+                [[p[0]], [p[1]], [p[2]], [1]], dtype=utils.FLOAT))[..., None]
 
             kb = ks[0]
             kc = ks[1]
@@ -1291,14 +1383,71 @@ class MeshData:
     ) -> torch.Tensor:  # [V, 3]
         pass
 
-    def show(
-        self,
-        vert_pos: torch.Tensor,  # [V, 3]
-    ):
-        tm = trimesh.Trimesh(
-            vertices=vert_pos.detach().to(utils.CPU_DEVICE),
-            faces=self.mesh_graph.f_to_vvv.to(utils.CPU_DEVICE),
-            validate=True,
-        )
+    def show(self) -> None:
+        self.mesh_graph.show(self.vert_pos)
 
-        tm.show()
+
+@beartype
+def read_obj(
+    f: typing.TextIO,
+) -> tuple[
+    list[tuple[int, int, int]],  # vert_pos_faces[F, 3]
+    list[tuple[int, int, int]],  # tex_vert_pos_faces[F, 3]
+    list[tuple[int, int, int]],  # vert_nor_faces[F, 3]
+    list[tuple[float, float, float]],  # vert_pos[VP, 3]
+    list[tuple[float, float, float]],  # tex_vert_pos[TVP, 3]
+    list[tuple[float, float, float]],  # vert_nor[VN, 3]
+]:
+    vert_pos_faces: list[tuple[int, int, int]] = list()
+    tex_vert_pos_faces: list[tuple[int, int, int]] = list()
+    vert_nor_faces: list[tuple[int, int, int]] = list()
+
+    vert_pos: list[tuple[float, float, float]] = list()
+    tex_vert_pos: list[tuple[float, float, float]] = list()
+    vert_nor: list[tuple[float, float, float]] = list()
+
+    def _read_float3(ks) -> tuple[float, float, float]:
+        ka = float(ks[1]) if 1 < len(ks) else 0.0
+        kb = float(ks[2]) if 2 < len(ks) else 0.0
+        kc = float(ks[3]) if 3 < len(ks) else 0.0
+
+        return ka, kb, kc
+
+    def _read_int3(ks) -> tuple[int, int, int]:
+        ka = int(ks[0]) if 0 < len(ks) else 0
+        kb = int(ks[1]) if 1 < len(ks) else 0
+        kc = int(ks[2]) if 2 < len(ks) else 0
+
+        return ka, kb, kc
+
+    def _handle_f(parts):
+        vpa, vta, vna = _read_int3(parts[1].split("/"))
+        vpb, vtb, vnb = _read_int3(parts[2].split("/"))
+        vpc, vtc, vnc = _read_int3(parts[3].split("/"))
+
+        vert_pos_faces.append((vpa - 1, vpb - 1, vpc - 1))
+        tex_vert_pos_faces.append((vta - 1, vtb - 1, vtc - 1))
+        vert_nor_faces.append((vna - 1, vnb - 1, vnc - 1))
+
+    for line in f:
+        parts = line.split()
+
+        if len(parts) == 0:
+            continue
+
+        match parts[0]:
+            case "v":
+                vert_pos.append(_read_float3(parts))
+
+            case "vt":
+                tex_vert_pos.append(_read_float3(parts))
+
+            case "vn":
+                vert_nor.append(_read_float3(parts))
+
+            case "f":
+                _handle_f(parts)
+
+    return \
+        vert_pos_faces, tex_vert_pos_faces, vert_nor_faces, \
+        vert_pos, tex_vert_pos, vert_nor

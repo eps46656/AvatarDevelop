@@ -33,3 +33,7 @@ SMPLX_NEUTRAL_MODEL_PATH = SMPLX_MODELS_DIR / "SMPLX_NEUTRAL.pkl"
 # ---
 
 PEOPLE_SNAPSHOT_DIR = DIR / "people_snapshot_public"
+
+# ---
+
+GART_DIR = DIR / "GART"

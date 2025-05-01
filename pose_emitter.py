@@ -56,7 +56,7 @@ async def LoopEmitSMPLXParams(smplx_params, duration):
 def main1():
     smplx_params = list()
 
-    smplx_params_dir = DIR / "sample5/smplx_params"
+    smplx_params_dir = DIR / "sample4/smplx_params"
 
     for frame_idx in range(len(glob.glob(f"{smplx_params_dir}/*.json"))):
         # filename = smplx_params_dir / f"smplx_param_{frame_idx:0>5}.json"

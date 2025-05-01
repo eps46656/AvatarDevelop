@@ -181,25 +181,39 @@ class Module(torch.nn.Module):
             target_faces=target_faces,
         )
 
+        utils.torch_cuda_sync()
+
         face_src_table = mesh_subdivision_result.face_src_table
 
         self.gp_rot_z = torch.nn.Parameter(self.gp_rot_z[face_src_table])
         # [F_]
 
+        utils.torch_cuda_sync()
+
         self.gp_scale_x = torch.nn.Parameter(self.gp_scale_x[face_src_table])
         # [F_]
+
+        utils.torch_cuda_sync()
 
         self.gp_scale_y = torch.nn.Parameter(self.gp_scale_y[face_src_table])
         # [F_]
 
+        utils.torch_cuda_sync()
+
         self.gp_scale_z = torch.nn.Parameter(self.gp_scale_z[face_src_table])
         # [F_]
+
+        utils.torch_cuda_sync()
 
         self.gp_color = torch.nn.Parameter(self.gp_color[face_src_table])
         # [F_, C]
 
+        utils.torch_cuda_sync()
+
         self.gp_opacity = torch.nn.Parameter(self.gp_opacity[face_src_table])
         # [F_]
+
+        utils.torch_cuda_sync()
 
         return self
 
@@ -312,8 +326,6 @@ class Module(torch.nn.Module):
             camera_config=camera_config,
             camera_transform=camera_transform,
 
-            sh_degree=0,
-
             bg_color=torch.ones((C,), dtype=world_gp_result.gp_color.dtype),
 
             gp_mean=world_gp_result.gp_mean,
@@ -328,7 +340,7 @@ class Module(torch.nn.Module):
             device=device,
         )  # [...]
 
-        gp_render_img = gp_render_result.colors
+        gp_render_img = gp_render_result.color
         # [..., C, H, W]
 
         if not self.training:

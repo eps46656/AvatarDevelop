@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import collections
+import typing
+
 import torch
 from beartype import beartype
 
@@ -90,6 +93,19 @@ class ObjectTransform:
 
         return ObjectTransform(trans, inv_trans)
 
+    @staticmethod
+    def from_state_dict(
+        state_dict: collections.OrderedDict[str, torch.Tensor],
+        dtype: typing.Optional[torch.dtype] = None,
+        device: typing.Optional[torch.device] = None,
+    ) -> ObjectTransform:
+        return ObjectTransform(
+            utils.tensor_deserialize(
+                state_dict["trans"], dtype, device),
+            utils.tensor_deserialize(
+                state_dict["inv_trans"], dtype, device),
+        )
+
     @property
     def shape(self) -> torch.Size:
         return self.trans.shape[:-2]
@@ -166,6 +182,22 @@ class ObjectTransform:
             self.inv_trans[*idx, :, :],
         )
 
+    def state_dict(self) -> collections.OrderedDict[str, torch.Tensor]:
+        return collections.OrderedDict([
+            ("trans", utils.tensor_serialize(self.trans)),
+            ("inv_trans", utils.tensor_serialize(self.inv_trans)),
+        ])
+
+    def load_state_dict(
+        self,
+        state_dict: collections.OrderedDict[str, torch.Tensor],
+    ) -> None:
+        self.trans = utils.tensor_deserialize(
+            state_dict["trans"], self.dtype, self.device)
+
+        self.inv_trans = utils.tensor_deserialize(
+            state_dict["inv_trans"], self.dtype, self.device)
+
     def expand(self, shape) -> ObjectTransform:
         s = (*shape, 4, 4)
 
@@ -180,7 +212,7 @@ class ObjectTransform:
 
         # return: coord_a -> coord_b
 
-        return dst.trans @ self.inv_trans
+        return utils.mat_mul(dst.trans, self.inv_trans)
 
     def collapse(
         self,
@@ -191,7 +223,7 @@ class ObjectTransform:
 
         # return: object <-> coord_b
 
-        new_trans = self.trans @ trans
+        new_trans = utils.mat_mul(self.trans, trans)
 
         return ObjectTransform(new_trans, new_trans.inverse())
 

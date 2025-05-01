@@ -24,8 +24,12 @@ class ModelDataSubdivisionResult:
 @beartype
 @dataclasses.dataclass
 class ModelDataExtractionResult:
-    mesh_graph_extraction_result: mesh_utils.MeshExtractionResult
-    tex_mesh_graph_extraction_result: mesh_utils.MeshExtractionResult
+    mesh_graph_extraction_result: typing.Optional[
+        mesh_utils.MeshExtractionResult]
+
+    tex_mesh_graph_extraction_result: typing.Optional[
+        mesh_utils.MeshExtractionResult]
+
     model_data: ModelData
 
 
@@ -40,26 +44,27 @@ class ModelData:
         jaw_joints_cnt: int = 0,  # JJ
         eye_joints_cnt: int = 0,  # EYEJ
 
-        mesh_graph: mesh_utils.MeshGraph,
-        tex_mesh_graph: mesh_utils.MeshGraph,
+        mesh_graph: typing.Optional[mesh_utils.MeshGraph],
+        tex_mesh_graph: typing.Optional[mesh_utils.MeshGraph],
 
-        joint_t_mean: torch.Tensor,  # [..., J, 3]
+        joint_t_mean: typing.Optional[torch.Tensor],  # [..., J, 3]
 
-        vert_pos: torch.Tensor,  # [..., V, 3]
-        tex_vert_pos: torch.Tensor,  # [..., TV, 2]
+        vert_pos: typing.Optional[torch.Tensor],  # [..., V, 3]
+        tex_vert_pos: typing.Optional[torch.Tensor],  # [..., TV, 2]
 
-        lbs_weight: torch.Tensor,  # [..., V, J]
+        lbs_weight: typing.Optional[torch.Tensor],  # [..., V, J]
 
-        body_shape_joint_dir: torch.Tensor,  # [..., J, 3, BS]
-        expr_shape_joint_dir: torch.Tensor,  # [..., J, 3, ES]
+        body_shape_joint_dir: typing.Optional[torch.Tensor],  # [..., J, 3, BS]
+        expr_shape_joint_dir: typing.Optional[torch.Tensor],  # [..., J, 3, ES]
 
-        body_shape_vert_dir: torch.Tensor,  # [..., V, 3, BS]
-        expr_shape_vert_dir: torch.Tensor,  # [..., V, 3, ES]
+        body_shape_vert_dir: typing.Optional[torch.Tensor],  # [..., V, 3, BS]
+        expr_shape_vert_dir: typing.Optional[torch.Tensor],  # [..., V, 3, ES]
 
-        lhand_pose_mean: torch.Tensor,  # [..., HANDJ, 3]
-        rhand_pose_mean: torch.Tensor,  # [..., HANDJ, 3]
+        lhand_pose_mean: typing.Optional[torch.Tensor],  # [..., HANDJ, 3]
+        rhand_pose_mean: typing.Optional[torch.Tensor],  # [..., HANDJ, 3]
 
-        pose_vert_dir: torch.Tensor,  # [..., V, 3, (J - 1) * 3 * 3]
+        pose_vert_dir: typing.Optional[torch.Tensor],
+        # [..., V, 3, (J - 1) * 3 * 3]
     ):
         J = kin_tree.joints_cnt
 
@@ -71,14 +76,9 @@ class ModelData:
         assert 0 <= JAWJ
         assert 0 <= EYEJ
 
-        V, F = mesh_graph.verts_cnt, mesh_graph.faces_cnt
-        TV, TF = tex_mesh_graph.verts_cnt, tex_mesh_graph.faces_cnt
+        HANDJ, BS, ES, V, TV = -1, -2, -3, -4, -5
 
-        assert F == 0 or TF == 0 or F == TF
-
-        HANDJ, BS, ES = -1, -2, -3
-
-        HANDJ, BS, ES = utils.check_shapes(
+        HANDJ, BS, ES, V, TV = utils.check_shapes(
             vert_pos, (..., V, 3),
             tex_vert_pos, (..., TV, 2),
 
@@ -95,6 +95,15 @@ class ModelData:
 
             pose_vert_dir, (..., V, 3, (J - 1) * 3 * 3),
         )
+
+        if mesh_graph is not None:
+            assert mesh_graph.verts_cnt == V
+
+        if tex_mesh_graph is not None:
+            assert tex_mesh_graph.verts_cnt == TV
+
+        if mesh_graph is not None and tex_mesh_graph is not None:
+            assert mesh_graph.faces_cnt == tex_mesh_graph.faces_cnt
 
         assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
@@ -129,7 +138,8 @@ class ModelData:
 
     @property
     def hand_joints_cnt(self) -> int:
-        return self.lhand_pose_mean.shape[-2]
+        return 0 if self.lhand_pose_mean is None else \
+            self.lhand_pose_mean.shape[-2]
 
     @property
     def joints_cnt(self) -> int:
@@ -137,23 +147,25 @@ class ModelData:
 
     @property
     def verts_cnt(self) -> int:
-        return self.vert_pos.shape[0]
+        return 0 if self.vert_pos is None else self.vert_pos.shape[0]
 
     @property
     def tex_verts_cnt(self) -> int:
-        return self.tex_vert_pos.shape[0]
+        return 0 if self.tex_vert_pos is None else self.tex_vert_pos.shape[0]
 
     @property
     def faces_cnt(self) -> int:
-        return self.mesh_graph.faces_cnt
+        return 0 if self.mesh_graph is None else self.mesh_graph.faces_cnt
 
     @property
     def body_shapes_cnt(self) -> int:
-        return self.body_shape_vert_dir.shape[-1]
+        return 0 if self.body_shape_vert_dir is None else \
+            self.body_shape_vert_dir.shape[-1]
 
     @property
     def expr_shapes_cnt(self) -> int:
-        return self.expr_shape_vert_dir.shape[-1]
+        return 0 if self.expr_shape_vert_dir is None else \
+            self.expr_shape_vert_dir.shape[-1]
 
     @staticmethod
     def empty(
@@ -331,19 +343,19 @@ class ModelData:
         mesh_graph = mesh_utils.MeshGraph.from_faces(V, faces, device)
         tex_mesh_graph = mesh_utils.MeshGraph.from_faces(TV, tex_faces, device)
 
-        joint_t_mean = torch.einsum(
+        joint_t_mean = utils.einsum(
             "...jv, ...vx -> ...jx",
             joint_regressor,
             vert_pos,
         )
 
-        body_shape_joint_dir = torch.einsum(
+        body_shape_joint_dir = utils.einsum(
             "...jv, ...vxb -> ...jxb",
             joint_regressor,
             body_shape_vert_dir,
         )
 
-        expr_shape_joint_dir = torch.einsum(
+        expr_shape_joint_dir = utils.einsum(
             "...jv, ...vxb -> ...jxb",
             joint_regressor,
             expr_shape_vert_dir,
@@ -366,23 +378,23 @@ class ModelData:
             mesh_graph=mesh_graph,
             tex_mesh_graph=tex_mesh_graph,
 
-            joint_t_mean=joint_t_mean.to(device, dtype),
+            joint_t_mean=f(joint_t_mean),
 
-            vert_pos=vert_pos.to(device, dtype),
-            tex_vert_pos=tex_vert_pos.to(device, dtype),
+            vert_pos=f(vert_pos),
+            tex_vert_pos=f(tex_vert_pos),
 
-            lbs_weight=lbs_weight.to(device, dtype),
+            lbs_weight=f(lbs_weight),
 
-            body_shape_joint_dir=body_shape_joint_dir.to(device, dtype),
-            expr_shape_joint_dir=expr_shape_joint_dir.to(device, dtype),
+            body_shape_joint_dir=f(body_shape_joint_dir),
+            expr_shape_joint_dir=f(expr_shape_joint_dir),
 
-            body_shape_vert_dir=body_shape_vert_dir.to(device, dtype),
-            expr_shape_vert_dir=expr_shape_vert_dir.to(device, dtype),
+            body_shape_vert_dir=f(body_shape_vert_dir),
+            expr_shape_vert_dir=f(expr_shape_vert_dir),
 
-            lhand_pose_mean=lhand_pose_mean.to(device, dtype),
-            rhand_pose_mean=rhand_pose_mean.to(device, dtype),
+            lhand_pose_mean=f(lhand_pose_mean),
+            rhand_pose_mean=f(rhand_pose_mean),
 
-            pose_vert_dir=pose_vert_dir.to(device, dtype),
+            pose_vert_dir=f(pose_vert_dir),
         )
 
     @staticmethod
@@ -411,6 +423,9 @@ class ModelData:
             tex_vert_pos, (..., -2, 2),
         )
 
+        faces = try_fetch_int("faces")
+        tex_faces = try_fetch_int("tex_faces")
+
         return ModelData(
             kin_tree=kin_utils.KinTree.from_parents(
                 state_dict["joint_parents"]),
@@ -419,10 +434,11 @@ class ModelData:
             jaw_joints_cnt=state_dict["jaw_joints_cnt"],
             eye_joints_cnt=state_dict["eye_joints_cnt"],
 
-            mesh_graph=mesh_utils.MeshGraph.from_faces(
-                V, try_fetch_int("faces"), device),
-            tex_mesh_graph=mesh_utils.MeshGraph.from_faces(
-                TV, try_fetch_int("tex_faces"), device),
+            mesh_graph=None if faces is None else
+            mesh_utils.MeshGraph.from_faces(V, faces, device),
+
+            tex_mesh_graph=None if tex_faces is None else
+            mesh_utils.MeshGraph.from_faces(TV, tex_faces, device),
 
             joint_t_mean=try_fetch_float("joint_t_mean"),
 
@@ -457,8 +473,10 @@ class ModelData:
             ("jaw_joints_cnt", self.jaw_joints_cnt),
             ("eye_joints_cnt", self.eye_joints_cnt),
 
-            ("faces", to_int_np(self.mesh_graph.f_to_vvv)),
-            ("tex_faces", to_int_np(self.tex_mesh_graph.f_to_vvv)),
+            ("faces", None if self.mesh_graph is None else to_int_np(
+                self.mesh_graph.f_to_vvv)),
+            ("tex_faces", None if self.tex_mesh_graph is None else to_int_np(
+                self.tex_mesh_graph.f_to_vvv)),
 
             ("joint_t_mean", to_float_np(self.joint_t_mean)),
 
@@ -480,6 +498,9 @@ class ModelData:
         ])
 
     def load_state_dict(self, state_dict: dict) -> None:
+        def f(x, *args):
+            return None if x is None else x.to(*args)
+
         model_data = ModelData.from_state_dict(state_dict, device=self.device)
 
         self.kin_tree = model_data.kin_tree
@@ -488,43 +509,42 @@ class ModelData:
         self.jaw_joints_cnt = model_data.jaw_joints_cnt
         self.eye_joints_cnt = model_data.eye_joints_cnt
 
-        self.mesh_graph = model_data.mesh_graph.to(self.device)
-        self.tex_mesh_graph = model_data.tex_mesh_graph.to(self.device)
+        self.mesh_graph = f(model_data.mesh_graph, self.device)
+        self.tex_mesh_graph = f(model_data.tex_mesh_graph, self.device)
 
-        self.joint_t_mean = model_data.joint_t_mean.to(
-            self.device, self.joint_t_mean.dtype)
+        self.joint_t_mean = f(model_data.joint_t_mean, self.joint_t_mean)
 
-        self.vert_pos = model_data.vert_pos.to(
-            self.device, self.vert_pos.dtype)
-        self.tex_vert_pos = model_data.tex_vert_pos.to(
-            self.device, self.tex_vert_pos.dtype)
+        self.vert_pos = f(model_data.vert_pos, self.vert_pos)
+        self.tex_vert_pos = f(model_data.tex_vert_pos, self.tex_vert_pos)
 
-        self.lbs_weight = model_data.lbs_weight.to(
-            self.device, self.lbs_weight.dtype)
+        self.lbs_weight = f(model_data.lbs_weight, self.lbs_weight)
 
-        self.body_shape_joint_dir = model_data.body_shape_joint_dir.to(
-            self.device, self.body_shape_joint_dir.dtype)
-        self.expr_shape_joint_dir = model_data.expr_shape_joint_dir.to(
-            self.device, self.expr_shape_joint_dir.dtype)
+        self.body_shape_joint_dir = f(
+            model_data.body_shape_joint_dir, self.body_shape_joint_dir)
+        self.expr_shape_joint_dir = f(
+            model_data.expr_shape_joint_dir, self.expr_shape_joint_dir)
 
-        self.body_shape_vert_dir = model_data.body_shape_vert_dir.to(
-            self.device, self.body_shape_vert_dir.dtype)
-        self.expr_shape_vert_dir = model_data.expr_shape_vert_dir.to(
-            self.device, self.expr_shape_vert_dir.dtype)
+        self.body_shape_vert_dir = f(
+            model_data.body_shape_vert_dir, self.body_shape_vert_dir)
+        self.expr_shape_vert_dir = f(
+            model_data.expr_shape_vert_dir, self.expr_shape_vert_dir)
 
-        self.lhand_pose_mean = model_data.lhand_pose_mean.to(
-            self.device, self.lhand_pose_mean.dtype)
-        self.rhand_pose_mean = model_data.rhand_pose_mean.to(
-            self.device, self.rhand_pose_mean.dtype)
+        self.lhand_pose_mean = f(
+            model_data.lhand_pose_mean, self.lhand_pose_mean)
+        self.rhand_pose_mean = f(
+            model_data.rhand_pose_mean, self.rhand_pose_mean)
 
-        self.pose_vert_dir = model_data.pose_vert_dir.to(
-            self.device, self.pose_vert_dir.dtype)
+        self.pose_vert_dir = f(
+            model_data.pose_vert_dir, self.pose_vert_dir)
 
     @property
     def device(self):
         return self.vert_pos.device
 
     def to(self, *args, **kwargs) -> ModelData:
+        def f(x):
+            return None if x is None else x.to(*args, **kwargs)
+
         return ModelData(
             kin_tree=self.kin_tree,
 
@@ -532,26 +552,26 @@ class ModelData:
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
 
-            mesh_graph=self.mesh_graph.to(*args, **kwargs),
-            tex_mesh_graph=self.tex_mesh_graph.to(*args, **kwargs),
+            mesh_graph=f(self.mesh_graph),
+            tex_mesh_graph=f(self.tex_mesh_graph),
 
-            joint_t_mean=self.joint_t_mean.to(*args, **kwargs),
+            joint_t_mean=f(self.joint_t_mean),
 
-            vert_pos=self.vert_pos.to(*args, **kwargs),
-            tex_vert_pos=self.tex_vert_pos.to(*args, **kwargs),
+            vert_pos=f(self.vert_pos),
+            tex_vert_pos=f(self.tex_vert_pos),
 
-            lbs_weight=self.lbs_weight.to(*args, **kwargs),
+            lbs_weight=f(self.lbs_weight),
 
-            body_shape_joint_dir=self.body_shape_joint_dir.to(*args, **kwargs),
-            expr_shape_joint_dir=self.expr_shape_joint_dir.to(*args, **kwargs),
+            body_shape_joint_dir=f(self.body_shape_joint_dir),
+            expr_shape_joint_dir=f(self.expr_shape_joint_dir),
 
-            body_shape_vert_dir=self.body_shape_vert_dir.to(*args, **kwargs),
-            expr_shape_vert_dir=self.expr_shape_vert_dir.to(*args, **kwargs),
+            body_shape_vert_dir=f(self.body_shape_vert_dir),
+            expr_shape_vert_dir=f(self.expr_shape_vert_dir),
 
-            lhand_pose_mean=self.lhand_pose_mean.to(*args, **kwargs),
-            rhand_pose_mean=self.rhand_pose_mean.to(*args, **kwargs),
+            lhand_pose_mean=f(self.lhand_pose_mean),
+            rhand_pose_mean=f(self.rhand_pose_mean),
 
-            pose_vert_dir=self.pose_vert_dir.to(*args, **kwargs),
+            pose_vert_dir=f(self.pose_vert_dir),
         )
 
     def subdivide(
@@ -562,6 +582,8 @@ class ModelData:
             typing.Optional[mesh_utils.MeshSubdivisionResult] = None,
     ) -> ModelDataSubdivisionResult:
         if mesh_subdivision_result is None:
+            assert self.mesh_graph is not None
+
             mesh_subdivision_result = self.mesh_graph.subdivide(
                 target_edges=target_edges,
                 target_faces=target_faces,
@@ -583,96 +605,125 @@ class ModelData:
 
         new_mesh_graph = mesh_subdivision_result.mesh_graph
 
-        tex_mesh_edge_mark = [False] * self.tex_mesh_graph.edges_cnt
+        if self.tex_mesh_graph is None:
+            new_tex_mesh_graph = None
+            tex_mesh_vert_src_table = None
+        else:
+            tex_mesh_edge_mark = [False] * self.tex_mesh_graph.edges_cnt
 
-        for fe, tex_fe in zip(
-                self.mesh_graph.f_to_eee, self.tex_mesh_graph.f_to_eee):
-            for e, tex_e in zip(fe, tex_fe):
-                if edge_mark[e]:
-                    tex_mesh_edge_mark[tex_e] = True
+            for fe, tex_fe in zip(
+                    self.mesh_graph.f_to_eee, self.tex_mesh_graph.f_to_eee):
+                for e, tex_e in zip(fe, tex_fe):
+                    if edge_mark[e]:
+                        tex_mesh_edge_mark[tex_e] = True
 
-        tex_mesh_e_to_new_v = [-1] * self.tex_mesh_graph.edges_cnt
+            tex_mesh_e_to_new_v = [-1] * self.tex_mesh_graph.edges_cnt
 
-        tex_mesh_vert_src_table: list[tuple[int, int]] = [
-            (i, i) for i in range(self.tex_verts_cnt)]
+            tex_mesh_vert_src_table: list[tuple[int, int]] = [
+                (i, i) for i in range(self.tex_verts_cnt)]
 
-        for new_v, e in enumerate(
-            (e for e, mark in enumerate(tex_mesh_edge_mark) if mark),
-            self.tex_mesh_graph.verts_cnt,
-        ):
-            tex_mesh_e_to_new_v[e] = new_v
+            for new_v, e in enumerate(
+                (e for e, mark in enumerate(tex_mesh_edge_mark) if mark),
+                self.tex_mesh_graph.verts_cnt,
+            ):
+                tex_mesh_e_to_new_v[e] = new_v
 
-            tex_mesh_vert_src_table.append(
-                tuple(int(v) for v in self.tex_mesh_graph.e_to_vv[e]))
+                tex_mesh_vert_src_table.append(
+                    tuple(int(v) for v in self.tex_mesh_graph.e_to_vv[e]))
 
-        new_tex_mesh_faces = list()
+            new_tex_mesh_faces = list()
 
-        for f in range(new_mesh_graph.faces_cnt):
-            src_f = face_src_table[f]
-            src_type = face_src_type_table[f]
+            for f in range(new_mesh_graph.faces_cnt):
+                src_f = face_src_table[f]
+                src_type = face_src_type_table[f]
 
-            va, vb, vc = map(int, self.tex_mesh_graph.f_to_vvv[src_f])
-            ea, eb, ec = map(int, self.tex_mesh_graph.f_to_eee[src_f])
+                va, vb, vc = map(int, self.tex_mesh_graph.f_to_vvv[src_f])
+                ea, eb, ec = map(int, self.tex_mesh_graph.f_to_eee[src_f])
 
-            ua = tex_mesh_e_to_new_v[ea]
-            ub = tex_mesh_e_to_new_v[eb]
-            uc = tex_mesh_e_to_new_v[ec]
+                ua = tex_mesh_e_to_new_v[ea]
+                ub = tex_mesh_e_to_new_v[eb]
+                uc = tex_mesh_e_to_new_v[ec]
 
-            match src_type:
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_VC:
-                    new_tex_mesh_faces.append((va, vb, vc))
+                match src_type:
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_VC:
+                        new_tex_mesh_faces.append((va, vb, vc))
 
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_EC_EB:
-                    new_tex_mesh_faces.append((va, uc, ub))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_EA_EC:
-                    new_tex_mesh_faces.append((vb, ua, uc))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_EB_EA:
-                    new_tex_mesh_faces.append((vc, ub, ua))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.EA_EB_EC:
-                    new_tex_mesh_faces.append((ua, ub, uc))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_EC_EB:
+                        new_tex_mesh_faces.append((va, uc, ub))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_EA_EC:
+                        new_tex_mesh_faces.append((vb, ua, uc))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_EB_EA:
+                        new_tex_mesh_faces.append((vc, ub, ua))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.EA_EB_EC:
+                        new_tex_mesh_faces.append((ua, ub, uc))
 
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EA:
-                    new_tex_mesh_faces.append((va, vb, ua))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EA:
-                    new_tex_mesh_faces.append((vc, va, ua))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EA:
+                        new_tex_mesh_faces.append((va, vb, ua))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EA:
+                        new_tex_mesh_faces.append((vc, va, ua))
 
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EB:
-                    new_tex_mesh_faces.append((vb, vc, ub))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EB:
-                    new_tex_mesh_faces.append((va, vb, ub))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EB:
+                        new_tex_mesh_faces.append((vb, vc, ub))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EB:
+                        new_tex_mesh_faces.append((va, vb, ub))
 
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EC:
-                    new_tex_mesh_faces.append((vc, va, uc))
-                case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EC:
-                    new_tex_mesh_faces.append((vb, vc, uc))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EC:
+                        new_tex_mesh_faces.append((vc, va, uc))
+                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EC:
+                        new_tex_mesh_faces.append((vb, vc, uc))
 
-        tex_mesh_vert_src_table = torch.tensor(
-            tex_mesh_vert_src_table, dtype=torch.long, device=self.device)
-        # [TV_, 2]
+            tex_mesh_vert_src_table = torch.tensor(
+                tex_mesh_vert_src_table, dtype=torch.long, device=self.device)
+            # [TV_, 2]
 
-        new_tex_mesh_faces = torch.tensor(
-            new_tex_mesh_faces, dtype=torch.long, device=self.device)
-        # [F_, 3]
+            new_tex_mesh_faces = torch.tensor(
+                new_tex_mesh_faces, dtype=torch.long, device=self.device)
+            # [F_, 3]
 
-        new_tex_mesh_graph = mesh_utils.MeshGraph.from_faces(
-            tex_mesh_vert_src_table.shape[0], new_tex_mesh_faces, self.device)
+            new_tex_mesh_graph = mesh_utils.MeshGraph.from_faces(
+                tex_mesh_vert_src_table.shape[0], new_tex_mesh_faces, self.device)
 
-        new_vert_pos = \
-            self.vert_pos[..., vert_src_table, :].mean(-2)
+        assert (0 <= vert_src_table).all()
+        assert (vert_src_table < self.verts_cnt).all()
 
-        new_tex_vert_pos = \
-            self.tex_vert_pos[..., tex_mesh_vert_src_table, :].mean(-2)
+        print(f"{self.verts_cnt=}")
+        print(f"{self.vert_pos.shape=}")
+        print(f"{self.lbs_weight.shape=}")
+        print(f"{vert_src_table.min()=}")
+        print(f"{vert_src_table.max()=}")
 
-        new_lbs_weight = self.lbs_weight[..., vert_src_table, :].mean(-2)
+        utils.torch_cuda_sync()
 
-        new_body_shape_vert_dir = \
-            self.body_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+        new_vert_pos = None if self.vert_pos is None \
+            else self.vert_pos[..., vert_src_table, :].mean(-2)
 
-        new_expr_shape_vert_dir = \
-            self.expr_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+        utils.torch_cuda_sync()
 
-        new_pose_vert_dir = \
-            self.pose_vert_dir[..., vert_src_table, :, :].mean(-3)
+        new_tex_vert_pos = self.tex_vert_pos \
+            if self.tex_vert_pos is None or tex_mesh_vert_src_table is None \
+            else self.tex_vert_pos[..., tex_mesh_vert_src_table, :].mean(-2)
+
+        utils.torch_cuda_sync()
+
+        new_lbs_weight = None if self.lbs_weight is None \
+            else self.lbs_weight[..., vert_src_table, :].mean(-2)
+
+        utils.torch_cuda_sync()
+
+        new_body_shape_vert_dir = None if self.body_shape_vert_dir is None \
+            else self.body_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+
+        utils.torch_cuda_sync()
+
+        new_expr_shape_vert_dir = None if self.expr_shape_vert_dir is None \
+            else self.expr_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+
+        utils.torch_cuda_sync()
+
+        new_pose_vert_dir = None if self.pose_vert_dir is None \
+            else self.pose_vert_dir[..., vert_src_table, :, :].mean(-3)
+
+        utils.torch_cuda_sync()
 
         model_data = ModelData(
             kin_tree=self.kin_tree,
@@ -713,42 +764,87 @@ class ModelData:
         *,
         target_faces: typing.Sequence[int],
     ) -> ModelDataExtractionResult:
-        mesh_graph_extraction_result = self.mesh_graph.extract(
-            target_faces)
-        # vert_src_table[V_]
-        # face_src_table[F_]
+        if self.mesh_graph is None:
+            mesh_graph_extraction_result = None
+            new_mesh_graph = None
+            vert_src_table = None
+        else:
+            mesh_graph_extraction_result = self.mesh_graph.extract(
+                target_faces)
+            # vert_src_table[V_]
+            # face_src_table[F_]
 
-        tex_mesh_graph_extraction_result = self.tex_mesh_graph.extract(
-            target_faces)
-        # vert_src_table[TV_]
-        # face_src_table[F_]
+            new_mesh_graph = mesh_graph_extraction_result.mesh_graph
 
-        new_mesh_graph = mesh_graph_extraction_result.mesh_graph
-        new_tex_mesh_graph = tex_mesh_graph_extraction_result.mesh_graph
+            vert_src_table = mesh_graph_extraction_result.vert_src_table
+            # [V_]
 
-        vert_src_table = mesh_graph_extraction_result.vert_src_table
-        # [V_]
+        if self.tex_mesh_graph is None:
+            tex_mesh_graph_extraction_result = None
+            new_tex_mesh_graph = None
+            tex_vert_src_table = None
+        else:
+            tex_mesh_graph_extraction_result = self.tex_mesh_graph.extract(
+                target_faces)
 
-        tex_vert_src_table = tex_mesh_graph_extraction_result.vert_src_table
-        # [TV_]
+            new_tex_mesh_graph = tex_mesh_graph_extraction_result.mesh_graph
 
-        new_vert_pos = self.vert_pos[..., vert_src_table, :]
+            tex_vert_src_table = tex_mesh_graph_extraction_result.vert_src_table
+            # [TV_]
+
+        utils.torch_cuda_sync()
+
+        if vert_src_table is not None:
+            assert (0 <= vert_src_table).all()
+            assert (vert_src_table < self.verts_cnt).all()
+
+        if tex_vert_src_table is not None:
+            assert (0 <= tex_vert_src_table).all()
+            assert (tex_vert_src_table < self.tex_verts_cnt).all()
+
+        utils.torch_cuda_sync()
+
+        new_vert_pos = self.vert_pos \
+            if self.vert_pos is None or vert_src_table is None else \
+            self.vert_pos[..., vert_src_table, :]
         # [..., V_, 3]
 
-        new_tex_vert_pos = self.tex_vert_pos[..., tex_vert_src_table, :]
+        utils.torch_cuda_sync()
+
+        new_tex_vert_pos = self.tex_vert_pos \
+            if self.tex_vert_pos is None or tex_vert_src_table is None else \
+            self.tex_vert_pos[..., tex_vert_src_table, :]
         # [..., TV_, 2]
 
-        new_body_shape_vert_dir = \
+        utils.torch_cuda_sync()
+
+        new_body_shape_vert_dir = self.body_shape_vert_dir \
+            if self.body_shape_vert_dir is None or vert_src_table is None else \
             self.body_shape_vert_dir[..., vert_src_table, :, :]
+        # [..., V_, 3, ES]
 
-        new_expr_shape_vert_dir = \
+        utils.torch_cuda_sync()
+
+        new_expr_shape_vert_dir = self.expr_shape_vert_dir \
+            if self.expr_shape_vert_dir is None or vert_src_table is None else \
             self.expr_shape_vert_dir[..., vert_src_table, :, :]
+        # [..., V_, 3, BS]
 
-        new_pose_vert_dir = self.pose_vert_dir[..., vert_src_table, :, :]
+        utils.torch_cuda_sync()
+
+        new_pose_vert_dir = self.pose_vert_dir \
+            if self.pose_vert_dir is None or vert_src_table is None else \
+            self.pose_vert_dir[..., vert_src_table, :, :]
         # [..., V_, 3, (J - 1) * 3 * 3]
 
-        new_lbs_weight = self.lbs_weight[..., vert_src_table, :]
+        utils.torch_cuda_sync()
+
+        new_lbs_weight = self.lbs_weight \
+            if self.lbs_weight is None or vert_src_table is None else \
+            self.lbs_weight[..., vert_src_table, :]
         # [..., V_, J]
+
+        utils.torch_cuda_sync()
 
         model_data = ModelData(
             kin_tree=self.kin_tree,
@@ -779,10 +875,52 @@ class ModelData:
             pose_vert_dir=new_pose_vert_dir,
         )
 
+        utils.torch_cuda_sync()
+
         return ModelDataExtractionResult(
             mesh_graph_extraction_result=mesh_graph_extraction_result,
             tex_mesh_graph_extraction_result=tex_mesh_graph_extraction_result,
             model_data=model_data,
+        )
+
+    def remesh(self, remsh_arg_pack: utils.ArgPack) -> ModelData:
+        mesh_data = mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
+
+        remeshed_mesh_data = mesh_data.remesh(
+            *remsh_arg_pack.args,
+            **remsh_arg_pack.kwargs,
+        )
+
+        new_mesh_graph = remeshed_mesh_data.mesh_graph
+        new_vert_pos = remeshed_mesh_data.vert_pos
+
+        return ModelData(
+            kin_tree=self.kin_tree,
+
+            body_joints_cnt=self.body_joints_cnt,
+            jaw_joints_cnt=self.jaw_joints_cnt,
+            eye_joints_cnt=self.eye_joints_cnt,
+
+            mesh_graph=new_mesh_graph,
+            tex_mesh_graph=None,
+
+            joint_t_mean=self.joint_t_mean,
+
+            vert_pos=new_vert_pos,
+            tex_vert_pos=None,
+
+            lbs_weight=None,
+
+            body_shape_joint_dir=self.body_shape_joint_dir,
+            expr_shape_joint_dir=self.expr_shape_joint_dir,
+
+            body_shape_vert_dir=None,
+            expr_shape_vert_dir=None,
+
+            lhand_pose_mean=self.lhand_pose_mean,
+            rhand_pose_mean=self.rhand_pose_mean,
+
+            pose_vert_dir=None,
         )
 
     def show(self):

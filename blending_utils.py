@@ -13,10 +13,10 @@ from . import kin_utils, utils
 class LBSOperator:
     def __init__(
         self,
-        binding_pose_r: typing.Optional[torch.Tensor],  # [..., J, D, D]
-        binding_pose_t: typing.Optional[torch.Tensor],  # [..., J, D]
+        binding_pose_r: typing.Optional[torch.Tensor],  # [J][..., D, D]
+        binding_pose_t: typing.Optional[torch.Tensor],  # [J][..., D]
 
-        target_pose_r: typing.Optional[torch.Tensor],  # [..., J, D, D]
+        target_pose_r: typing.Optional[torch.Tensor],  # [J][..., D, D]
         target_pose_t: typing.Optional[torch.Tensor],  # [..., J, D]
 
         binding_joint_T: typing.Optional[torch.Tensor],
@@ -211,7 +211,7 @@ class LBSOperator:
         ), dtype=dtype, device=self.device)
         # [..., V, D + 1, D + 1]
 
-        ret_trans[..., :-1, :] = torch.einsum(
+        ret_trans[..., :-1, :] = utils.einsum(
             "...vj, ...jab -> ...vab",
             lbs_weight,  # [..., V, J]
             cur_del_joint_T[..., :-1, :],  # [..., J, D, D + 1]
@@ -230,7 +230,7 @@ class LBSOperator:
         if not calc_linear_part:
             ret_linear = None
         else:
-            ret_linear = torch.einsum(
+            ret_linear = utils.einsum(
                 "...vij, ...vj -> ...vi",
                 ret_trans[..., :-1, :-1],  # [..., V, D, D]
                 vec,  # [..., V, D]

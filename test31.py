@@ -20,7 +20,7 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0422_3"
+PROJ_DIR = DIR / "train_2025_0501_1"
 
 VERT_GRAD_NORM_THRESHOLD = 1e-3
 
@@ -95,6 +95,7 @@ def load_trainer():
     # ---
 
     smplx_model_builder = smplx_utils.DeformableModelBuilder(
+        temp_model_data=subject_data.model_data,
         model_data=subject_data.model_data,
     ).to(DEVICE)
 
