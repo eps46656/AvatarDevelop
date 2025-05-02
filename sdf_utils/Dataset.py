@@ -26,6 +26,8 @@ class Dataset(dataset_utils.Dataset):
         epoch_size: int,
         mesh_graph: mesh_utils.MeshGraph,
         vert_pos: torch.Tensor,
+        dtype: torch.dtype,
+        device: torch.device,
     ):
         assert 0 < epoch_size
 
@@ -34,30 +36,26 @@ class Dataset(dataset_utils.Dataset):
 
         self.epoch_size = epoch_size
 
-        self.mesh_graph = mesh_graph
-        self.vert_pos = vert_pos
+        self.mesh_data = mesh_utils.MeshData(mesh_graph, vert_pos)
+
+        self.dtype = dtype
+        self.device = device
 
     @property
     def shape(self) -> torch.Size:
         return torch.Size((self.epoch_size,))
 
-    @property
-    def device(self) -> torch.device:
-        return self.vert_pos.device
-
     def __getitem__(self, idx: tuple[torch.Tensor]) -> Sample:
         N = idx[0].numel()
 
-        point_pos = utils.empty_like(self.vert_pos, shape=(N, 3))
+        point_pos = utils.empty_like(
+            self.mesh_data.vert_pos, shape=(N, 3),
+            dtype=self.dtype, device=self.device)
 
         for d in range(3):
-            torch.normal(self.mean[d], self.std[d], (N,),
-                         out=point_pos[:, d])
+            torch.normal(self.mean[d], self.std[d], (N,), out=point_pos[:, d])
 
-        signed_dists = self.mesh_graph.calc_signed_dist(
-            self.vert_pos,
-            point_pos,
-        )  # [N]
+        signed_dists = self.mesh_data.calc_signed_dist(point_pos)  # [N]
 
         return Sample(
             point_pos=point_pos,
@@ -65,5 +63,5 @@ class Dataset(dataset_utils.Dataset):
         )
 
     def to(self, *args, **kwargs) -> Dataset:
-        self.vert_pos = self.vert_pos.to(*args, **kwargs)
+        self.mesh_data = self.mesh_data.to(*args, **kwargs)
         return self

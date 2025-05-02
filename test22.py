@@ -24,7 +24,7 @@ def main1():
     checkpoint_records[999] = training_utils.CheckpointMeta(
         timestamp=999,
         prv=1,
-        epochs_cnt=5,
+        epoch=5,
         message="",
     )
 

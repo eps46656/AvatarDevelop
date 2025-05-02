@@ -41,7 +41,7 @@ def MyLossFunc(
     return weighted_rgb_loss + weighted_lap_loss + weighted_normal_sim_loss + weighted_color_diff_loss
 
 
-class MyTrainingCore(training_utils.TrainingCore):
+class MyTrainingCore(training_utils.TrainerCore):
     def train(self) -> training_utils.TrainingResult:
         assert self.scheduler is None or isinstance(
             self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)

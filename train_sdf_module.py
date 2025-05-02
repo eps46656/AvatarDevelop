@@ -21,7 +21,7 @@ MODEL_SUBTYPE = "female"
 
 
 @beartype
-class MyTrainingCore(training_utils.TrainingCore):
+class MyTrainingCore(training_utils.TrainerCore):
     def __init__(
         self,
         module: sdf_utils.Module,
@@ -204,7 +204,7 @@ def main1():
         device=DEVICE,
     )
 
-    trainer.training_core = training_core
+    trainer.trainer_core = training_core
 
     # trainer.load_latest()
 

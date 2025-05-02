@@ -9,7 +9,7 @@ import torch
 import torchrbf
 from beartype import beartype
 
-from .. import utils
+from .. import mesh_utils, utils
 from .ModelData import ModelData, ModelDataSubdivisionResult
 
 
@@ -231,21 +231,12 @@ class DeformableModelBuilder(ModelBuilder):
             target_faces=target_faces,
         )
 
-        utils.torch_cuda_sync()
-
         self.model_data = model_data_subdivision_result.model_data
-
-        utils.torch_cuda_sync()
 
         self.model_data.vert_pos = torch.nn.Parameter(
             self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
 
-        utils.torch_cuda_sync()
-
         self.vert_pos = self.model_data.vert_pos
-        print(f"set vert_pos, {self.vert_pos.shape=}")
-
-        utils.torch_cuda_sync()
 
         return model_data_subdivision_result
 
@@ -289,9 +280,6 @@ class DeformableModelBuilder(ModelBuilder):
         else:
             lbs_weight = self.lbs_weight_interp(vert_pos)
 
-        print(f"{vert_pos.shape=}")
-        print(f"{lbs_weight.shape=}")
-
         return DeoformingBlendingCoeff(
             body_shape_vert_dir=body_shape_vert_dir,
             expr_shape_vert_dir=expr_shape_vert_dir,
@@ -300,13 +288,9 @@ class DeformableModelBuilder(ModelBuilder):
         )
 
     def refresh(self) -> None:
-        print(f"1 {self.vert_pos.shape=}")
-
         self.model_data.vert_pos = self.vert_pos
 
         blending_coeff = self.query_blending_coeff(self.vert_pos)
-
-        print(f"2 {self.vert_pos.shape=}")
 
         self.model_data.body_shape_vert_dir = \
             blending_coeff.body_shape_vert_dir

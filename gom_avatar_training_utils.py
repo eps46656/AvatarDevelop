@@ -17,8 +17,8 @@ import pytorch3d.renderer
 import pytorch3d.structures
 
 from . import (avatar_utils, dataset_utils, gaussian_utils, gom_utils,
-               kernel_splatting_utils, mesh_utils, pca_utils, rendering_utils,
-               smplx_utils, texture_utils, training_utils, utils, vision_utils)
+               mesh_utils, pca_utils, rendering_utils, smplx_utils,
+               texture_utils, training_utils, utils, vision_utils)
 
 
 @dataclasses.dataclass
@@ -42,7 +42,7 @@ class Config:
 
 
 @beartype
-class TrainingCore(training_utils.TrainingCore):
+class TrainingCore(training_utils.TrainerCore):
     def __init__(
         self,
         config: Config,
@@ -462,7 +462,7 @@ class TrainingCore(training_utils.TrainingCore):
         )
         # [H, W, 1]
 
-        face_color = face_color_sum / (1e-2 + face_weight_sum).unsqueeze(-1)
+        face_color = face_color_sum / (1e-2 + face_weight_sum)[..., None]
         # [F + 1, 3]
 
         face_color[F, :] = 1
@@ -598,7 +598,7 @@ class TrainingCore(training_utils.TrainingCore):
             (use_pca_threshold <= face_color_all_cnt)[..., None, None]
             .expand(F + 1, C, C),
 
-            (face_color_pca * face_color_std.unsqueeze(-1)).transpose(-2, -1),
+            (face_color_pca * face_color_std[..., None]).transpose(-2, -1),
 
             torch.eye(
                 C, dtype=face_color_pca.dtype, device=face_color_pca.device)
@@ -640,7 +640,7 @@ class TrainingCore(training_utils.TrainingCore):
 
             ell_coord = (
                 cur_inv_face_color_ell_axi @
-                (ref_img - cur_face_color_ell_mean).unsqueeze(-1)).squeeze(-1)
+                (ref_img - cur_face_color_ell_mean)[..., None])[..., 0]
             # [H * W, C]
 
             weight = 1 / (0.1 + utils.vec_norm(ell_coord).square())
@@ -656,7 +656,7 @@ class TrainingCore(training_utils.TrainingCore):
 
                 ref_img.to(face_color_inlier_sum_x.device,
                            face_color_inlier_sum_x.dtype) *
-                weight.unsqueeze(-1)
+                weight[..., None]
             )
 
         face_idx_map = texture_utils.calc_face_idx(
@@ -672,13 +672,13 @@ class TrainingCore(training_utils.TrainingCore):
 
         face_color = torch.where(
             (use_pca_threshold <= face_color_all_cnt)
-            .unsqueeze(-1).expand(F + 1, 3),
+            [..., None].expand(F + 1, 3),
 
             face_color_inlier_sum_x /
-            (1e-2 + face_color_inlier_sum_weight).unsqueeze(-1),
+            (1e-2 + face_color_inlier_sum_weight)[..., None],
 
             face_color_all_sum_x /
-            (1e-2 + face_color_all_cnt).unsqueeze(-1),
+            (1e-2 + face_color_all_cnt)[..., None],
         )
 
         face_color[F, :] = 1

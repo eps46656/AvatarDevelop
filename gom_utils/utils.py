@@ -34,7 +34,7 @@ def get_face_coord(mesh_data: mesh_utils.MeshData) -> FaceCoordResult:
 
     normed_axis_x = utils.vec_normed(axis_x)
     normed_axis_y = utils.vec_normed(axis_y)
-    normed_axis_z = axis_z / (1e-6 + axis_z_norm).unsqueeze(-1)
+    normed_axis_z = axis_z / (1e-6 + axis_z_norm)[..., None]
 
     err = utils.vec_dot(normed_axis_z, normed_axis_x).abs().max()
     assert err <= 1e-4, err

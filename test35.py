@@ -16,10 +16,10 @@ import pytorch3d.renderer
 import pytorch3d.structures
 
 from . import (avatar_utils, camera_utils, config, dataset_utils,
-               gom_avatar_training_utils, gom_utils,
-               kernel_splatting_utils, mesh_seg_utils, mesh_utils, people_snapshot_utils,
-               rendering_utils, segment_utils, smplx_utils, training_utils,
-               transform_utils, utils, vision_utils)
+               gom_avatar_training_utils, gom_utils, kernel_splatting_utils,
+               mesh_seg_utils, mesh_utils, people_snapshot_utils,
+               rendering_utils, segment_utils, smplx_utils, texture_utils,
+               training_utils, transform_utils, utils, vision_utils)
 
 
 class AlbedoMeshShader(pytorch3d.renderer.mesh.shader.ShaderBase):
@@ -42,7 +42,7 @@ DIR = FILE.parents[0]
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0422_3"
+PROJ_DIR = DIR / "train_2025_0530_1"
 
 VERT_GRAD_NORM_THRESHOLD = 1e-3
 
@@ -172,7 +172,7 @@ def load_trainer():
         device=DEVICE,
     )
 
-    trainer.training_core = training_core
+    trainer.trainer_core = training_core
 
     return subject_data, trainer
 
@@ -183,7 +183,7 @@ def main1():
     trainer.load_latest()
 
     training_core: gom_avatar_training_utils.TrainingCore = \
-        trainer.training_core
+        trainer.trainer_core
 
     dataset = training_core.dataset
 
@@ -210,7 +210,7 @@ def main1():
 
     K = len(masks)
 
-    gom_module: gom_utils.Module = trainer.training_core.module
+    gom_module: gom_utils.Module = trainer.trainer_core.module
 
     smplx_blender: smplx_utils.ModelBlender = gom_module.avatar_blender
 
@@ -309,7 +309,7 @@ def main1():
 
             sample: gom_utils.Sample
 
-            result: gom_utils.ModuleForwardResult = trainer.training_core.module(
+            result: gom_utils.ModuleForwardResult = trainer.trainer_core.module(
                 camera_config=sample.camera_config,
                 camera_transform=sample.camera_transform,
                 img=sample.img,
@@ -365,7 +365,7 @@ def main2():
 
     face_segmentor: mesh_seg_utils.MeshSegmentor = \
         mesh_seg_utils.MeshSegmentor.from_state_dict(utils.read_pickle(
-            PROJ_DIR / "face_voting_result_1746034470.pkl"),
+            PROJ_DIR / "face_voting_result_1746071719.pkl"),
             None,
             DEVICE,
         )
@@ -380,7 +380,7 @@ def main2():
     # 50 mm = 5 cm
 
     def kernel(x):
-        return (-(x / std)**2 / 2).exp()
+        return 1 / (1e-3 + x.square())
 
     vert_ballot_cnt[:-1] = kernel_splatting_utils.interp(
         model_data.vert_pos,  # [V, 3]
@@ -408,7 +408,7 @@ def main2():
     face_segmentor.vert_ballot_box = vert_ballot_box
     face_segmentor.vert_ballot_cnt = vert_ballot_cnt
 
-    face_segment_result: mesh_seg_utils.FaceSegmentationResult = \
+    face_segment_result: mesh_seg_utils.MeshSegmentationResult = \
         face_segmentor.segment(mesh_utils.MeshData(
             model_data.mesh_graph,
             model_data.vert_pos,
@@ -444,33 +444,68 @@ def main2():
 
 
 def main3():
-    subject_data, trainer = load_trainer()
+    model_data = smplx_utils.ModelData.from_state_dict(
+        utils.read_pickle(DIR / MESH_SEG_PROJ / "model_data.pkl"),
+        dtype=utils.FLOAT,
+        device=DEVICE,
+    )
 
-    module: gom_utils.Module = trainer.training_core.module
+    model_blender = smplx_utils.ModelBlender(
+        smplx_utils.StaticModelBuilder(model_data))
 
-    person_smplx_blender: smplx_utils.ModelBlender = module.avatar_blender
+    subject_data = read_subject()
+
+    tex = texture_utils.bake_texture(
+        camera_config=subject_data.camera_config,
+        camera_transform=subject_data.camera_transform,
+
+        img=vision_utils.normalize_image(
+            subject_data.video),
+        mask=subject_data.mask,
+        blending_param=subject_data.blending_param,
+
+        avatar_blender=model_blender,
+
+        tex_h=1024,
+        tex_w=1024,
+
+        batch_size=2,
+
+        device=DEVICE,
+    )
+    # [H, W, C]
+
+    vision_utils.write_image(
+        path=PROJ_DIR / f"tex_{utils.timestamp_sec()}.png",
+        img=vision_utils.denormalize_image(
+            einops.rearrange(tex, "h w c -> c h w")),
+    )
+
+
+def main4():
+    model_data = smplx_utils.ModelData.from_state_dict(
+        utils.read_pickle(
+            PROJ_DIR / f"obj_model_data_UPPER_GARMENT_1746071935.pkl"),
+        dtype=utils.FLOAT,
+        device=DEVICE,
+    )
+
+    model_blender = smplx_utils.ModelBlender(
+        smplx_utils.StaticModelBuilder(model_data))
+
+    subject_data = read_subject()
 
     obj = "UPPER_GARMENT"
-
-    obj_model_data: smplx_utils.ModelData = smplx_utils.ModelData.from_file(
-        PROJ_DIR / f"obj_model_data_UPPER_GARMENT_1744638970.pkl", dtype=utils.FLOAT, device=DEVICE)
-
-    person_model_data: smplx_utils.ModelData = \
-        person_smplx_blender.get_avatar_model()
-
-    model_builder = smplx_utils.StaticModelBuilder(obj_model_data)
-
-    model_blender = smplx_utils.ModelBlender(model_builder)
 
     T, C, H, W = subject_data.video.shape
 
     albedo_map = vision_utils.read_image(
-        PROJ_DIR / "tex_1744688649.png").to(DEVICE, utils.FLOAT)
+        PROJ_DIR / "tex_1746082618.png").to(DEVICE, utils.FLOAT)
 
     albedo_tex = pytorch3d.renderer.TexturesUV(
         maps=[einops.rearrange(albedo_map, "c h w -> h w c")],
-        verts_uvs=[person_model_data.tex_vert_pos.to(utils.FLOAT)],
-        faces_uvs=[person_model_data.tex_mesh_graph.f_to_vvv],
+        verts_uvs=[model_data.tex_vert_pos.to(utils.FLOAT)],
+        faces_uvs=[model_data.tex_mesh_graph.f_to_vvv],
         padding_mode="reflection",
         sampling_mode="bilinear",
     )
@@ -480,13 +515,13 @@ def main3():
 
     out_images = torch.empty((T, C, H, W), dtype=torch.uint8)
 
+    bg_color = torch.tensor([1.0], dtype=utils.FLOAT).to(DEVICE)
+
     for t in tqdm.tqdm(range(T)):
         camera_transform = subject_data.camera_transform
         blending_param = subject_data.blending_param[t]
 
-        # cur_model: smplx_utils.Model = model_blender(blending_param)
-        cur_model = smplx_utils.Model = trainer.training_core.module.avatar_blender(
-            blending_param)
+        cur_model: smplx_utils.Model = model_blender(blending_param)
 
         fragments = rendering_utils.rasterize_mesh(
             cur_model.vert_pos,
@@ -496,14 +531,22 @@ def main3():
             1,
         )
 
-        # fragments.pixel_to_faces[1, H, W, 1]
+        # fragments.pix_to_face[1, H, W, 1]
         # fragments.bary_coords[1, H, W, 1, 3]
 
-        texels = albedo_tex.sample_textures(fragments)
-        # [1, H, W, 1, C]
+        texels = albedo_tex.sample_textures(fragments).view(H, W, C)
+        # [H, W, C]
 
-        out_images[t] = einops.rearrange(
-            texels.view(H, W, C), "h w c -> c h w")
+        texels = torch.where(
+            (fragments.pix_to_face.view(H, W) == -1)
+            [..., None].expand(H, W, 1),
+
+            bg_color.expand(H, W, C),
+
+            texels,
+        )
+
+        out_images[t] = einops.rearrange(texels, "h w c -> c h w")
 
     vision_utils.write_video(
         PROJ_DIR / f"seg_video[{obj}]_{utils.timestamp_sec()}.avi",
@@ -515,4 +558,4 @@ def main3():
 if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True, True):
         with torch.no_grad():
-            main1()
+            main4()

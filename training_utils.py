@@ -1,5 +1,8 @@
 import argparse
+import collections
 import dataclasses
+import datetime
+import math
 import os
 import pathlib
 import shlex
@@ -10,6 +13,7 @@ import traceback
 import typing
 
 import prompt_toolkit
+import tabulate
 import torch
 from beartype import beartype
 
@@ -21,10 +25,11 @@ from . import sqlite_utils, utils
 class CheckpointMeta:
     id: int
     prv: int
-    epochs_cnt: int
+    epoch: int
+    time: datetime.datetime
     message: typing.Optional[str]
+    training_message: typing.Optional[str]
     full: bool
-    avg_loss: float
 
 
 @beartype
@@ -47,13 +52,13 @@ class LogDatabase:
 
                     prv UNSIGNED BIGINT NULL,
 
-                    full INT NOT NULL,
-
-                    epochs_cnt UNSIGNED INT,
+                    epoch INT,
+                    time TEXT,
 
                     message TEXT,
+                    training_message TEXT,
 
-                    avg_loss REAL,
+                    full INT NOT NULL,
 
                     FOREIGN KEY (prv) REFERENCES CheckpointMeta(id)
                         ON DELETE SET NULL
@@ -75,18 +80,21 @@ class LogDatabase:
                 "prv": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: None if x == -1 else x,
                     deserialize=lambda x: -1 if x is None else x,),
-                "epochs_cnt": sqlite_utils.DataTableColAttr(
+                "epoch": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
+                "time": sqlite_utils.DataTableColAttr(
+                    serialize=lambda x: utils.serialize_datetime(x, "SEC"),
+                    deserialize=lambda x: utils.deserialize_datetime(x),),
                 "message": sqlite_utils.DataTableColAttr(
+                    serialize=lambda x: x,
+                    deserialize=lambda x: x,),
+                "training_message": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: x,
                     deserialize=lambda x: x,),
                 "full": sqlite_utils.DataTableColAttr(
                     serialize=lambda x: 1 if x else 0,
                     deserialize=lambda x: x != 0,),
-                "avg_loss": sqlite_utils.DataTableColAttr(
-                    serialize=lambda x: x,
-                    deserialize=lambda x: x,),
             }
         )
 
@@ -130,53 +138,22 @@ class LogDatabase:
 @beartype
 @dataclasses.dataclass
 class TrainingResult:
-    avg_loss: float
+    message: str
 
 
 @beartype
-class TrainingCore:
-    @property
-    def module(self) -> typing.Optional[torch.nn.Module]:
-        raise NotImplementedError()
-
-    @module.setter
-    def module(self, module: typing.Optional[torch.nn.Module]):
+class TrainerCore:
+    def get_epoch(self) -> int:
         raise NotImplementedError()
 
     # ---
 
-    @property
-    def optimizer(self) -> typing.Optional[torch.optim.Optimizer]:
+    def state_dict(self, full: bool = False)  \
+            -> collections.OrderedDict[str, typing.Any]:
         raise NotImplementedError()
 
-    @optimizer.setter
-    def optimizer(self, optimizer: typing.Optional[torch.optim.Optimizer]):
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]):
         raise NotImplementedError()
-
-    # ---
-
-    @property
-    def scheduler(self) -> object:
-        raise NotImplementedError()
-
-    @optimizer.setter
-    def scheduler(self, scheduler: object):
-        raise NotImplementedError()
-
-    # ---
-
-    def get(self, field_name: str):
-        assert field_name in {"module", "optimizer", "scheduler"}
-
-        ret = getattr(self, field_name)
-
-        print(f"{ret=}")
-
-        return ret
-
-    def set(self, field_name: str, field_val: object):
-        assert field_name in {"module", "optimizer", "scheduler"}
-        return setattr(self, field_name, field_val)
 
     # ---
 
@@ -196,137 +173,85 @@ def make_cmd_parser():
     parser = argparse.ArgumentParser(prog="parser")
 
     subparser = parser.add_subparsers(
-        dest="op",
-        required=True,
-    )
+        dest="op", required=True)
 
     # ---
 
     nop_parser = subparser.add_parser(
-        "nop",
-        help="nop",
-    )
+        "nop", help="nop")
 
     # ---
 
     show_parser = subparser.add_parser(
-        "show",
-        help="show status",
-    )
+        "show", help="show status")
 
     # ---
 
     load_parser = subparser.add_parser(
-        "load",
-        help="load a checkpoint",
-    )
+        "load", help="load a checkpoint")
 
     load_parser.add_argument(
-        "--id",
-        type=int,
-        required=True,
-        help="the target checkpoint's id",
-    )
+        "--id", type=int, required=True, help="the target checkpoint's id")
 
     # ---
 
     load_latest_parser = subparser.add_parser(
-        "load_latest",
-        help="load the latest checkpoint",
-    )
+        "load_latest", help="load the latest checkpoint")
 
     # ---
 
     save_parser = subparser.add_parser(
-        "save",
-        help="save current state to a checkpoint",
-    )
+        "save", help="save current state to a checkpoint")
 
     save_parser.add_argument(
-        "--message",
-        type=str,
-        default="",
-        help="the message of checkpoint",
-    )
+        "--message", type=str, default="", help="the message of checkpoint")
 
     save_parser.add_argument(
-        "--full",
-        action="store_true",
-        help="save the total state",
-    )
+        "--full", action="store_true", help="save the total state")
 
     # ---
 
     train_parser = subparser.add_parser(
-        "train",
-        help="train the module",
-    )
+        "train", help="train the module")
 
     train_parser.add_argument(
         "--epochs_cnt",
-        type=int,
-        default=1,
-        help="the number of epochs to train",
-    )
+        type=int, default=1, help="the number of epochs to train")
 
     train_parser.add_argument(
-        "--diff_time_weight",
-        type=int,
-        default=DEFAULT_DIFF_TIME_WEIGHT,
-        help="",
-    )
+        "--diff_epoch_weight", type=int, default=DEFAULT_DIFF_EPOCHS_CNT_WEIGHT)
 
     train_parser.add_argument(
-        "--diff_epochs_cnt_weight",
-        type=int,
-        default=DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
-        help="",
-    )
+        "--diff_time_weight", type=int, default=DEFAULT_DIFF_TIME_WEIGHT)
 
     train_parser.add_argument(
-        "--loop",
-        action="store_true",
-        help="",
-    )
+        "--loop", action="store_true")
 
     # ---
 
     eval_parser = subparser.add_parser(
-        "eval",
-        help="eval the module",
-    )
+        "eval", help="eval the module")
 
     # ---
 
     call_parser = subparser.add_parser(
-        "call",
-    )
+        "call")
 
     call_parser.add_argument(
-        "func_name",
-        type=str,
-        help="The function name to call.",
-    )
+        "func_name", type=str, help="The function name to call.")
 
     call_parser.add_argument(
-        "kwargs",
-        nargs=argparse.REMAINDER,
-        help="Function keyword arguments.",
-    )
+        "kwargs", nargs=argparse.REMAINDER, help="Function keyword arguments.")
 
     # ---
 
     exe_cmd_file_parser = subparser.add_parser(
-        "exe_cmd_file",
-        help="execute file commands",
-    )
+        "exe_cmd_file", help="execute file commands")
 
     # ---
 
     exit_parser = subparser.add_parser(
-        "exit",
-        help="exit the cli mode",
-    )
+        "exit", help="exit the cli mode")
 
     return parser
 
@@ -345,11 +270,7 @@ class Trainer:
     def _get_cancel_token_path(proj_dir: pathlib.Path):
         return proj_dir / f"cancel_token.txt"
 
-    def __init__(
-        self,
-        proj_dir: os.PathLike,
-        device: torch.device,
-    ):
+    def __init__(self, proj_dir: os.PathLike, trainer_core: TrainerCore):
         self.__proj_dir = utils.to_pathlib_path(proj_dir)
 
         if not self.__proj_dir.exists():
@@ -361,15 +282,12 @@ class Trainer:
 
         self.__log_db = LogDatabase(log_db_path)
 
-        self.__device = device
+        self.__prv_ckpt: CheckpointMeta = None
+        self.__cur_time: datetime.datetime = datetime.datetime.now()
 
-        self.__prv: int = -1
-        self.__epochs_cnt: int = 0
-        self.__avg_loss: float = 0.0
+        self.__training_result: TrainingResult = None
 
-        self.__diff_epochs_cnt = 0
-
-        self.training_core: TrainingCore = None
+        self.trainer_core = trainer_core
 
         utils.write_file(Trainer._get_cancel_token_path(
             self.__proj_dir), "w", "")
@@ -383,19 +301,41 @@ class Trainer:
             }),
         )
 
-    def show(self):
-        print(f"")
-        print(f"            prv = {self.__prv}")
-        print(f"     epochs cnt = {self.__epochs_cnt}")
-        print(f"diff epochs cnt = {self.__diff_epochs_cnt}")
-        print(f"       avg loss = {self.__avg_loss}")
-        print(f"")
+    def show(self) -> None:
+        cur_epoch = self.trainer_core.get_epoch()
 
-    def get_latest_ckpt_meta(self):
+        if self.__prv_ckpt is None:
+            prv_ckpt_id = -1
+            prv_ckpt_epoch = -1
+            prv_ckpt_time = None
+
+            diff_epoch = None
+            diff_time = None
+        else:
+            prv_ckpt_id = self.__prv_ckpt.id
+            prv_ckpt_epoch = self.__prv_ckpt.epoch
+            prv_ckpt_time = self.__prv_ckpt.time
+
+            diff_epoch = cur_epoch - prv_ckpt_epoch
+            diff_time = self.__cur_time - prv_ckpt_time
+
+        training_message = self.__training_result.message if self.__training_result is not None else ""
+
+        print(tabulate.tabulate([
+            ("prv ckpt id", prv_ckpt_id),
+            ("prv ckpt epoch", prv_ckpt_epoch),
+            ("cur epoch", self.trainer_core.get_epoch()),
+            ("cur time", utils.serialize_datetime(self.__cur_time, "SEC")),
+            ("traininer message", training_message),
+            ("diff epoch", diff_epoch),
+            ("diff time", diff_time),
+        ]))
+
+    def get_latest_ckpt_meta(self) -> CheckpointMeta:
         return self.__log_db.select_latest_ckpt_meta()
 
-    def load(self, id: int):
-        assert self.training_core is not None
+    def load(self, id: int) -> None:
+        assert self.trainer_core is not None
 
         ckpt_meta = self.__log_db.select_ckpt_meta({"id": id})
 
@@ -404,38 +344,11 @@ class Trainer:
         ckpt_data_path = Trainer._get_ckpt_data_path(
             self.__proj_dir, ckpt_meta.id)
 
-        d = torch.load(ckpt_data_path)
+        self.trainer_core.load_state_dict(torch.load(ckpt_data_path))
 
-        if ckpt_meta.full:
-            for field_name in {"module", "optimizer", "scheduler"}:
-                if field_name not in d:
-                    continue
+        self.__prv_ckpt = ckpt_meta
 
-                val = d[field_name]
-
-                if field_name == "module":
-                    val = val.to(self.__device)
-
-                self.training_core.set(field_name, val)
-        else:
-            for field_name in {"module", "optimizer", "scheduler"}:
-                if field_name not in d:
-                    continue
-
-                field_val = self.training_core.get(field_name)
-
-                if field_val is not None:
-                    field_val.load_state_dict(d[field_name])
-
-                if field_name == "module":
-                    field_val.to(self.__device)
-
-        self.__prv = ckpt_meta.prv
-        self.__epochs_cnt = ckpt_meta.epochs_cnt
-        self.__diff_epochs_cnt = 0
-        self.__avg_loss = ckpt_meta.avg_loss
-
-    def load_latest(self):
+    def load_latest(self) -> None:
         ckpt_meta = self.get_latest_ckpt_meta()
 
         if ckpt_meta is not None:
@@ -445,94 +358,96 @@ class Trainer:
         self,
         message: str = None,
         full: bool = False,
-    ):
-        assert self.training_core is not None
+    ) -> None:
+        assert self.trainer_core is not None
 
         id = int(time.time())
 
         print(f"saving id={id}")
 
-        self.__log_db.insert_ckpt_meta(CheckpointMeta(
+        ckpt = CheckpointMeta(
             id=id,
-            prv=self.__prv,
-            epochs_cnt=self.__epochs_cnt,
+            prv=-1 if self.__prv_ckpt is None else self.__prv_ckpt.id,
+            epoch=self.trainer_core.get_epoch(),
+            time=self.__cur_time,
             message=message,
+            training_message=None if self.__training_result is None
+            else self.__training_result.message,
             full=full,
-            avg_loss=self.__avg_loss,
-        ))
+        )
 
-        self.__prv = id
-        self.__diff_epochs_cnt = 0
+        self.__log_db.insert_ckpt_meta(ckpt)
 
-        d = dict()
+        self.__prv_ckpt = ckpt
+
+        d = None
 
         if full:
             print(f"full saved")
-
-            for field_name in {"module", "optimizer", "scheduler"}:
-                d[field_name] = self.training_core.get(field_name)
+            d = self.trainer_core.state_dict(True)
         else:
             print(f"     saved")
+            d = self.trainer_core.state_dict(False)
 
-            for field_name in {"module", "optimizer", "scheduler"}:
-                field_val = self.training_core.get(field_name)
-
-                d[field_name] = None if field_val is None else \
-                    field_val.state_dict()
-
-        print(f"{d=}")
-
-        torch.save(
-            d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
+        torch.save(d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
 
         print(f"saved")
-
-    def _train(self):
-        training_result = self.training_core.train()
-
-        self.__epochs_cnt += 1
-        self.__diff_epochs_cnt += 1
-        self.__avg_loss = training_result.avg_loss
 
     def train(
         self,
         epochs_cnt: int = 1,
+        diff_epoch_weight: float = DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
         diff_time_weight: float = DEFAULT_DIFF_TIME_WEIGHT,
-        diff_epochs_cnt_weight: float = DEFAULT_DIFF_EPOCHS_CNT_WEIGHT,
-    ):
+    ) -> None:
         assert 0 <= epochs_cnt
 
+        assert 0 <= diff_epoch_weight
         assert 0 <= diff_time_weight
-        assert 0 <= diff_epochs_cnt_weight
 
         cancel_token_path = Trainer._get_cancel_token_path(self.__proj_dir)
 
         utils.write_file(cancel_token_path, "w", "")
 
         for _ in range(epochs_cnt):
-            self._train()
+            self.__training_result = self.trainer_core.train()
 
-            cur_time = int(time.time())
+            epoch = self.trainer_core.get_epoch()
+            self.__cur_time = datetime.datetime.now()
 
-            diff_time = cur_time - self.__prv
+            if self.__prv_ckpt is None:
+                save = True
 
-            print(f"{diff_time=}")
-            print(f"{self.__diff_epochs_cnt=}")
+                diff_epoch = math.inf
+                diff_time = math.inf
 
-            if 1 - 1e-3 <= diff_time_weight * diff_time + diff_epochs_cnt_weight * self.__diff_epochs_cnt:
+                print(f"{diff_epoch=}")
+                print(f"{diff_time=}")
+            else:
+                prv_ckpt_epoch = self.__prv_ckpt.epoch
+
+                diff_epoch = epoch - prv_ckpt_epoch
+                diff_time = self.__cur_time - self.__prv_ckpt.time
+
+                print(f"{diff_epoch=}")
+                print(f"{diff_time=}")
+
+                save = 1 - 1e-3 <= (
+                    diff_epoch_weight * diff_epoch +
+                    diff_time_weight * diff_time
+                )
+
+            if save:
                 print(f"auto save triggered")
                 self.save()
 
             if len(utils.read_file(cancel_token_path, "r")) != 0:
                 break
 
-    def eval(self):
-        self.training_core.eval()
+    def call(self, func_name: str, kwargs: dict[str, object]) -> None:
+        ret = getattr(self.trainer_core, func_name)(**kwargs)
+        print(f"{ret=}")
 
-    def call(self, func_name: str, kwargs: dict[str, object]):
-        getattr(self.training_core, func_name)(**kwargs)
-
-    def _cli_handler(self, cmd_parser):
+    def _cli_handler(self, cmd_parser) -> bool:
         cmd = shlex.split(self.prompt_session.prompt())
 
         if len(cmd) == 0:
@@ -556,8 +471,8 @@ class Trainer:
             case "train":
                 self.train(
                     epochs_cnt=args.epochs_cnt,
+                    diff_epoch_weight=args.diff_epoch_weight,
                     diff_time_weight=args.diff_time_weight,
-                    diff_epochs_cnt_weight=args.diff_epochs_cnt_weight,
                 )
 
             case "eval":
@@ -580,7 +495,7 @@ class Trainer:
 
         return True
 
-    def enter_cli(self):
+    def enter_cli(self) -> None:
         cmd_parser = make_cmd_parser()
 
         while True:

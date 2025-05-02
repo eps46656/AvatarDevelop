@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 
 import torch
@@ -19,41 +20,45 @@ class Dataset:
 
 
 @beartype
-class DatasetIterator:
+class BatchIdxIterator:
     def __init__(
         self,
-        dataset: Dataset,
-        batches_cnt: int,
+        shape: tuple[int, ...],
+        *,
+        batch_size: int = 0,
+        batches_cnt: int = 0,
         shuffle: bool,
     ):
-        self.dataset = dataset
+        size = math.prod(shape)
 
-        dataset_shape = self.dataset.shape
-        dataset_size = dataset_shape.numel()
+        assert (0 < batch_size) != (0 < batches_cnt)
+
+        if batches_cnt <= 0:
+            batches_cnt = (size + batch_size - 1) // batch_size
 
         assert 0 < batches_cnt
 
-        batches_cnt = min(batches_cnt, dataset_size)
+        batches_cnt = min(batches_cnt, size)
 
         if shuffle:
-            idxes = torch.randperm(dataset_size, dtype=torch.long)
+            idxes = torch.randperm(size, dtype=torch.long)
         else:
-            idxes = torch.arange(dataset_size, dtype=torch.long)
+            idxes = torch.arange(size, dtype=torch.long)
 
-        self.batch_idxes = torch.unravel_index(idxes, dataset_shape)
+        self.batch_idxes = torch.unravel_index(idxes, shape)
 
         self.acc_batches_size = [
-            i * dataset_size // batches_cnt for i in range(batches_cnt + 1)]
+            i * size // batches_cnt for i in range(batches_cnt + 1)]
 
         self.batch_i = 0
 
     def __len__(self) -> int:
         return len(self.acc_batches_size) - 1
 
-    def __iter__(self) -> DatasetIterator:
+    def __iter__(self) -> BatchIdxIterator:
         return self
 
-    def __next__(self) -> tuple[tuple[torch.Tensor], object]:
+    def __next__(self) -> tuple[torch.Tensor, ...]:
         if len(self) <= self.batch_i:
             raise StopIteration()
 
@@ -65,7 +70,37 @@ class DatasetIterator:
 
         self.batch_i += 1
 
-        return cur_batch_idxes, self.dataset[cur_batch_idxes]
+        return cur_batch_idxes
+
+
+@beartype
+class DatasetIterator:
+    def __init__(
+        self,
+        dataset: Dataset,
+        *,
+        batch_size: int = 0,
+        batches_cnt: int = 0,
+        shuffle: bool,
+    ):
+        self.dataset = dataset
+
+        self.batch_idx_iter = BatchIdxIterator(
+            dataset.shape,
+            batch_size=batch_size,
+            batches_cnt=batches_cnt,
+            shuffle=shuffle,
+        )
+
+    def __len__(self) -> int:
+        return len(self.batch_idx_iter) - 1
+
+    def __iter__(self) -> DatasetIterator:
+        return self
+
+    def __next__(self) -> tuple[tuple[torch.Tensor, ...], object]:
+        batch_idx = next(self.batch_idx_iter)
+        return batch_idx, self.dataset[batch_idx]
 
 
 @beartype
@@ -76,9 +111,9 @@ def load(
     batches_cnt: int = 0,
     shuffle: bool = True,
 ):
-    assert (0 < batch_size) != (0 < batches_cnt)
-
-    if batches_cnt <= 0:
-        batches_cnt = (dataset.shape.numel() + batch_size - 1) // batch_size
-
-    return DatasetIterator(dataset, batches_cnt, shuffle)
+    return DatasetIterator(
+        dataset,
+        batch_size=batch_size,
+        batches_cnt=batches_cnt,
+        shuffle=shuffle,
+    )

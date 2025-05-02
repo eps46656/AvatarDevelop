@@ -142,7 +142,7 @@ def load_trainer():
         device=DEVICE,
     )
 
-    trainer.training_core = training_core
+    trainer.trainer_core = training_core
 
     return trainer
 
@@ -159,7 +159,7 @@ def main2():
     trainer.load_latest()
 
     training_core: gom_avatar_training_utils.TrainingCore = \
-        trainer.training_core
+        trainer.trainer_core
 
     model_blender: smplx_utils.ModelBlender = \
         training_core.module.avatar_blender

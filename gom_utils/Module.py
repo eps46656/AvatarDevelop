@@ -181,39 +181,25 @@ class Module(torch.nn.Module):
             target_faces=target_faces,
         )
 
-        utils.torch_cuda_sync()
-
         face_src_table = mesh_subdivision_result.face_src_table
 
         self.gp_rot_z = torch.nn.Parameter(self.gp_rot_z[face_src_table])
         # [F_]
 
-        utils.torch_cuda_sync()
-
         self.gp_scale_x = torch.nn.Parameter(self.gp_scale_x[face_src_table])
         # [F_]
-
-        utils.torch_cuda_sync()
 
         self.gp_scale_y = torch.nn.Parameter(self.gp_scale_y[face_src_table])
         # [F_]
 
-        utils.torch_cuda_sync()
-
         self.gp_scale_z = torch.nn.Parameter(self.gp_scale_z[face_src_table])
         # [F_]
-
-        utils.torch_cuda_sync()
 
         self.gp_color = torch.nn.Parameter(self.gp_color[face_src_table])
         # [F_, C]
 
-        utils.torch_cuda_sync()
-
         self.gp_opacity = torch.nn.Parameter(self.gp_opacity[face_src_table])
         # [F_]
-
-        utils.torch_cuda_sync()
 
         return self
 
@@ -399,7 +385,7 @@ class Module(torch.nn.Module):
             # [..., F]
 
             word_gp_xy_scale_diff = avatar_model.mesh_graph.calc_face_diff(
-                word_gp_xy_scale.unsqueeze(-1))
+                word_gp_xy_scale[..., None])
             # [..., FP, 1]
 
             gp_scale_diff_loss = word_gp_xy_scale_diff.mean((-1, -2))

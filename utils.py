@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import atexit
 import datetime
-import enum
 import functools
 import gc
 import inspect
@@ -19,8 +18,7 @@ import traceback
 import types
 import typing
 
-import cv2 as cv
-import einops
+import dateutil
 import numpy as np
 import PIL
 import PIL.Image
@@ -85,12 +83,12 @@ def print_pos(
     lineno: int,
     funcname: str,
 ):
-    timestr = serialize_datetime(time, True)
+    timestr = serialize_datetime(time, "SEC")
     print(f"{timestr}\t{filename}:{lineno}\t\t{funcname}")
 
 
 @beartype
-def print_cur_pos():
+def print_cur_pos() -> None:
     time = datetime.datetime.now()
 
     frame = inspect.currentframe().f_back
@@ -119,7 +117,7 @@ def timestamp_usec() -> int:
 
 
 @beartype
-def set_add(s: set[object], obj: object):
+def set_add(s: set[object], obj: object) -> bool:
     old_size = len(s)
     s.add(obj)
     return old_size != len(s)
@@ -137,7 +135,7 @@ def dict_insert(
     d: dict[object, object],
     key: object,
     value: object,
-):
+) -> bool:
     old_size = len(d)
     value = d.setdefault(key, value)
     return key, value, old_size != len(d)
@@ -147,31 +145,31 @@ def dict_insert(
 def dict_pop(
     d: dict[object, object],
     key: object,
-):
+) -> bool:
     old_size = len(d)
     d.pop(key, None)
     return old_size != len(d)
 
 
 @beartype
-def min_max(x: typing.Any, y: typing.Any):
+def min_max(x: typing.Any, y: typing.Any) -> tuple[typing.Any, typing.Any]:
     return (x, y) if x <= y else (y, x)
 
 
 @beartype
-def clamp(x: typing.Any, lb: typing.Any, ub: typing.Any):
+def clamp(x: typing.Any, lb: typing.Any, ub: typing.Any) -> typing.Any:
     assert lb <= ub
     return max(lb, min(x, ub))
 
 
 @beartype
-def rand_int(lb: int, rb: int):
+def rand_int(lb: int, rb: int) -> int:
     assert lb <= rb
     return random.randint(lb, rb)
 
 
 @beartype
-def rand_float(lb: float, rb: float):
+def rand_float(lb: float, rb: float) -> float:
     assert lb <= rb
     return random.random() * (rb - lb) + lb
 
@@ -179,22 +177,32 @@ def rand_float(lb: float, rb: float):
 @beartype
 def serialize_datetime(
     dt: typing.Optional[datetime.datetime],
-    second_precision: bool,
-):
+    precision: str,  # "MIN", "SEC"
+) -> str:
     if dt is None:
         return None
 
+    precision = precision.upper()
+    assert precision in ("MIN", "SEC", "USEC")
+
     dt = dt.replace(tzinfo=datetime.timezone.utc)
 
-    return dt.strftime("%Y-%m-%d %H:%M:%S") if second_precision else dt.strftime("%Y-%m-%d")
+    match precision:
+        case "MIN":
+            format_str = "%Y-%m-%d %H:%M"
+
+        case "SEC":
+            format_str = "%Y-%m-%d %H:%M:%S"
+
+        case _:
+            raise MismatchException()
+
+    return dt.strftime(format_str)
 
 
 @beartype
-def deserialize_datetime(
-    dt_str: typing.Optional[str],
-    second_precision: bool,
-):
-    return None if dt_str is None else datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S" if second_precision else "%Y-%m-%d")
+def deserialize_datetime(dt_str: typing.Optional[str]) -> datetime.datetime:
+    return None if dt_str is None else dateutil.parser.parse(dt_str)
 
 
 class MismatchException(Exception):
@@ -212,17 +220,27 @@ def _mem_clear() -> None:
     gc.collect()
 
     if torch.cuda.is_available():
+        torch_cuda_sync()
         torch.cuda.empty_cache()
 
 
+mem_clear_func_param = typing.ParamSpec("ParamSpec")
+mem_clear_func_return = typing.TypeVar("TypeVar")
+
+
 @beartype
-def mem_clear(func: typing.Optional[typing.Callable[..., typing.Any]] = None):
+def mem_clear(
+    func: typing.Optional[
+        typing.Callable[mem_clear_func_param, mem_clear_func_return]] = None):
     if func is None:
         _mem_clear()
         return
 
     @functools.wraps(func)
-    def wrapper(*args: object, **kwargs: object):
+    def wrapper(
+        *args: deferable_func_param.args,
+        **kwargs: deferable_func_param.kwargs,
+    ):
         _mem_clear()
         ret = func(*args, **kwargs)
         _mem_clear()
@@ -296,8 +314,8 @@ class Timer:
 
     @property
     def duration(self):
-        return -1.0 if self.beg is None or self.end is None else \
-            self.end - self.beg
+        return -1.0 if self.beg is None or self.end is None \
+            else self.end - self.beg
 
     def start(self):
         torch_cuda_sync()
@@ -315,7 +333,7 @@ class Timer:
     def __enter__(self) -> Timer:
         self.start()
 
-        frame = inspect.currentframe().f_back
+        frame = inspect.currentframe().f_back.f_back
 
         self.filename = frame.f_code.co_filename
         self.line_num = frame.f_lineno
@@ -429,7 +447,10 @@ def check_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> None:
 
 
 @beartype
-def check_shapes(*args: typing.Any) -> None | int | tuple[int, ...]:
+def check_shapes(
+    *args: typing.Any,
+    set_zero_if_undet: bool = True,
+) -> None | int | tuple[int, ...]:
     assert len(args) % 2 == 0
 
     undet_shapes: dict[int, int] = dict()
@@ -509,7 +530,7 @@ def check_shapes(*args: typing.Any) -> None | int | tuple[int, ...]:
                 f"Tensor shape {old_p_val} and {t_val} are inconsistant."
 
     ret = tuple(
-        max(0, undet_shape)
+        max(0, undet_shape) if set_zero_if_undet else undet_shape
         for _, undet_shape in sorted(undet_shapes.items(), reverse=True)
     )
 
@@ -1602,242 +1623,28 @@ def homo_normalize(
 
 
 @beartype
-def eval_mat_mul(
-    shape_l: tuple[int, ...],  # [..., P, Q]
-    shape_r: tuple[int, ...],  # [..., Q, R]
-) -> tuple[
-    tuple[int, ...],  # [..., P, R]
-    float,
-]:
-    P, Q, R = -1, -2, -3
-
-    P, Q, R = check_shapes(
-        shape_l, (..., P, Q),
-        shape_r, (..., Q, R),
-    )
-
-    s = broadcast_shapes(shape_l[:-2], shape_r[:-2])
-
-    ret_shape = (*s, P, R)
-    ret_cost = float(math.prod(s) * P * Q * R)
-
-    return ret_shape, ret_cost
-
-
-@beartype
-def eval_mat_mul_dp(
-    shapes: typing.Sequence[tuple[int, ...]],
-) -> tuple[
-    list[list[int]],  # dp_i
-    list[list[tuple[int, ...]]],  # dp_shape
-    list[list[float]],  # dp_cost
-]:
-    N = len(shapes)
-
-    assert 0 < N
-
-    dp_i: list[list[int]] = [[0 for j in range(N + 1)] for i in range(N + 1)]
-
-    dp_shape: list[list[tuple[int, ...]]] = \
-        [[() for j in range(N + 1)] for i in range(N + 1)]
-
-    for i in range(N):
-        dp_shape[i][i + 1] = shapes[i]
-
-    dp_cost: list[list[float]] = [
-        [0.0 for j in range(N + 1)] for i in range(N + 1)]
-
-    alpha = 0.6
-
-    for l in range(2, N + 1):
-        for i in range(N - l + 1):
-            j = i + l
-
-            best_i = -1
-            best_cost = math.inf
-            best_shape = None
-
-            for k in range(i + 1, j):
-                shape_l, cost_l = dp_shape[i][k], dp_cost[i][k]
-                shape_r, cost_r = dp_shape[k][j], dp_cost[k][j]
-
-                reduced_shape, reduced_cost = eval_mat_mul(shape_l, shape_r)
-
-                cost = (cost_l + cost_r) * (1 - alpha) + \
-                    max(cost_l, cost_r) * alpha + \
-                    reduced_cost
-
-                if cost < best_cost:
-                    best_i = k
-                    best_cost = cost
-                    best_shape = reduced_shape
-
-            dp_i[i][j] = best_i
-            dp_cost[i][j] = best_cost
-            dp_shape[i][j] = best_shape
-
-    return dp_i, dp_shape, dp_cost
-
-
-@beartype
-def _mat_mul(
-    args: typing.Any,
-    dtype: torch.dtype,
-    device: typing.Optional[torch.device],
-    order: str,
-    out: typing.Optional[torch.Tensor],
-):
-    if isinstance(args, torch.Tensor):
-        return args.to(device, dtype)
-
-    args = [_mat_mul(arg, dtype, device, order, None) for arg in args]
-
-    if len(args) == 2:
-        return torch.matmul(args[0], args[1], out=out)
-
-    if order == "lr":
-        acc = args[0]
-
-        for i in range(1, len(args) - 1):
-            acc = torch.matmul(acc, args[i])
-
-        return torch.matmul(acc, args[-1], out=out)
-
-    if order == "rl":
-        acc = args[-1]
-
-        for i in range(len(args) - 2, 0, -1):
-            acc = torch.matmul(args[i], acc)
-
-        return torch.matmul(args[0], acc, out=out)
-
-    dp_i, dp_shape, dp_cost = eval_mat_mul_dp([arg.shape for arg in args])
-
-    def _f(i, j):
-        if i + 1 == j:
-            return args[i].to(device, dtype)
-
-        cur_pivot = dp_i[i][j]
-
-        return torch.matmul(_f(i, cur_pivot), _f(cur_pivot, j))
-
-    pivot = dp_i[0][len(args)]
-
-    return torch.matmul(_f(0, pivot), _f(pivot, len(args)), out=out)
-
-
-@beartype
-def arrange_args(
-    args: typing.Any,
-    eliminate_none: bool,
-) -> tuple[
-    int, torch.dtype, typing.Optional[torch.Tensor | list]
-]:
-    if args is None:
-        if eliminate_none:
-            return 0, None, None
-
-        return 1, None, None
-
-    if (
-        isinstance(args, int) or
-        isinstance(args, float) or
-        isinstance(args, torch.Tensor)
-    ):
-        return 1, args.dtype, args
-
-    while True:
-        if not isinstance(args, typing.Sequence):
-            assert isinstance(args, typing.Iterable)
-            args = list(args)
-
-        if 1 <= len(args):
-            break
-
-        if len(args) == 0:
-            return 0, None, None
-
-        args = args[0]
-
-    ret_n = 0
-    ret_dtype = None
-    ret_args = list()
-
-    for arg in args:
-        cur_n, cur_dtype, cur_args = arrange_args(arg, eliminate_none)
-
-        if cur_n == 0:
-            continue
-
-        ret_n += cur_n
-        ret_dtype = promote_dtypes(ret_dtype, cur_dtype)
-        ret_args.append(cur_args)
-
-    if ret_n == 0:
-        return 0, None, None
-
-    if ret_n == 1:
-        return 1, ret_dtype, ret_args[0]
-
-    return ret_n, ret_dtype, ret_args
-
-
-@beartype
-def add(
-    *args: typing.Any,
-    dtype: typing.Optional[torch.dtype] = None,
-    device: typing.Optional[torch.device] = None,
-    out: typing.Optional[torch.Tensor] = None,
-):
-    args = [arg for arg in args if arg is not None]
-
-    if dtype is not None:
-        dtype = promote_dtypes(*args)
-
-    N = len(args)
-
-    assert 0 < N
-
-    ret = args[0].to(device, dtype)
-
-    if N == 1:
-        return ret
-
-    for i in range(1, N - 1):
-        ret = ret + args[i]
-
-    return torch.add(ret, args[-1], out=out)
-
-
-@beartype
 def mat_mul(
-    *args: typing.Any,
+    *args: torch.Tensor,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-    order: str = "auto",  # auto, lr, rl
     out: typing.Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    order = order.lower()
+    n = len(args)
 
-    assert order in {"lr", "rl", "auto"}
-
-    n, p_dtype, args = arrange_args(args, True)
-
-    assert 1 <= n
-
-    if n == 1:
-        return args
+    assert 0 < n
 
     if dtype is None:
-        dtype = p_dtype
+        dtype = promote_dtypes(*args)
 
-    return _mat_mul(
-        args=args,
-        dtype=dtype,
-        device=device,
-        order=order,
-        out=out
-    )
+    acc = args[0].to(device, dtype)
+
+    if n == 1:
+        return acc if out is None else out.copy_(acc.to(device, dtype))
+
+    for i in range(1, n - 1):
+        acc = torch.matmul(acc, args[i].to(device, dtype))
+
+    return torch.matmul(acc, args[-1].to(device, dtype), out=out)
 
 
 @beartype
@@ -2267,8 +2074,8 @@ def tensor_serialize(
     x: typing.Optional[torch.Tensor],
     dtype: typing.Optional[object] = None,
 ) -> typing.Optional[np.ndarray]:
-    return None if x is None else \
-        np.array(x.numpy(force=True), dtype=dtype, copy=True)
+    return None if x is None \
+        else np.array(x.numpy(force=True), dtype=dtype, copy=True)
 
 
 @beartype
@@ -2277,5 +2084,5 @@ def tensor_deserialize(
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ) -> typing.Optional[torch.Tensor]:
-    return None if x is None else \
-        torch.from_numpy(x).to(device, dtype, copy=True)
+    return None if x is None \
+        else torch.from_numpy(x).to(device, dtype, copy=True)

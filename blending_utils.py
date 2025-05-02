@@ -307,11 +307,11 @@ def lbs(
         target_pose_t,
     )
 
-    ret_vp = None if vert_pos is None else \
-        lbs_opr.blend_pos(vert_pos, lbs_weight)
+    ret_vp = None if vert_pos is None \
+        else lbs_opr.blend_pos(vert_pos, lbs_weight)
 
-    ret_vd = None if vert_dir is None else \
-        lbs_opr.blend_dir(vert_dir, lbs_weight)
+    ret_vd = None if vert_dir is None \
+        else lbs_opr.blend_dir(vert_dir, lbs_weight)
 
     return LBSResult(
         lbs_opr=lbs_opr,

@@ -44,7 +44,7 @@ def MyLossFunc(
 
 
 @beartype
-class MyTrainingCore(training_utils.TrainingCore):
+class MyTrainingCore(training_utils.TrainerCore):
     def train(self) -> training_utils.TrainingResult:
         assert self.scheduler is None or isinstance(
             self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
@@ -347,7 +347,7 @@ def main1():
     trainer.enter_cli()
 
     map_to_texture(
-        trainer.training_core.module,
+        trainer.trainer_core.module,
         smplx_utils.BlendingParam(),
         1000,
         1000,

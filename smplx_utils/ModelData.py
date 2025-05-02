@@ -38,11 +38,11 @@ class ModelData:
     def __init__(
         self,
         *,
-        kin_tree: kin_utils.KinTree = None,
-
         body_joints_cnt: int = 0,  # BJ
         jaw_joints_cnt: int = 0,  # JJ
         eye_joints_cnt: int = 0,  # EYEJ
+
+        kin_tree: typing.Optional[kin_utils.KinTree] = None,
 
         mesh_graph: typing.Optional[mesh_utils.MeshGraph],
         tex_mesh_graph: typing.Optional[mesh_utils.MeshGraph],
@@ -66,8 +66,6 @@ class ModelData:
         pose_vert_dir: typing.Optional[torch.Tensor],
         # [..., V, 3, (J - 1) * 3 * 3]
     ):
-        J = kin_tree.joints_cnt
-
         BODYJ = body_joints_cnt
         JAWJ = jaw_joints_cnt
         EYEJ = eye_joints_cnt
@@ -76,9 +74,9 @@ class ModelData:
         assert 0 <= JAWJ
         assert 0 <= EYEJ
 
-        HANDJ, BS, ES, V, TV = -1, -2, -3, -4, -5
+        HANDJ, BS, ES, J, V, TV, P = -1, -2, -3, -4, -5, -6, -7
 
-        HANDJ, BS, ES, V, TV = utils.check_shapes(
+        HANDJ, BS, ES, J, V, TV, P = utils.check_shapes(
             vert_pos, (..., V, 3),
             tex_vert_pos, (..., TV, 2),
 
@@ -93,27 +91,63 @@ class ModelData:
             lhand_pose_mean, (..., HANDJ, 3),
             rhand_pose_mean, (..., HANDJ, 3),
 
-            pose_vert_dir, (..., V, 3, (J - 1) * 3 * 3),
+            pose_vert_dir, (..., V, 3, P),
+
+            set_zero_if_undet=False,
         )
 
+        if kin_tree is not None:
+            assert J < 0 or kin_tree.joints_cnt == J
+            J = kin_tree.joints_cnt
+
+        F = -8
+
         if mesh_graph is not None:
-            assert mesh_graph.verts_cnt == V
+            assert V < 0 or mesh_graph.verts_cnt == V
+            V = mesh_graph.verts_cnt
+
+            assert F < 0 or mesh_graph.faces_cnt == F
+            F = mesh_graph.faces_cnt
 
         if tex_mesh_graph is not None:
-            assert tex_mesh_graph.verts_cnt == TV
+            assert TV < 0 or tex_mesh_graph.verts_cnt == TV
+            TV = tex_mesh_graph.verts_cnt
 
-        if mesh_graph is not None and tex_mesh_graph is not None:
-            assert mesh_graph.faces_cnt == tex_mesh_graph.faces_cnt
+            assert F < 0 or tex_mesh_graph.faces_cnt == F
+            F = tex_mesh_graph.faces_cnt
+
+        BODYJ = max(0, BODYJ)
+        JAWJ = max(0, JAWJ)
+        EYEJ = max(0, EYEJ)
+        HANDJ = max(0, HANDJ)
+        J = max(0, J)
+
+        V = max(0, V)
+        TV = max(0, TV)
+
+        F = max(0, F)
+
+        assert max(0, P) == max(0, J - 1) * 3 * 3
 
         assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
         # ---
 
-        self.kin_tree = kin_tree
+        self.joints_cnt = J
+        self.body_joints_cnt = BODYJ
+        self.jaw_joints_cnt = JAWJ
+        self.eye_joints_cnt = EYEJ
+        self.hand_joints_cnt = HANDJ
 
-        self.body_joints_cnt = body_joints_cnt
-        self.jaw_joints_cnt = jaw_joints_cnt
-        self.eye_joints_cnt = eye_joints_cnt
+        self.body_shapes_cnt = BS
+        self.expr_shapes_cnt = ES
+
+        self.verts_cnt = V
+        self.tex_verts_cnt = TV
+
+        self.faces_cnt = F
+
+        self.kin_tree = kin_tree
 
         self.mesh_graph = mesh_graph
         self.tex_mesh_graph = tex_mesh_graph
@@ -136,74 +170,6 @@ class ModelData:
 
         self.pose_vert_dir = pose_vert_dir  # [..., V, 3, (J - 1) * 3 * 3]
 
-    @property
-    def hand_joints_cnt(self) -> int:
-        return 0 if self.lhand_pose_mean is None else \
-            self.lhand_pose_mean.shape[-2]
-
-    @property
-    def joints_cnt(self) -> int:
-        return self.kin_tree.joints_cnt
-
-    @property
-    def verts_cnt(self) -> int:
-        return 0 if self.vert_pos is None else self.vert_pos.shape[0]
-
-    @property
-    def tex_verts_cnt(self) -> int:
-        return 0 if self.tex_vert_pos is None else self.tex_vert_pos.shape[0]
-
-    @property
-    def faces_cnt(self) -> int:
-        return 0 if self.mesh_graph is None else self.mesh_graph.faces_cnt
-
-    @property
-    def body_shapes_cnt(self) -> int:
-        return 0 if self.body_shape_vert_dir is None else \
-            self.body_shape_vert_dir.shape[-1]
-
-    @property
-    def expr_shapes_cnt(self) -> int:
-        return 0 if self.expr_shape_vert_dir is None else \
-            self.expr_shape_vert_dir.shape[-1]
-
-    @staticmethod
-    def empty(
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> ModelData:
-        def f(*shape):
-            return torch.empty(shape, dtype=dtype, device=device),
-
-        return ModelData(
-            kin_tree=kin_utils.KinTree.empty(),
-
-            body_joints_cnt=0,
-            jaw_joints_cnt=0,
-            eye_joints_cnt=0,
-
-            mesh_graph=mesh_utils.MeshGraph.empty(0),
-            tex_mesh_graph=mesh_utils.MeshGraph.empty(0),
-
-            joint_t_mean=f(0, 3),
-
-            vert_pos=f(0, 3),
-            tex_vert_pos=f(0, 3),
-
-            lbs_weight=f(0, 0),
-
-            body_shape_joint_dir=f(0, 3, 0),
-            expr_shape_joint_dir=f(0, 3, 0),
-
-            body_shape_vert_dir=f(0, 3, 0),
-            expr_shape_vert_dir=f(0, 3, 0),
-
-            lhand_pose_mean=f(0, 3),
-            rhand_pose_mean=f(0, 3),
-
-            pose_vert_dir=f(0, 3, 0),
-        )
-
     @staticmethod
     def from_origin_file(
         *,
@@ -218,16 +184,20 @@ class ModelData:
 
         # ---
 
-        kin_tree_table = model_data["kintree_table"]
+        kin_tree_table = model_data.get("kintree_table", None)
 
-        kin_tree_links = [
-            (int(kin_tree_table[0, j]), int(kin_tree_table[1, j]))
-            for j in range(kin_tree_table.shape[1])]
+        if kin_tree_table is None:
+            kin_tree = None
+            J = 0
+        else:
+            kin_tree_links = [
+                (int(kin_tree_table[0, j]), int(kin_tree_table[1, j]))
+                for j in range(kin_tree_table.shape[1])]
 
-        kin_tree = kin_utils.KinTree.from_links(kin_tree_links)
-        # joints_cnt = J
+            kin_tree = kin_utils.KinTree.from_links(kin_tree_links)
+            # joints_cnt = J
 
-        J = kin_tree.joints_cnt
+            J = kin_tree.joints_cnt
 
         # ---
 
@@ -246,14 +216,14 @@ class ModelData:
         def try_fetch_int(field_name: str):
             val = model_data.get(field_name, None)
 
-            return None if val is None else \
-                torch.from_numpy(model_data[field_name]).to(torch.long)
+            return None if val is None \
+                else torch.from_numpy(model_data[field_name]).to(torch.long)
 
         def try_fetch_float(field_name: str):
             val = model_data.get(field_name, None)
 
-            return None if val is None else \
-                torch.from_numpy(model_data[field_name]).to(torch.float64)
+            return None if val is None \
+                else torch.from_numpy(model_data[field_name]).to(torch.float64)
 
         faces = try_fetch_int("f")
         tex_faces = try_fetch_int("ft")
@@ -369,11 +339,11 @@ class ModelData:
         # ---
 
         return ModelData(
-            kin_tree=kin_tree,
-
             body_joints_cnt=model_config.body_joints_cnt,
             jaw_joints_cnt=model_config.jaw_joints_cnt,
             eye_joints_cnt=model_config.eye_joints_cnt,
+
+            kin_tree=kin_tree,
 
             mesh_graph=mesh_graph,
             tex_mesh_graph=tex_mesh_graph,
@@ -402,7 +372,7 @@ class ModelData:
         state_dict: dict[str, object],
         *,
         dtype: typing.Optional[torch.dtype] = None,
-        device: torch.device,
+        device: typing.Optional[torch.device] = None,
     ) -> ModelData:
         assert dtype is None or dtype.is_floating_point
 
@@ -415,7 +385,6 @@ class ModelData:
                 state_dict.get(field_name, None), dtype, device)
 
         vert_pos = try_fetch_float("vert_pos")
-
         tex_vert_pos = try_fetch_float("tex_vert_pos")
 
         V, TV = utils.check_shapes(
@@ -427,12 +396,12 @@ class ModelData:
         tex_faces = try_fetch_int("tex_faces")
 
         return ModelData(
-            kin_tree=kin_utils.KinTree.from_parents(
-                state_dict["joint_parents"]),
-
             body_joints_cnt=state_dict["body_joints_cnt"],
             jaw_joints_cnt=state_dict["jaw_joints_cnt"],
             eye_joints_cnt=state_dict["eye_joints_cnt"],
+
+            kin_tree=kin_utils.KinTree.from_parents(
+                state_dict["joint_parents"]),
 
             mesh_graph=None if faces is None else
             mesh_utils.MeshGraph.from_faces(V, faces, device),
@@ -546,11 +515,11 @@ class ModelData:
             return None if x is None else x.to(*args, **kwargs)
 
         return ModelData(
-            kin_tree=self.kin_tree,
-
             body_joints_cnt=self.body_joints_cnt,
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
+
+            kin_tree=self.kin_tree,
 
             mesh_graph=f(self.mesh_graph),
             tex_mesh_graph=f(self.tex_mesh_graph),
@@ -681,56 +650,34 @@ class ModelData:
             # [F_, 3]
 
             new_tex_mesh_graph = mesh_utils.MeshGraph.from_faces(
-                tex_mesh_vert_src_table.shape[0], new_tex_mesh_faces, self.device)
-
-        assert (0 <= vert_src_table).all()
-        assert (vert_src_table < self.verts_cnt).all()
-
-        print(f"{self.verts_cnt=}")
-        print(f"{self.vert_pos.shape=}")
-        print(f"{self.lbs_weight.shape=}")
-        print(f"{vert_src_table.min()=}")
-        print(f"{vert_src_table.max()=}")
-
-        utils.torch_cuda_sync()
+                tex_mesh_vert_src_table.shape[0],
+                new_tex_mesh_faces, self.device)
 
         new_vert_pos = None if self.vert_pos is None \
             else self.vert_pos[..., vert_src_table, :].mean(-2)
-
-        utils.torch_cuda_sync()
 
         new_tex_vert_pos = self.tex_vert_pos \
             if self.tex_vert_pos is None or tex_mesh_vert_src_table is None \
             else self.tex_vert_pos[..., tex_mesh_vert_src_table, :].mean(-2)
 
-        utils.torch_cuda_sync()
-
         new_lbs_weight = None if self.lbs_weight is None \
             else self.lbs_weight[..., vert_src_table, :].mean(-2)
-
-        utils.torch_cuda_sync()
 
         new_body_shape_vert_dir = None if self.body_shape_vert_dir is None \
             else self.body_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
 
-        utils.torch_cuda_sync()
-
         new_expr_shape_vert_dir = None if self.expr_shape_vert_dir is None \
             else self.expr_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
-
-        utils.torch_cuda_sync()
 
         new_pose_vert_dir = None if self.pose_vert_dir is None \
             else self.pose_vert_dir[..., vert_src_table, :, :].mean(-3)
 
-        utils.torch_cuda_sync()
-
         model_data = ModelData(
-            kin_tree=self.kin_tree,
-
             body_joints_cnt=self.body_joints_cnt,
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
+
+            kin_tree=self.kin_tree,
 
             mesh_graph=new_mesh_graph,
             tex_mesh_graph=new_tex_mesh_graph,
@@ -792,66 +739,42 @@ class ModelData:
             tex_vert_src_table = tex_mesh_graph_extraction_result.vert_src_table
             # [TV_]
 
-        utils.torch_cuda_sync()
-
-        if vert_src_table is not None:
-            assert (0 <= vert_src_table).all()
-            assert (vert_src_table < self.verts_cnt).all()
-
-        if tex_vert_src_table is not None:
-            assert (0 <= tex_vert_src_table).all()
-            assert (tex_vert_src_table < self.tex_verts_cnt).all()
-
-        utils.torch_cuda_sync()
-
         new_vert_pos = self.vert_pos \
-            if self.vert_pos is None or vert_src_table is None else \
-            self.vert_pos[..., vert_src_table, :]
+            if self.vert_pos is None or vert_src_table is None \
+            else self.vert_pos[..., vert_src_table, :]
         # [..., V_, 3]
 
-        utils.torch_cuda_sync()
-
         new_tex_vert_pos = self.tex_vert_pos \
-            if self.tex_vert_pos is None or tex_vert_src_table is None else \
-            self.tex_vert_pos[..., tex_vert_src_table, :]
+            if self.tex_vert_pos is None or tex_vert_src_table is None \
+            else self.tex_vert_pos[..., tex_vert_src_table, :]
         # [..., TV_, 2]
 
-        utils.torch_cuda_sync()
-
         new_body_shape_vert_dir = self.body_shape_vert_dir \
-            if self.body_shape_vert_dir is None or vert_src_table is None else \
-            self.body_shape_vert_dir[..., vert_src_table, :, :]
+            if self.body_shape_vert_dir is None or vert_src_table is None \
+            else self.body_shape_vert_dir[..., vert_src_table, :, :]
         # [..., V_, 3, ES]
 
-        utils.torch_cuda_sync()
-
         new_expr_shape_vert_dir = self.expr_shape_vert_dir \
-            if self.expr_shape_vert_dir is None or vert_src_table is None else \
-            self.expr_shape_vert_dir[..., vert_src_table, :, :]
+            if self.expr_shape_vert_dir is None or vert_src_table is None \
+            else self.expr_shape_vert_dir[..., vert_src_table, :, :]
         # [..., V_, 3, BS]
 
-        utils.torch_cuda_sync()
-
         new_pose_vert_dir = self.pose_vert_dir \
-            if self.pose_vert_dir is None or vert_src_table is None else \
-            self.pose_vert_dir[..., vert_src_table, :, :]
+            if self.pose_vert_dir is None or vert_src_table is None \
+            else self.pose_vert_dir[..., vert_src_table, :, :]
         # [..., V_, 3, (J - 1) * 3 * 3]
 
-        utils.torch_cuda_sync()
-
         new_lbs_weight = self.lbs_weight \
-            if self.lbs_weight is None or vert_src_table is None else \
-            self.lbs_weight[..., vert_src_table, :]
+            if self.lbs_weight is None or vert_src_table is None \
+            else self.lbs_weight[..., vert_src_table, :]
         # [..., V_, J]
 
-        utils.torch_cuda_sync()
-
         model_data = ModelData(
-            kin_tree=self.kin_tree,
-
             body_joints_cnt=self.body_joints_cnt,
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
+
+            kin_tree=self.kin_tree,
 
             mesh_graph=new_mesh_graph,
             tex_mesh_graph=new_tex_mesh_graph,
@@ -875,8 +798,6 @@ class ModelData:
             pose_vert_dir=new_pose_vert_dir,
         )
 
-        utils.torch_cuda_sync()
-
         return ModelDataExtractionResult(
             mesh_graph_extraction_result=mesh_graph_extraction_result,
             tex_mesh_graph_extraction_result=tex_mesh_graph_extraction_result,
@@ -895,11 +816,11 @@ class ModelData:
         new_vert_pos = remeshed_mesh_data.vert_pos
 
         return ModelData(
-            kin_tree=self.kin_tree,
-
             body_joints_cnt=self.body_joints_cnt,
             jaw_joints_cnt=self.jaw_joints_cnt,
             eye_joints_cnt=self.eye_joints_cnt,
+
+            kin_tree=self.kin_tree,
 
             mesh_graph=new_mesh_graph,
             tex_mesh_graph=None,
@@ -923,5 +844,5 @@ class ModelData:
             pose_vert_dir=None,
         )
 
-    def show(self):
+    def show(self) -> None:
         self.mesh_graph.show(self.vert_pos)

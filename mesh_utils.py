@@ -148,6 +148,50 @@ def calc_adj_sums_naive(
     return ret
 
 
+@beartype
+def make_bary_coord_mat(
+    face_vert_pos: torch.Tensor,  # [..., 3, 3]
+    face_normal: torch.Tensor,  # [..., 3]
+) -> torch.Tensor:  # [..., 4, 4]
+    utils.check_shapes(
+        face_vert_pos, (..., 3, 3),
+        face_normal, (..., 3),
+    )
+
+    shape = utils.broadcast_shapes(
+        face_vert_pos.shape[:-2],
+        face_normal.shape[:-1],
+    )
+
+    face_vert_pos = face_vert_pos.expand(*shape, 3, 3).detach()
+    face_normal = face_normal.expand(*shape, 3).detach()
+
+    dtype = utils.promote_dtypes(face_vert_pos, face_normal)
+    device = utils.all_same(face_vert_pos.device, face_normal.device)
+
+    A = torch.zeros((*shape, 20, 16), dtype=dtype, device=device)
+
+    for i in range(4):
+        p = 4 * i
+        q = p + 3
+
+        A[..., p:q, p:q] = face_vert_pos
+        A[..., p:q, q] = 1
+        A[..., q, p:q] = face_normal
+
+        A[..., 16 + i, i:-4:4] = 1
+
+    b = torch.tensor([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+        0, 0, 0, 1,
+    ], dtype=dtype, device=device)[:, None].expand(*shape, 20, 1)
+
+    return torch.linalg.lstsq(A, b).solution.view(*shape, 4, 4)
+
+
 class MeshSubdivisionFaceSrcTypeEnum(enum.IntEnum):
     # no subdive
     VA_VB_VC = 0
@@ -859,14 +903,13 @@ class MeshData:
         fvp = self.face_vert_pos
         # [... F, 3, D]
 
-        buffer = utils.empty_like(fvp)
-        # [..., F, 3, D]
+        m = torch.tensor([
+            [-1, 1, 0],
+            [0, -1, 1],
+            [1, 0, -1],
+        ], dtype=fvp.dtype, device=fvp.device)
 
-        buffer[..., 0, :] = fvp[..., 1, :] - fvp[..., 0, :]
-        buffer[..., 1, :] = fvp[..., 2, :] - fvp[..., 1, :]
-        buffer[..., 2, :] = fvp[..., 0, :] - fvp[..., 2, :]
-
-        return buffer
+        return m @ fvp
 
     @functools.cached_property
     def face_edge_dir_ab(self) -> torch.Tensor:  # [..., F, 3, D]
@@ -991,22 +1034,22 @@ class MeshData:
                 -1, self.mesh_graph.f_to_eee[:, k],
                 self.face_cot_angle[..., k].detach())
 
+        e_to_vv = self.mesh_graph.e_to_vv
+
         v_sum_weight = utils.zeros_like(
             self.vert_pos, shape=self.vert_pos.shape[:-1])
         # [..., V]
 
-        v_sum_weight.index_add_(-1, self.mesh_graph.e_to_vv[:, 0], e_weight)
-        v_sum_weight.index_add_(-1, self.mesh_graph.e_to_vv[:, 1], e_weight)
+        v_sum_weight.index_add_(-1, e_to_vv[:, 0], e_weight)
+        v_sum_weight.index_add_(-1, e_to_vv[:, 1], e_weight)
 
         weighted_e_diff = self.edge_dir.detach() * e_weight[..., None]
 
         buffer = utils.zeros_like(self.vert_pos)
         # [..., V, D]
 
-        buffer.index_add_(
-            -2, self.mesh_graph.e_to_vv[:, 0], weighted_e_diff, alpha=+1)
-        buffer.index_add_(
-            -2, self.mesh_graph.e_to_vv[:, 1], weighted_e_diff, alpha=-1)
+        buffer.index_add_(-2, e_to_vv[:, 0], weighted_e_diff, alpha=+1)
+        buffer.index_add_(-2, e_to_vv[:, 1], weighted_e_diff, alpha=-1)
 
         return buffer / v_sum_weight[..., None]
 
@@ -1042,8 +1085,6 @@ class MeshData:
             textures=None,
         ).to(self.vert_pos.device)
 
-        utils.torch_cuda_sync()
-
         return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="uniform")
 
     def calc_cot_lap_smoothness_pytorch3d(self) -> torch.Tensor:  # []
@@ -1062,8 +1103,6 @@ class MeshData:
             textures=None,
         ).to(self.vert_pos.device)
 
-        utils.torch_cuda_sync()
-
         return pytorch3d.loss.mesh_laplacian_smoothing(mesh, method="cot")
 
     @functools.cached_property
@@ -1076,22 +1115,8 @@ class MeshData:
             self.face_edge_sum_norm.detach().square() * 3 - 1
 
     @functools.cached_property
-    def face_bary_coord_mat(self) -> torch.Tensor:  # [..., F, 3, 3]
-        D = self.vert_pos.shape[-1]
-
-        fvp = self.face_vert_pos
-        # [..., F, 3, D]
-
-        m = utils.empty_like(self.vert_pos, shape=(
-            (*self.shape, self.faces_cnt, D + 1, 3)))
-        # [..., F, D + 1, 3]
-
-        m[..., :D, 0] = fvp[..., 0, :]
-        m[..., :D, 1] = fvp[..., 1, :]
-        m[..., :D, 2] = fvp[..., 2, :]
-        m[..., D, :] = 1
-
-        return torch.linalg.pinv(m)
+    def face_bary_coord_mat(self) -> torch.Tensor:  # [..., F, 4, 4]
+        return make_bary_coord_mat(self.face_vert_pos, self.face_norm)
 
     def remesh(self, target_length: float, iterations: int) -> MeshData:
         """
@@ -1174,27 +1199,28 @@ class MeshData:
 
     def calc_unsigned_dist(
         self,
-        point_pos: torch.Tensor,  # [..., D]
+        point_pos: torch.Tensor,  # [..., 3]
     ) -> torch.Tensor:  # [...]
-        D = self.vert_pos.shape[-1]
+        assert self.vert_pos.shape[-1] == 3
 
         pp = point_pos
 
-        utils.check_shapes(pp, (..., D))
+        utils.check_shapes(pp, (..., 3))
 
         face_bary_coord_mat = self.face_bary_coord_mat
-        # [..., F, 3, D + 1]
+        # [..., F, 4, 4]
 
-        ks = utils.do_rt(
-            face_bary_coord_mat[..., :D],  # [..., F, 3, D]
-            face_bary_coord_mat[..., D],  # [..., F, 3]
-            pp,  # [..., D]
+        ls = utils.do_rt(
+            face_bary_coord_mat[..., :3],  # [..., F, 4, 3]
+            face_bary_coord_mat[..., 3],  # [..., F, 3]
+            pp[..., None, :],  # [..., 1, 3]
         )
-        # [..., F, 3]
+        # [..., F, 4]
 
-        ka = ks[..., 0]
-        kb = ks[..., 1]
-        kc = ks[..., 2]
+        la = ls[..., 0]
+        lb = ls[..., 1]
+        lc = ls[..., 2]
+        ln = ls[..., 3]
         # [..., F]
 
         p_to_v_dist = utils.vec_norm(pp[..., None, :] - self.vert_pos)
@@ -1202,52 +1228,42 @@ class MeshData:
         # [..., V, 3]
         # [..., V]
 
+        p_to_fv_dict = p_to_v_dist[..., self.mesh_graph.f_to_vvv]
+        # [..., F, 3]
+
         p_to_f_dist = torch.where(
-            (0 <= ka) & (0 <= kb) & (0 <= kc),
-            kz.abs(),
-            torch.minimum(
-                p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 0]],
-                torch.minimum(
-                    p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 1]],
-                    p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 2]],
-                ))
+            (0 <= la) & (0 <= lb) & (0 <= lc),
+            ln.abs(),  # [..., F]
+            p_to_fv_dict.min(-1)[0],  # [..., F]
         )
+        # [..., F]
 
-        min_p_to_f, min_p_to_fi = p_to_f_dist.min(-1, True)
-        # [..., 1]
-        # [..., 1]
-
-        ret = torch.where(
-            kz.gather(-1, min_p_to_fi) < 0,  # [..., 1]
-            -min_p_to_f,  # [..., 1]
-            min_p_to_f,  # [..., 1]
-        )[..., 0]
-
-        return ret
+        return p_to_f_dist.min(-1)[0]
 
     def calc_signed_dist(
         self,
-        point_pos: torch.Tensor,  # [..., D]
+        point_pos: torch.Tensor,  # [..., 3]
     ) -> torch.Tensor:  # [...]
-        D = self.vert_pos.shape[-1]
+        assert self.vert_pos.shape[-1] == 3
 
         pp = point_pos
 
-        utils.check_shapes(pp, (..., D))
+        utils.check_shapes(pp, (..., 3))
 
         face_bary_coord_mat = self.face_bary_coord_mat
-        # [..., F, 3, D + 1]
+        # [..., F, 4, 4]
 
-        ks = utils.do_rt(
-            face_bary_coord_mat[..., :D],  # [..., F, 3, D]
-            face_bary_coord_mat[..., D],  # [..., F, 3]
-            pp,  # [..., D]
+        ls = utils.do_rt(
+            face_bary_coord_mat[..., :3],  # [..., F, 4, 3]
+            face_bary_coord_mat[..., 3],  # [..., F, 3]
+            pp[..., None, :],  # [..., 1, 3]
         )
-        # [..., F, 3]
+        # [..., F, 4]
 
-        kb = ks[..., 0]
-        kc = ks[..., 1]
-        kz = ks[..., 2]
+        la = ls[..., 0]
+        lb = ls[..., 1]
+        lc = ls[..., 2]
+        ln = ls[..., 3]
         # [..., F]
 
         p_to_v_dist = utils.vec_norm(pp[..., None, :] - self.vert_pos)
@@ -1255,23 +1271,22 @@ class MeshData:
         # [..., V, 3]
         # [..., V]
 
+        p_to_fv_dict = p_to_v_dist[..., self.mesh_graph.f_to_vvv]
+        # [..., F, 3]
+
         p_to_f_dist = torch.where(
-            (0 <= kb) & (0 <= kc) & (kb + kc <= 1),
-            kz.abs(),
-            torch.minimum(
-                p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 0]],
-                torch.minimum(
-                    p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 1]],
-                    p_to_v_dist[..., self.mesh_graph.f_to_vvv[:, 2]],
-                ))
+            (0 <= la) & (0 <= lb) & (0 <= lc),
+            ln.abs(),  # [..., F]
+            p_to_fv_dict.min(-1)[0],  # [..., F]
         )
+        # [..., F]
 
         min_p_to_f, min_p_to_fi = p_to_f_dist.min(-1, True)
         # [..., 1]
         # [..., 1]
 
         ret = torch.where(
-            kz.gather(-1, min_p_to_fi) < 0,  # [..., 1]
+            ln.gather(-1, min_p_to_fi) < 0,  # [..., 1]
             -min_p_to_f,  # [..., 1]
             min_p_to_f,  # [..., 1]
         )[..., 0]

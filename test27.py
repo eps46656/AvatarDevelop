@@ -41,7 +41,7 @@ def MyLossFunc(
 
 
 @beartype
-class MyTrainingCore(training_utils.TrainingCore):
+class MyTrainingCore(training_utils.TrainerCore):
     def train(self) -> training_utils.TrainingResult:
         assert self.scheduler is None or isinstance(
             self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
