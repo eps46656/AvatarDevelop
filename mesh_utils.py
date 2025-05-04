@@ -7,10 +7,7 @@ import functools
 import itertools
 import typing
 
-# import pymeshlab
-# import pymesh
-
-import open3d as o3d
+# import open3d as o3d
 
 import torch
 import tqdm
@@ -1163,6 +1160,8 @@ class MeshData:
 
         """
 
+        """
+
         mesh = o3d.geometry.TriangleMesh()
 
         mesh.vertices = o3d.utility.Vector3dVector(
@@ -1196,6 +1195,10 @@ class MeshData:
         ), new_vert_pos)
 
         return new_mesh_data
+
+        """
+
+        return self
 
     def calc_unsigned_dist(
         self,

@@ -415,28 +415,25 @@ class Trainer:
             self.__cur_time = datetime.datetime.now()
 
             if self.__prv_ckpt is None:
-                save = True
-
                 diff_epoch = math.inf
                 diff_time = math.inf
 
-                print(f"{diff_epoch=}")
-                print(f"{diff_time=}")
+                do_auto_save = True
             else:
                 prv_ckpt_epoch = self.__prv_ckpt.epoch
 
                 diff_epoch = epoch - prv_ckpt_epoch
                 diff_time = self.__cur_time - self.__prv_ckpt.time
 
-                print(f"{diff_epoch=}")
-                print(f"{diff_time=}")
-
-                save = 1 - 1e-3 <= (
+                do_auto_save = 1 - 1e-3 <= (
                     diff_epoch_weight * diff_epoch +
-                    diff_time_weight * diff_time
+                    diff_time_weight * diff_time.total_seconds()
                 )
 
-            if save:
+            print(f"{diff_epoch=}")
+            print(f"{diff_time=}")
+
+            if do_auto_save:
                 print(f"auto save triggered")
                 self.save()
 

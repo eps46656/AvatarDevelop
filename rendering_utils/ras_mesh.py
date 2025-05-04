@@ -21,7 +21,7 @@ def rasterize_mesh(
 
     faces_per_pixel: int,
 
-    cull_backfaces: bool = True,
+    cull_backface: bool = True,
 ) -> pytorch3d.renderer.mesh.rasterizer.Fragments:
     # pix_to_face[B, H, W, FPP]
     # bary_coords[B, H, W, FPP, 3]
@@ -105,7 +105,7 @@ def rasterize_mesh(
         blur_radius=0.0,
         faces_per_pixel=faces_per_pixel,
         max_faces_per_bin=1024 * 32,
-        cull_backfaces=cull_backfaces,
+        cull_backfaces=cull_backface,
     )
 
     rasterizer = pytorch3d.renderer.MeshRasterizer(

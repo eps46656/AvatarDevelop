@@ -70,6 +70,12 @@ class Module(torch.nn.Module):
         self.norm_m = state_dict["norm_m"]
         self.module.load_state_dict(state_dict["module"])
 
+    def get_param_groups(self, base_lr: float) -> list[dict]:
+        return [{
+            "params": self.module.parameters(),
+            "lr": base_lr,
+        }]
+
     def forward(
         self,
         point_pos: torch.Tensor,  # [..., 3]

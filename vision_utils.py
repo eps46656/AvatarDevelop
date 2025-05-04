@@ -7,6 +7,8 @@ import typing
 import cv2 as cv
 import einops
 import numpy as np
+import PIL
+import PIL.Image
 import torch
 import torchvision
 from beartype import beartype
@@ -87,6 +89,16 @@ def write_image(
         return
 
     raise utils.MismatchException()
+
+
+_to_pillow_image_core = torchvision.transforms.ToPILImage()
+
+
+@beartype
+def to_pillow_image(
+    img: torch.Tensor,  # [C, H, W] 255
+) -> PIL.Image.Image:
+    return _to_pillow_image_core(img)
 
 
 @beartype

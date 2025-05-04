@@ -100,6 +100,9 @@ class AvatarModel:
 
         self.mesh_data = mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
 
+        self.tex_mesh_data = mesh_utils.MeshData(
+            self.tex_mesh_graph, self.tex_vert_pos)
+
     def __getitem__(self, idx) -> AvatarModel:
         return AvatarModel(
             kin_tree=self.kin_tree,

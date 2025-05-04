@@ -126,7 +126,7 @@ def _read_person_mask(
 
     gen = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
-        imgs=(utils.to_pillow_image(img) for img in imgs),
+        imgs=(vision_utils.to_pillow_image(img) for img in imgs),
         prompts=itertools.repeat("the main person"),
         mask_strategy=lang_sam_utils.MaskStrategy.MAX_SCORE,
         batch_size=PREDICT_BATCH_SIZE,
@@ -205,7 +205,7 @@ def _read_object_mask(
 
     gen = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
-        imgs=(utils.to_pillow_image(img) for img in masked_imgs),
+        imgs=(vision_utils.to_pillow_image(img) for img in masked_imgs),
         prompts=itertools.repeat(
             f"the {object_segment_prompt} of the main person"),
         mask_strategy=lang_sam_utils.MaskStrategy.MIN_AREA,

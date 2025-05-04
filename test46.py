@@ -11,7 +11,7 @@ DIR = FILE.parents[0]
 DTYPE = torch.float32
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "sdf_train_2025_0503_1"
+PROJ_DIR = DIR / "sdf_train_2025_0503_2"
 
 BATCH_SIZE = 8
 
@@ -21,19 +21,6 @@ MODEL_SUBTYPE = "female"
 
 def main1():
     torch.autograd.set_detect_anomaly(True, True)
-
-    model_data_path_dict = {
-        "smpl": {
-            "male": config.SMPL_MALE_MODEL_PATH,
-            "female": config.SMPL_FEMALE_MODEL_PATH,
-            "neutral": config.SMPL_NEUTRAL_MODEL_PATH,
-        },
-        "smplx": {
-            "male": config.SMPLX_MALE_MODEL_PATH,
-            "female": config.SMPLX_FEMALE_MODEL_PATH,
-            "neutral": config.SMPLX_NEUTRAL_MODEL_PATH,
-        },
-    }
 
     # ---
 
@@ -85,7 +72,7 @@ def main1():
                 batch_size=BATCH_SIZE,
 
                 lr=lr,
-                gamma=0.1**(1 / 20),
+                gamma=0.1**(1 / 100),
                 betas=(0.5, 0.5),
             ),
 

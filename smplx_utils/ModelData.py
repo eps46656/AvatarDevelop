@@ -122,6 +122,9 @@ class ModelData:
         HANDJ = max(0, HANDJ)
         J = max(0, J)
 
+        BS = max(0, BS)
+        ES = max(0, ES)
+
         V = max(0, V)
         TV = max(0, TV)
 

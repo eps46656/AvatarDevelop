@@ -20,10 +20,8 @@ import typing
 
 import dateutil
 import numpy as np
-import PIL
-import PIL.Image
+
 import torch
-import torchvision
 from beartype import beartype
 
 from . import config
@@ -423,16 +421,6 @@ def allocate_tmp_dir(tmp_dir: os.PathLike = config.TMP_DIR) -> pathlib.Path:
     atexit.register(_clear_tmp_dir, ret)
 
     return ret
-
-
-_to_pillow_image_core = torchvision.transforms.ToPILImage()
-
-
-@beartype
-def to_pillow_image(
-    img: torch.Tensor,  # [C, H, W] 255
-) -> PIL.Image.Image:
-    return _to_pillow_image_core(img)
 
 
 @beartype
@@ -963,6 +951,29 @@ def check_devices(*args: object) -> torch.device:
             assert ret == device
 
     return ret
+
+
+@beartype
+def sum(
+    args: typing.Iterable[typing.Any],
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+) -> typing.Any:
+    if not isinstance(args, typing.Sequence):
+        args = list(args)
+
+    assert 0 < len(args)
+
+    if dtype is None:
+        dtype = promote_dtypes(
+            arg.dtype if hasattr(arg, "dtype") else None for arg in args)
+
+    acc = args[0].to(device, dtype)
+
+    for i in range(1, len(args)):
+        acc = acc + args[i].to(device, dtype)
+
+    return acc
 
 
 @beartype
