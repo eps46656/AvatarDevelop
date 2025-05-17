@@ -35,7 +35,7 @@ def main1():
             video[frame_i] * person_mask[frame_i]
             for frame_i in range(T)
         ],
-        prompts=[prompt] * T,
+        text_prompt=[prompt] * T,
         mask_strategy=lang_sam_utils.MaskStrategy.MIN_AREA,
         batch_size=1,
     )

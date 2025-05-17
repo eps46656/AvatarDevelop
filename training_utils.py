@@ -101,11 +101,11 @@ class LogDatabase:
     def select_ckpt_meta(
         self,
         conditions: typing.Optional[dict[str, object]],
-    ):
+    ) -> typing.Optional[CheckpointMeta]:
         ckpt_meta = self.ckpt_meta_table.select_one(conditions)
         return None if ckpt_meta is None else CheckpointMeta(**ckpt_meta)
 
-    def select_latest_ckpt_meta(self):
+    def select_latest_ckpt_meta(self) -> typing.Optional[CheckpointMeta]:
         table_name = "CheckpointMeta"
 
         cmd = f"SELECT MAX(id) FROM {table_name}"
@@ -348,6 +348,8 @@ class Trainer:
 
         self.__prv_ckpt = ckpt_meta
 
+        self.__cur_time = ckpt_meta.time
+
     def load_latest(self) -> None:
         ckpt_meta = self.get_latest_ckpt_meta()
 
@@ -392,6 +394,9 @@ class Trainer:
         torch.save(d, Trainer._get_ckpt_data_path(self.__proj_dir, id))
 
         print(f"saved")
+
+        if hasattr(self.trainer_core, "save_callback"):
+            self.trainer_core.save_callback()
 
     def train(
         self,

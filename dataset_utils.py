@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import math
-import random
 
 import torch
 from beartype import beartype
-
-from . import utils
 
 
 @beartype
@@ -58,19 +55,21 @@ class BatchIdxIterator:
     def __iter__(self) -> BatchIdxIterator:
         return self
 
-    def __next__(self) -> tuple[torch.Tensor, ...]:
+    def __next__(self) -> tuple[int, tuple[torch.Tensor, ...]]:
         if len(self) <= self.batch_i:
             raise StopIteration()
 
         beg_i = self.acc_batches_size[self.batch_i]
         end_i = self.acc_batches_size[self.batch_i + 1]
 
+        cur_batch_size = end_i - beg_i
+
         cur_batch_idxes = tuple(
             batch_idxes[beg_i:end_i] for batch_idxes in self.batch_idxes)
 
         self.batch_i += 1
 
-        return cur_batch_idxes
+        return cur_batch_size, cur_batch_idxes
 
 
 @beartype
@@ -98,9 +97,9 @@ class DatasetIterator:
     def __iter__(self) -> DatasetIterator:
         return self
 
-    def __next__(self) -> tuple[tuple[torch.Tensor, ...], object]:
-        batch_idx = next(self.batch_idx_iter)
-        return batch_idx, self.dataset[batch_idx]
+    def __next__(self) -> tuple[int, tuple[torch.Tensor, ...], object]:
+        batch_size, batch_idx = next(self.batch_idx_iter)
+        return batch_size, batch_idx, self.dataset[batch_idx]
 
 
 @beartype

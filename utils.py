@@ -1,26 +1,29 @@
 from __future__ import annotations
 
 import atexit
+import collections
 import datetime
 import functools
 import gc
 import inspect
 import itertools
 import math
+import mmap
 import os
 import pathlib
 import pickle
 import random
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 import types
 import typing
+import weakref
 
 import dateutil
 import numpy as np
-
 import torch
 from beartype import beartype
 
@@ -215,6 +218,8 @@ def torch_cuda_sync():
 
 @beartype
 def _mem_clear() -> None:
+    print(end="", flush=True)
+
     gc.collect()
 
     if torch.cuda.is_available():
@@ -392,38 +397,6 @@ def all_same(*args: object):
 
 
 @beartype
-def _clear_tmp_dir(tmp_dir: os.PathLike) -> None:
-    try:
-        shutil.rmtree(tmp_dir)
-    except:
-        pass
-
-
-@beartype
-def allocate_tmp_dir(tmp_dir: os.PathLike = config.TMP_DIR) -> pathlib.Path:
-    tmp_dir = to_pathlib_path(tmp_dir)
-
-    ret = None
-
-    def is_ok(num: int) -> bool:
-        nonlocal ret
-
-        try:
-            ret = tmp_dir / f"tmp_{num}"
-            ret.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            return False
-
-        return True
-
-    allocate_id(2**16, 2**28 - 1, is_ok)
-
-    atexit.register(_clear_tmp_dir, ret)
-
-    return ret
-
-
-@beartype
 def is_almost_zeros(x: torch.Tensor, eps: float = 5e-4) -> bool:
     return bool(x.abs().max() <= eps)
 
@@ -548,6 +521,65 @@ def print_cuda_mem_usage(device: typing.Optional[torch.device] = None) -> None:
         mem /= 1024
 
     print(f"Cuda Mem Usage ({device}): {mem} {unit}")
+
+
+@beartype
+class DiskMemoty:
+    def __init__(self, size: int):
+        assert 0 <= size
+
+        if size == 0:
+            self.file = None
+            self.size = 0
+
+        self.file = tempfile.TemporaryFile(mode="w+b")
+        self.size = max(4 * 1024, size)
+
+        self.file.truncate(self.size)
+        self.file.seek(0)
+
+        self.mmap = mmap.mmap(self.file.fileno(), self.size)
+
+    def close(self) -> None:
+        if self.file is None:
+            return
+
+        self.file.close()
+        self.file = None
+
+        self.size = 0
+
+    def __enter__(self) -> DiskMemoty:
+        return self
+
+    def __exit__(self, type, value, traceback) -> None:
+        self.close()
+
+
+@beartype
+def disk_empty(
+    shape: tuple[int, ...],
+    dtype: torch.dtype,
+    *,
+    buffer_size: int = 16 * 1024,
+):
+    size = max(
+        4 * 1024,
+        math.prod(shape) * torch.tensor([], dtype=dtype).element_size(),
+    )
+
+    f = tempfile.TemporaryFile(mode="w+b", buffering=buffer_size)
+    f.truncate(size)
+    f.seek(0)
+
+    m = mmap.mmap(f.fileno(), size)
+
+    def _on_gc(x):
+        del x
+
+    weakref.finalize(m, _on_gc, f)
+
+    return torch.frombuffer(m, dtype=dtype).view(shape)
 
 
 @beartype
@@ -790,60 +822,48 @@ def try_expand(x, batch_shape: tuple[int, ...]):
 def batch_expand(
     x: torch.Tensor,
     batch_shape: tuple[int, ...],
-    dim: int,
+    cdim: int,
 ):
-    return x.expand(tuple(batch_shape) + x.shape[dim:])
+    ndim = len(x.shape)
+
+    assert 0 <= cdim
+    assert cdim <= ndim
+
+    return x.expand(*batch_shape + x.shape[ndim - cdim:])
 
 
 @beartype
 def try_batch_expand(
     x: typing.Optional[torch.Tensor],
     batch_shape: tuple[int, ...],
-    dim: int,
+    cdim: int,
 ) -> typing.Optional[torch.Tensor]:
-    return None if x is None else batch_expand(x, batch_shape, dim)
-
-
-@beartype
-def try_batch_expand_multi(*args):
-    assert len(args) % 2 == 0
-
-    if len(args) == 0:
-        return
-
-    assert all(isinstance(args[i + 1], int) for i in range(1, len(args), 2))
-
-    batch_shape = broadcast_shapes(
-        try_get_batch_shape(args[i], args[i+2]) for i in range(0, len(args), 2))
-
-    ret = tuple(
-        try_batch_expand(args[i], batch_shape, args[i+1])
-        for i in range(0, len(args), 2)
-    )
-
-    return ret[0] if len(ret) == 1 else ret
+    return None if x is None else batch_expand(x, batch_shape, cdim)
 
 
 @beartype
 def batch_indexing(
-    x: object,
+    x: typing.Any,
     batch_shape: typing.Optional[tuple[int, ...]],
-    dim: int,
-    idx,
-) -> typing.Optional[torch.Tensor]:
+    cdim: int,
+    idx: typing.Any,
+) -> typing.Any:
     assert x is not None
 
-    dim = normed_idx(dim, len(x.shape)) - len(x.shape)
+    ndim = len(x.shape)
+
+    assert 0 <= cdim
+    assert cdim <= ndim
 
     if batch_shape is not None:
-        x = x.expand(batch_shape + x.shape[dim:])
+        x = x.expand(batch_shape + x.shape[ndim - cdim:])
 
     if isinstance(idx, tuple):
         batch_idx = idx
     else:
         batch_idx = (idx,)
 
-    data_idx = (slice(None) for _ in range(-dim))
+    data_idx = (slice(None) for _ in range(-cdim))
 
     return x[*batch_idx, ...,  *data_idx]
 
@@ -852,10 +872,10 @@ def batch_indexing(
 def try_batch_indexing(
     x: object,
     batch_shape: typing.Optional[tuple[int, ...]],
-    dim: int,
+    dims_cnt: int,
     idx,
 ) -> typing.Optional[torch.Tensor]:
-    return None if x is None else batch_indexing(x, batch_shape, dim, idx)
+    return None if x is None else batch_indexing(x, batch_shape, dims_cnt, idx)
 
 
 @beartype
@@ -954,6 +974,22 @@ def check_devices(*args: object) -> torch.device:
 
 
 @beartype
+def rct(
+    x: torch.Tensor,
+    *,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+) -> torch.Tensor:
+    if dtype is None:
+        dtype = x.dtype
+
+    if device is None:
+        device = x.device
+
+    return x.round().clamp(torch.iinfo(dtype).min, torch.iinfo(dtype).max).to(device, dtype)
+
+
+@beartype
 def sum(
     args: typing.Iterable[typing.Any],
     dtype: typing.Optional[torch.dtype] = None,
@@ -966,7 +1002,7 @@ def sum(
 
     if dtype is None:
         dtype = promote_dtypes(
-            arg.dtype if hasattr(arg, "dtype") else None for arg in args)
+            *(arg.dtype if hasattr(arg, "dtype") else None for arg in args))
 
     acc = args[0].to(device, dtype)
 
@@ -2011,48 +2047,109 @@ def write_tensor_to_file(path: os.PathLike, x: torch.Tensor) -> None:
 
 
 @beartype
+class edge_padding:
+    def __init__(
+        self,
+        it: typing.Iterable[object],
+        pre_n: int,
+        post_n: int,
+    ):
+        self.it = it
+        self.pre_n = pre_n
+        self.post_n = post_n
+
+        try:
+            self.length = self.pre_n + len(self.it) + self.post_n
+        except:
+            self.length = None
+
+    def __len__(self) -> int:
+        if self.length is None:
+            raise TypeError()
+
+        return self.length
+
+    def __iter__(self) -> typing.Iterable[object]:
+        it = iter(self.it)
+
+        try:
+            item = next(it)
+        except StopIteration:
+            return
+
+        for i in range(self.pre_n):
+            yield item
+
+        yield item
+
+        for i in it:
+            item = i
+            yield item
+
+        for i in range(self.post_n):
+            yield item
+
+
+@beartype
+class slide_window:
+    def __init__(
+        self,
+        gen: typing.Iterable[object],
+        n: int,
+    ):
+        self.gen = gen
+        self.n = n
+
+        try:
+            self.length = max(0, len(self.gen) - self.n + 1)
+        except:
+            self.length = None
+
+    @beartype
+    def __len__(self) -> int:
+        if self.length is None:
+            raise TypeError()
+
+        return self.length
+
+    def __iter__(self) -> typing.Iterable[list[object]]:
+        it = iter(self.gen)
+
+        d = collections.deque()
+
+        for i in it:
+            d.append(i)
+
+            if len(d) < self.n:
+                continue
+
+            if self.n < len(d):
+                d.popleft()
+
+            yield list(d)
+
+
+@beartype
+def slide_window_with_padding(
+    gen: typing.Iterable[object],
+    n: int,
+):
+    r = n // 2
+
+    return slide_window(edge_padding(gen, r, r), n)
+
+
+@beartype
 def smooth_clamp(
     x: torch.Tensor,
-
-    x_lb: float,
-    x_rb: float,
-
-    slope_l: float,
-    slope_r: float,
-
-    smoothness_l: float = 1.0,
-    smoothness_r: float = 1.0,
+    lb: float,
+    rb: float,
 ) -> torch.Tensor:
-    assert x_lb <= x_rb
+    assert lb < rb
 
-    assert 0 <= slope_l
-    assert slope_l <= 1
+    d = rb - lb
 
-    assert 0 <= slope_r
-    assert slope_r <= 1
-
-    assert 0 < smoothness_l
-    assert 0 < smoothness_r
-
-    center = (x_lb + x_rb) / 2
-    scale = x_rb - x_lb
-
-    centered_x = x - center
-
-    normed_x_l = centered_x / (+scale * smoothness_l)
-    normed_x_r = centered_x / (-scale * smoothness_r)
-
-    y_l = \
-        ((1 - slope_l) * smoothness_l * scale) * normed_x_l.exp() + \
-        slope_l * centered_x + \
-        ((slope_l - 1) * smoothness_l * scale + center)
-
-    y_r = \
-        ((slope_r - 1) * smoothness_r * scale) * normed_x_r.exp() + \
-        slope_r * centered_x + \
-        ((1 - slope_r) * smoothness_r * scale + center)
-
-    return torch.where(centered_x < 0, y_l, y_r)
+    return (x / d).sigmoid() * d + lb
 
 
 _tensor_serialize_np_dtype_table = {

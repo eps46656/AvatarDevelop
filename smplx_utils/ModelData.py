@@ -552,6 +552,7 @@ class ModelData:
         target_faces: typing.Optional[typing.Iterable[int]] = None,
         mesh_subdivision_result:
             typing.Optional[mesh_utils.MeshSubdivisionResult] = None,
+        new_vert_t: typing.Optional[torch.Tensor] = None,
     ) -> ModelDataSubdivisionResult:
         if mesh_subdivision_result is None:
             assert self.mesh_graph is not None
@@ -576,6 +577,14 @@ class ModelData:
         face_src_type_table = mesh_subdivision_result.face_src_type_table
 
         new_mesh_graph = mesh_subdivision_result.mesh_graph
+
+        if new_vert_t is None:
+            new_vert_s = None
+        else:
+            utils.check_shapes(new_vert_t, (vert_src_table.shape[0],))
+
+            new_vert_s = 1 - new_vert_t
+            # [V_]
 
         if self.tex_mesh_graph is None:
             new_tex_mesh_graph = None
@@ -656,24 +665,38 @@ class ModelData:
                 tex_mesh_vert_src_table.shape[0],
                 new_tex_mesh_faces, self.device)
 
-        new_vert_pos = None if self.vert_pos is None \
-            else self.vert_pos[..., vert_src_table, :].mean(-2)
+        def _f(x, src_table, t, s, cdims):
+            if x is None:
+                return None
 
-        new_tex_vert_pos = self.tex_vert_pos \
-            if self.tex_vert_pos is None or tex_mesh_vert_src_table is None \
-            else self.tex_vert_pos[..., tex_mesh_vert_src_table, :].mean(-2)
+            k = (slice(None),) * cdims
+            l = (None,) * cdims
 
-        new_lbs_weight = None if self.lbs_weight is None \
-            else self.lbs_weight[..., vert_src_table, :].mean(-2)
+            if t is None:
+                return x[..., src_table, *k].mean(-cdims - 1)
 
-        new_body_shape_vert_dir = None if self.body_shape_vert_dir is None \
-            else self.body_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+            return (
+                x[..., vert_src_table[:, 0], *k] * s[..., *l] +
+                x[..., vert_src_table[:, 1], *k] * t[..., *l]
+            )
 
-        new_expr_shape_vert_dir = None if self.expr_shape_vert_dir is None \
-            else self.expr_shape_vert_dir[..., vert_src_table, :, :].mean(-3)
+        new_vert_pos = _f(
+            self.vert_pos, vert_src_table, new_vert_t, new_vert_s, 1)
 
-        new_pose_vert_dir = None if self.pose_vert_dir is None \
-            else self.pose_vert_dir[..., vert_src_table, :, :].mean(-3)
+        new_tex_vert_pos = _f(
+            self.tex_vert_pos, tex_mesh_vert_src_table, None, None, 1)
+
+        new_lbs_weight = _f(
+            self.lbs_weight, vert_src_table, new_vert_t, new_vert_s, 1)
+
+        new_body_shape_vert_dir = _f(
+            self.body_shape_vert_dir, vert_src_table, new_vert_t, new_vert_s, 2)
+
+        new_expr_shape_vert_dir = _f(
+            self.expr_shape_vert_dir, vert_src_table, new_vert_t, new_vert_s, 2)
+
+        new_pose_vert_dir = _f(
+            self.pose_vert_dir, vert_src_table, new_vert_t, new_vert_s, 2)
 
         model_data = ModelData(
             body_joints_cnt=self.body_joints_cnt,
@@ -712,7 +735,8 @@ class ModelData:
     def extract(
         self,
         *,
-        target_faces: typing.Sequence[int],
+        target_faces: typing.Collection[int],
+        remove_orphan_vert: bool,
     ) -> ModelDataExtractionResult:
         if self.mesh_graph is None:
             mesh_graph_extraction_result = None
@@ -720,7 +744,7 @@ class ModelData:
             vert_src_table = None
         else:
             mesh_graph_extraction_result = self.mesh_graph.extract(
-                target_faces)
+                target_faces, remove_orphan_vert)
             # vert_src_table[V_]
             # face_src_table[F_]
 
@@ -735,7 +759,7 @@ class ModelData:
             tex_vert_src_table = None
         else:
             tex_mesh_graph_extraction_result = self.tex_mesh_graph.extract(
-                target_faces)
+                target_faces, remove_orphan_vert)
 
             new_tex_mesh_graph = tex_mesh_graph_extraction_result.mesh_graph
 
@@ -807,12 +831,12 @@ class ModelData:
             model_data=model_data,
         )
 
-    def remesh(self, remsh_arg_pack: utils.ArgPack) -> ModelData:
-        mesh_data = mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
+    def remesh(self, remesh_arg_pack: utils.ArgPack) -> ModelData:
+        mesh_data = mesh_utils.MeshGraph(self.mesh_graph, self.vert_pos)
 
         remeshed_mesh_data = mesh_data.remesh(
-            *remsh_arg_pack.args,
-            **remsh_arg_pack.kwargs,
+            *remesh_arg_pack.args,
+            **remesh_arg_pack.kwargs,
         )
 
         new_mesh_graph = remeshed_mesh_data.mesh_graph

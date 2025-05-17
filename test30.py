@@ -9,9 +9,9 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (avatar_utils, camera_utils, config, dataset_utils, gom_utils,
-               people_snapshot_utils, smplx_utils, texture_utils,
-               training_utils, transform_utils, utils)
+from . import (avatar_utils, camera_utils, config, dataset_utils, gom_avatar_utils,
+               people_snapshot_utils, smplx_utils, training_utils,
+               transform_utils, utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -54,9 +54,9 @@ class MyTrainingCore(training_utils.TrainerCore):
         for batch_idxes, sample in tqdm.tqdm(self.dataset_loader.load()):
             batch_idxes: tuple[torch.Tensor, ...]
 
-            sample: gom_utils.Sample = self.dataset[batch_idxes]
+            sample: gom_avatar_utils.Sample = self.dataset[batch_idxes]
 
-            result: gom_utils.ModuleForwardResult = self.module(
+            result: gom_avatar_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
                 img=sample.img,
@@ -97,7 +97,7 @@ class MyTrainingCore(training_utils.TrainerCore):
         )
 
     def eval(self):
-        self.dataset: gom_utils.Dataset
+        self.dataset: gom_avatar_utils.Dataset
 
         out_frames = utils.empty_like(
             self.dataset.sample.img,
@@ -122,9 +122,9 @@ class MyTrainingCore(training_utils.TrainerCore):
                     idxes.shape + (C, H, W))
                 # [K, C, H, W]
 
-                sample: gom_utils.Sample = self.dataset[batch_idxes]
+                sample: gom_avatar_utils.Sample = self.dataset[batch_idxes]
 
-                result: gom_utils.ModuleForwardResult = self.module(
+                result: gom_avatar_utils.ModuleForwardResult = self.module(
                     camera_transform=sample.camera_transform,
                     camera_config=sample.camera_config,
                     img=sample.img,
@@ -156,7 +156,7 @@ class MyTrainingCore(training_utils.TrainerCore):
 
 @beartype
 def map_to_texture(
-    gom_module: gom_utils.Module,
+    gom_module: gom_avatar_utils.Module,
     mapping_blending_param: object,
     img_h: int,
     img_w: int,
@@ -282,7 +282,7 @@ def main1():
     subject_data = people_snapshot_utils.read_subject(
         subject_dir, model_data_dict, DEVICE)
 
-    dataset = gom_utils.Dataset(gom_utils.Sample(
+    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
         camera_transform=subject_data.camera_transform,
         camera_config=subject_data.camera_config,
         img=subject_data.video,
@@ -305,7 +305,7 @@ def main1():
         model_builder=smplx_model_builder,
     )
 
-    gom_avatar_module = gom_utils.Module(
+    gom_avatar_module = gom_avatar_utils.Module(
         avatar_blender=smplx_model_blender,
         color_channels_cnt=3,
     ).to(DEVICE).train()

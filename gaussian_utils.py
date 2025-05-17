@@ -1,5 +1,4 @@
 import dataclasses
-import pathlib
 import typing
 
 import torch
@@ -8,10 +7,6 @@ from beartype import beartype
 import diff_gaussian_rasterization
 
 from . import camera_utils, transform_utils, utils
-
-FILE = pathlib.Path(__file__)
-DIR = FILE.parents[0]
-
 
 camera_view_transform = transform_utils.ObjectTransform.from_matching("RDF")
 # camera <-> view
@@ -114,7 +109,7 @@ def render_gaussian(
         if gp_cov3d is None:
             assert gp_scale is not None and gp_rot_q is not None
 
-            gp_sq_scale_mat = utils.make_diag(gp_scale)
+            gp_sq_scale_mat = utils.make_diag(gp_scale).square()
             # [..., N, 3, 3]
 
             gp_rot_mat = utils.quaternion_to_rot_mat(
@@ -229,7 +224,7 @@ def render_gaussian(
             colors_precomp=torch.Tensor([]) if gp_color is None else
             gp_color[batch_idx].contiguous(),
 
-            opacities=gp_opacity[batch_idx, None].contiguous(),
+            opacities=gp_opacity[*batch_idx, :, None].contiguous(),
 
             scales=torch.Tensor([]),
             rotations=torch.Tensor([]),
@@ -238,9 +233,6 @@ def render_gaussian(
             raster_settings=renderer_settings,
         )
         # cur_color[C, H, W]
-
-        print(f"{cur_color.shape=}")
-        print(f"{cur_radii.shape=}")
 
         color[batch_idx] = cur_color
 

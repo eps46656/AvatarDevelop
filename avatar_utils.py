@@ -111,16 +111,16 @@ class AvatarModel:
             tex_mesh_graph=self.tex_mesh_graph,
 
             joint_T=utils.try_batch_indexing(
-                self.joint_T, self.shape, -3, idx),
+                self.joint_T, self.shape, 3, idx),
 
             vert_pos=utils.try_batch_indexing(
-                self.vert_pos, self.shape, -2, idx),
+                self.vert_pos, self.shape, 2, idx),
 
             tex_vert_pos=utils.try_batch_indexing(
-                self.tex_vert_pos, self.shape, -2, idx),
+                self.tex_vert_pos, self.shape, 2, idx),
 
             vert_trans=utils.try_batch_indexing(
-                self.vert_trans, self.shape, -3, idx),
+                self.vert_trans, self.shape, 3, idx),
         )
 
 

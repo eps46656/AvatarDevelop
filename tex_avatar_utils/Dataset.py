@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import typing
 
-import numpy as np
 import torch
 from beartype import beartype
 
-from .. import camera_utils, smplx_utils, transform_utils, utils, vision_utils
+from .. import (camera_utils, dataset_utils, transform_utils, utils,
+                vision_utils)
 
 
 @beartype
@@ -20,29 +20,39 @@ class Sample:
         camera_transform: transform_utils.ObjectTransform,  # [...]
 
         img: torch.Tensor,  # [..., C, H, W]
-        mask: torch.Tensor,  # [..., 1, H, W]
+
+        person_mask: torch.Tensor,  # [..., 1, H, W]
+        skin_mask: torch.Tensor,  # [..., 1, H, W]
+
         blending_param: object,
     ):
         C, H, W = -1, -2, -3
 
         C, H, W = utils.check_shapes(
             img, (..., C, H, W),
-            mask, (..., 1, H, W),
+            person_mask, (..., 1, H, W),
+            skin_mask, (..., 1, H, W),
         )
 
         self.shape = utils.broadcast_shapes(
             shape,
             camera_transform,
             img.shape[:-3],
-            mask.shape[:-3],
+
+            person_mask.shape[:-3],
+            skin_mask.shape[:-3],
+
             blending_param,
         )
 
         self.raw_camera_config = camera_config
-        self.raw_camera_transform = camera_transform
+        self.raw_camera_transform = camera_transform.expand(self.shape)
 
         self.raw_img = img
-        self.raw_mask = mask
+
+        self.raw_person_mask = person_mask
+        self.raw_skin_mask = skin_mask
+
         self.raw_blending_param = blending_param
 
     @property
@@ -55,29 +65,37 @@ class Sample:
 
     @property
     def img(self) -> torch.Tensor:
-        return utils.try_batch_expand(self.raw_img, self.shape, -3)
+        return utils.try_batch_expand(self.raw_img, self.shape, 3)
 
     @property
-    def mask(self) -> torch.Tensor:
-        return utils.try_batch_expand(self.raw_mask, self.shape, -3)
+    def person_mask(self) -> torch.Tensor:
+        return utils.try_batch_expand(self.raw_person_mask, self.shape, 3)
+
+    @property
+    def skin_mask(self) -> torch.Tensor:
+        return utils.try_batch_expand(self.raw_skin_mask, self.shape, 3)
 
     @property
     def blending_param(self):
         return self.raw_blending_param.expand(self.shape)
+
+    def __len__(self) -> int:
+        return self.shape.numel()
 
     def __getitem__(self, idx) -> Sample:
         if not isinstance(idx, tuple):
             idx = (idx,)
 
         def _f(x, cdims):
-            return utils.batch_indexing(x, self.shape, cdims, idx),
+            return utils.batch_indexing(x, self.shape, cdims, idx)
 
         return Sample(
             camera_config=self.camera_config,
             camera_transform=self.camera_transform[*idx],
 
             img=_f(self.raw_img, 3),
-            mask=_f(self.raw_mask, 3),
+            person_mask=_f(self.raw_person_mask, 3),
+            skin_mask=_f(self.raw_skin_mask, 3),
 
             blending_param=self.blending_param[*idx],
         )
@@ -90,7 +108,10 @@ class Sample:
             camera_transform=self.raw_camera_transform,
 
             img=self.raw_img,
-            mask=self.raw_mask,
+
+            person_mask=self.raw_person_mask,
+            skin_mask=self.raw_skin_mask,
+
             blending_param=self.raw_blending_param,
         )
 
@@ -100,13 +121,15 @@ class Sample:
             camera_transform=self.raw_camera_transform.to(*args, **kwargs),
 
             img=self.raw_img.to(*args, **kwargs),
-            mask=self.raw_mask.to(*args, **kwargs),
+
+            person_mask=self.person_mask.to(*args, **kwargs),
+            skin_mask=self.raw_skin_mask.to(*args, **kwargs),
+
             blending_param=self.raw_blending_param.to(*args, **kwargs),
         )
 
 
-@beartype
-class Dataset(torch.utils.data.Dataset):
+class Dataset(dataset_utils.Dataset):
     def __init__(self, sample: Sample):
         self.sample = Sample(
             shape=None,
@@ -115,56 +138,25 @@ class Dataset(torch.utils.data.Dataset):
             camera_transform=sample.camera_transform,
 
             img=sample.img,
-            mask=sample.mask,
+            person_mask=sample.person_mask,
+            skin_mask=sample.skin_mask,
 
             blending_param=sample.blending_param
         )
 
+    def __getitem__(self, item: int) -> Sample:
+        return tuple()
+
     @property
-    def shape(self) -> torch.Size:
-        return self.sample.camera_transform.shape
+    def shape(self):
+        return self.sample.shape
 
-    def __len__(self) -> int:
-        return self.shape.numel()
+    def __getitem__(self, idx) -> Sample:
+        ret = self.sample[idx]
 
-    def __getitem__(self, idx):
-        cur_sample = self.sample[idx]
+        ret.raw_img = vision_utils.normalize_image(ret.raw_img)
 
-        camera_proj_matrix: torch.Tensor = camera_utils.make_proj_mat(
-            camera_config=cur_sample.camera_config,
-            camera_transform=cur_sample.camera_transform,
-            convention=camera_utils.Convention.OpenCV,
-            traget_coord=camera_utils.Coord.Screen,
-            dtype=torch.float32,
-        )
-
-        blending_param = cur_sample.blending_param
-
-        assert isinstance(blending_param, smplx_utils.BlendingParam)
-
-        body_shape = blending_param.body_shape[
-            *((0,) * (len(blending_param.shape) - 1)), :]
-
-        body_pose = blending_param.body_pose.reshape(23, 3)
-
-        global_transl = blending_param.global_transl
-
-        ret = {
-            "rgb": cur_sample.img.numpy().astype(np.float32),
-            "mask": cur_sample.mask.numpy().astype(np.float32),
-            "K": camera_proj_matrix.numpy().astype(np.float32),
-            "smpl_beta": body_shape.numpy().astype(np.float32),
-            "smpl_pose": body_pose.numpy().astype(np.float32),
-            "smpl_trans": global_transl.numpy().astype(np.float32),
-            "idx": idx,
-        }
-
-        meta_info = {
-            "video": "",
-            "viz_id": f"video_dataidx{idx}",
-        }
-
-        return ret, meta_info
+        return ret
 
     def to(self, *args, **kwargs) -> Dataset:
         self.sample = self.sample.to(*args, **kwargs)

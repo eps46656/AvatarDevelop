@@ -10,26 +10,23 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (avatar_utils, camera_utils, config, dataset_utils,
-               gaussian_utils, gom_avatar_training_utils,
-               gom_utils, kernel_splatting_utils, people_snapshot_utils, rendering_utils, smplx_utils,
-               texture_utils, training_utils, transform_utils, utils)
-
-FILE = pathlib.Path(__file__)
-DIR = FILE.parents[0]
+from . import (config, gom_avatar_utils, people_snapshot_utils, smplx_utils,
+               training_utils, utils)
 
 DEVICE = torch.device("cuda")
 
-PROJ_DIR = DIR / "train_2025_0501_1"
+PROJ_DIR = config.DIR / "train_2025_0514_2"
 
 VERT_GRAD_NORM_THRESHOLD = 1e-3
 
-ALPHA_RGB = 1.0
-ALPHA_LAP_SMOOTHNESS = 1000.0
-ALPHA_NOR_SIM = 10.0
-ALPHA_EDGE_VAR = 1.0
-ALPHA_COLOR_DIFF = 1.0
-ALPHA_GP_SCALE_DIFF = 1.0
+LAP_DIFF_CLAMP_NORM = 10e-3
+
+ALPHA_IMG_DIFF = 1.0
+ALPHA_LAP_DIFF = 50.0
+ALPHA_NOR_SIM = 2.0
+ALPHA_EDGE_VAR = 0.0
+ALPHA_GP_COLOR_DIFF = 10.0
+ALPHA_GP_SCALE_DIFF = 10.0
 
 BATCH_SIZE = 4
 
@@ -58,33 +55,12 @@ def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
     return subject_data
 
 
-def create_optimizer(param_groups):
-    return torch.optim.Adam(
-        param_groups,
-        lr=LR,
-        betas=(0.5, 0.5),
-    )
-
-
-def create_scheduler(optimizer: torch.optim.Optimizer):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=pow(0.1, 1/4),
-        patience=5,
-        threshold=0.05,
-        threshold_mode="rel",
-        cooldown=0,
-        min_lr=1e-7,
-    )
-
-
 def load_trainer():
     subject_data = read_subject()
 
     # ---
 
-    dataset = gom_utils.Dataset(gom_utils.Sample(
+    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
         camera_config=subject_data.camera_config,
         camera_transform=subject_data.camera_transform,
         img=subject_data.video,
@@ -105,64 +81,63 @@ def load_trainer():
         model_builder=smplx_model_builder,
     )
 
-    module = gom_utils.Module(
+    module = gom_avatar_utils.Module(
         avatar_blender=smplx_model_blender,
         color_channels_cnt=3,
     ).to(DEVICE).train()
 
     # ---
 
-    training_core = gom_avatar_training_utils.TrainingCore(
-        config=gom_avatar_training_utils.Config(
+    trainer_core = gom_avatar_utils.TrainerCore(
+        config=gom_avatar_utils.TrainerCoreConfig(
             proj_dir=PROJ_DIR,
             device=DEVICE,
             batch_size=BATCH_SIZE,
 
             lr=LR,
+            betas=(0.5, 0.5),
+            gamma=0.95,
 
             vert_grad_norm_threshold=VERT_GRAD_NORM_THRESHOLD,
 
-            alpha_rgb=ALPHA_RGB,
-            alpha_lap_smoothness=ALPHA_LAP_SMOOTHNESS,
+            lap_diff_clamp_norm=LAP_DIFF_CLAMP_NORM,
+
+            alpha_img_diff=ALPHA_IMG_DIFF,
+            alpha_lap_diff=ALPHA_LAP_DIFF,
             alpha_nor_sim=ALPHA_NOR_SIM,
             alpha_edge_var=ALPHA_EDGE_VAR,
-            alpha_color_diff=ALPHA_COLOR_DIFF,
+            alpha_gp_color_diff=ALPHA_GP_COLOR_DIFF,
             alpha_gp_scale_diff=ALPHA_GP_SCALE_DIFF,
         ),
         module=module,
         dataset=dataset,
-        optimizer_factory=create_optimizer,
-        scheduler_factory=create_scheduler,
     )
 
     # ---
 
     trainer = training_utils.Trainer(
         proj_dir=PROJ_DIR,
-        device=DEVICE,
+        trainer_core=trainer_core,
     )
 
-    trainer.trainer_core = training_core
-
-    return trainer
+    return subject_data, trainer
 
 
 def main1():
-    trainer = load_trainer()
+    subject_data, trainer = load_trainer()
 
     trainer.enter_cli()
 
 
 def main2():
-    trainer = load_trainer()
+    subject_data, trainer = load_trainer()
 
     trainer.load_latest()
 
-    training_core: gom_avatar_training_utils.TrainingCore = \
-        trainer.trainer_core
+    trainer_core: gom_avatar_utils.TrainerCore = trainer.trainer_core
 
     model_blender: smplx_utils.ModelBlender = \
-        training_core.module.avatar_blender
+        trainer_core.module.avatar_blender
 
     module_builder: smplx_utils.DeformableModelBuilder = \
         model_blender.model_builder

@@ -8,8 +8,8 @@ import pytorch3d
 import pytorch3d.renderer
 import pytorch3d.structures
 
-from . import (camera_utils, config, people_snapshot_utils, smplx_utils,
-               transform_utils, utils, rendering_utils)
+from . import (camera_utils, config, people_snapshot_utils, rendering_utils,
+               smplx_utils, transform_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]
@@ -60,11 +60,12 @@ def main1():
 
     subject_dir = people_snapshot_dir / subject_name
 
-    subject_data = people_snapshot_utils.read_subject(
-        subject_dir=subject_dir,
-        model_data_dict=model_data_dict,
-        device=DEVICE,
-    )
+    subject_data: people_snapshot_utils.SubjectData = \
+        people_snapshot_utils.read_subject(
+            subject_dir=subject_dir,
+            model_data_dict=model_data_dict,
+            device=DEVICE,
+        )
 
     camera_config = subject_data.camera_config
 
@@ -159,7 +160,7 @@ def main1():
         if True:
             mesh_ras_result = rendering_utils.rasterize_mesh(
                 vert_pos=smplx_model.vert_pos[frame_i],
-                faces=smplx_model.faces,
+                faces=smplx_model.mesh_graph.f_to_vvv,
                 camera_config=camera_config,
                 camera_transform=subject_data.camera_transform.to(
                     utils.CUDA_DEVICE),
@@ -211,7 +212,7 @@ def main1():
             out_frames[frame_i, :, :, :] = einops.rearrange(
                 img, "h w c -> c h w")
 
-    utils.write_video(
+    vision_utils.write_video(
         path=DIR / "output.mp4",
         video=out_frames,
         fps=25,

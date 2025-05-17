@@ -5,7 +5,7 @@ import pathlib
 import torch
 from beartype import beartype
 
-from . import (camera_utils, config, gom_utils, people_snapshot_utils,
+from . import (camera_utils, config, gom_avatar_utils, people_snapshot_utils,
                smplx_utils, transform_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
@@ -83,7 +83,7 @@ def main1():
         device=DEVICE,
     )
 
-    gom_avatar_model = gom_utils.model.GoMAvatarModel(
+    gom_avatar_model = gom_avatar_utils.model.GoMAvatarModel(
         avatar_blending_layer=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
@@ -106,7 +106,7 @@ def main1():
 
             print(f"{epoch_i=}\t\t{frame_i=}")
 
-            result: gom_utils.model.GoMAvatarModelForwardResult =\
+            result: gom_avatar_utils.model.GoMAvatarModelForwardResult =\
                 gom_avatar_model(
                     subject_data.camera_transform,
                     subject_data.camera_config,

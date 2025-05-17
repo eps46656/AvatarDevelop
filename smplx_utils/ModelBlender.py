@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import collections
-import dataclasses
 import typing
 
 import torch
@@ -9,7 +8,6 @@ from beartype import beartype
 
 from .. import avatar_utils, mesh_utils, utils
 from .blending_utils import BlendingParam, blending
-from .Model import Model
 from .ModelBuilder import ModelBuilder
 
 
@@ -29,7 +27,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         model_data = model_builder.get_model_data()
 
-        self.default_blending_param = BlendingParam(
+        self.canonical_blending_param = BlendingParam(
             body_shape=torch.zeros(
                 (model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
 
@@ -62,7 +60,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
         )
 
     def get_avatar_model(self) -> avatar_utils.AvatarModel:
-        return self(self.default_blending_param)
+        return self(self.canonical_blending_param)
 
     @property
     def body_shapes_cnt(self):
@@ -79,7 +77,7 @@ class ModelBlender(avatar_utils.AvatarBlender):
     def to(self, *args, **kwargs) -> ModelBlender:
         self.model_builder.to(*args, **kwargs)
 
-        self.default_blending_param = self.default_blending_param \
+        self.canonical_blending_param = self.canonical_blending_param \
             .to(*args, **kwargs)
 
         return self
@@ -108,14 +106,36 @@ class ModelBlender(avatar_utils.AvatarBlender):
         return model_data_subdivision_result.mesh_subdivision_result
 
     def forward(self, blending_param: BlendingParam):
+        def f(x, y):
+            return y if x is None else x
+
+        a = blending_param
+        b = self.canonical_blending_param
+
         return blending(
             model_data=self.model_builder.get_model_data(),
-            blending_param=blending_param.combine(self.default_blending_param),
+
+            blending_param=BlendingParam(
+                shape=a.shape,
+
+                body_shape=f(a.body_shape, b.body_shape),
+                expr_shape=f(a.expr_shape, b.expr_shape),
+
+                global_transl=f(a.global_transl, b.global_transl),
+                global_rot=f(a.global_rot, b.global_rot),
+
+                body_pose=f(a.body_pose, b.body_pose),
+                jaw_pose=f(a.jaw_pose, b.jaw_pose),
+
+                leye_pose=f(a.leye_pose, b.leye_pose),
+                reye_pose=f(a.reye_pose, b.reye_pose),
+
+                lhand_pose=f(a.lhand_pose, b.lhand_pose),
+                rhand_pose=f(a.rhand_pose, b.rhand_pose),
+            ),
+
             device=self.model_builder.device,
         )
-
-    def forward2(self, blending_param: BlendingParam):
-        pass
 
     def refresh(self) -> None:
         if hasattr(self.model_builder, "refresh"):

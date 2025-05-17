@@ -7,20 +7,33 @@ from . import utils
 
 
 @beartype
+def calc_density(
+    point_pos: torch.Tensor,  # [N, P]
+    kernel: typing.Callable[[torch.Tensor], torch.Tensor],
+) -> torch.Tensor:  # [N]
+    N, P = -1, -2
+    N, P = utils.check_shapes(point_pos, (N, P))
+
+    return kernel(torch.cdist(point_pos, point_pos)).sum(-1)
+
+
+@beartype
 def _splat(
     data_point_pos: torch.Tensor,  # [N, P]
     data_point_val: torch.Tensor,  # [N, Q]
+    data_point_weight: typing.Optional[torch.Tensor],  # [N]
     q_point_pos: torch.Tensor,  # [..., P]
     kernel: typing.Callable[[torch.Tensor], torch.Tensor],
 ) -> tuple[
     torch.Tensor,  # [..., Q] gathered val
     torch.Tensor,  # [...] gathered weight
 ]:
-    diffs = q_point_pos[..., None, :] - data_point_pos
-    # [..., N, P]
-
-    weight = kernel(utils.vec_norm(diffs))
+    weight = kernel(utils.vec_norm(q_point_pos[..., None, :] - data_point_pos))
     # [..., N]
+
+    if data_point_weight is not None:
+        weight = weight * data_point_weight
+        # [..., N]
 
     dtype = utils.promote_dtypes(weight, data_point_val)
 
@@ -37,6 +50,7 @@ def _splat(
 def splat(
     data_point_pos: torch.Tensor,  # [N, P]
     data_point_val: torch.Tensor,  # [N, Q]
+    data_point_weight: typing.Optional[torch.Tensor],  # [N]
     q_point_pos: torch.Tensor,  # [..., P]
     kernel: typing.Callable[[torch.Tensor], torch.Tensor],
 ) -> tuple[
@@ -66,6 +80,7 @@ def splat(
         cur_val, cur_weight = _splat(
             data_point_pos[data_beg:data_end, :],
             data_point_val[data_beg:data_end, :],
+            data_point_weight[data_beg:data_end],
             q_point_pos,
             kernel,
         )
@@ -80,11 +95,12 @@ def splat(
 def interp(
     data_point_pos: torch.Tensor,  # [N, P]
     data_point_val: torch.Tensor,  # [N, Q]
+    data_point_weight: typing.Optional[torch.Tensor],  # [N]
     q_point_pos: torch.Tensor,  # [..., P]
     kernel: typing.Callable[[torch.Tensor], torch.Tensor],
 ):
     val, weight = splat(
-        data_point_pos, data_point_val, q_point_pos, kernel)
+        data_point_pos, data_point_val, data_point_weight, q_point_pos, kernel)
     # val[..., Q]
     # weight[...]
 

@@ -6,7 +6,7 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (config, dataset_utils, gom_utils, people_snapshot_utils,
+from . import (config, dataset_utils, gom_avatar_utils, people_snapshot_utils,
                smplx_utils, training_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
@@ -51,9 +51,9 @@ class MyTrainingCore(training_utils.TrainerCore):
         for batch_idxes, sample in tqdm.tqdm(self.dataset_loader):
             batch_idxes: tuple[torch.Tensor, ...]
 
-            sample: gom_utils.Sample = self.dataset[batch_idxes]
+            sample: gom_avatar_utils.Sample = self.dataset[batch_idxes]
 
-            result: gom_utils.ModuleForwardResult = self.module(
+            result: gom_avatar_utils.ModuleForwardResult = self.module(
                 camera_transform=sample.camera_transform,
                 camera_config=sample.camera_config,
                 img=sample.img,
@@ -94,7 +94,7 @@ class MyTrainingCore(training_utils.TrainerCore):
         )
 
     def eval(self):
-        self.dataset: gom_utils.Dataset
+        self.dataset: gom_avatar_utils.Dataset
 
         out_frames = utils.empty_like(
             self.dataset.sample.img,
@@ -119,9 +119,9 @@ class MyTrainingCore(training_utils.TrainerCore):
                     idxes.shape + (C, H, W))
                 # [K, C, H, W]
 
-                sample: gom_utils.Sample = self.dataset[batch_idxes]
+                sample: gom_avatar_utils.Sample = self.dataset[batch_idxes]
 
-                result: gom_utils.ModuleForwardResult = self.module(
+                result: gom_avatar_utils.ModuleForwardResult = self.module(
                     camera_transform=sample.camera_transform,
                     camera_config=sample.camera_config,
                     img=sample.img,
@@ -188,7 +188,7 @@ def main1():
     print(f"{subject_data.blending_param.shape=}")
     print(f"{subject_data.model_data.vert_pos.shape=}")
 
-    dataset = gom_utils.Dataset(gom_utils.Sample(
+    dataset = gom_avatar_utils.Dataset(gom_avatar_utils.Sample(
         camera_transform=subject_data.camera_transform,
         camera_config=subject_data.camera_config,
         img=subject_data.video,
@@ -211,7 +211,7 @@ def main1():
         model_builder=smplx_model_builder,
     )
 
-    gom_avatar_module = gom_utils.Module(
+    gom_avatar_module = gom_avatar_utils.Module(
         avatar_blender=smplx_model_blender,
         color_channels_cnt=3,
     ).to(DEVICE).train()

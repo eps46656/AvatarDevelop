@@ -55,19 +55,15 @@ class Sample:
 
     @property
     def img(self) -> torch.Tensor:
-        return utils.try_batch_expand(self.raw_img, self.shape, -3)
+        return utils.try_batch_expand(self.raw_img, self.shape, 3)
 
     @property
     def mask(self) -> torch.Tensor:
-        return utils.try_batch_expand(self.raw_mask, self.shape, -3)
+        return utils.try_batch_expand(self.raw_mask, self.shape, 3)
 
     @property
     def blending_param(self):
         return self.raw_blending_param.expand(self.shape)
-
-    @property
-    def device(self) -> torch.device:
-        return self.camera_transform.device
 
     def __getitem__(self, idx) -> Sample:
         if not isinstance(idx, tuple):
@@ -127,11 +123,7 @@ class Dataset(dataset_utils.Dataset):
 
     @property
     def shape(self):
-        return self.sample.camera_transform.shape
-
-    @property
-    def device(self) -> torch.device:
-        return self.sample.device
+        return self.sample.shape
 
     def __getitem__(self, idx) -> Sample:
         ret = self.sample[idx]

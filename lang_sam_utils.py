@@ -23,9 +23,10 @@ class SAMType(enum.StrEnum):
 
 
 @beartype
-class MaskStrategy(enum.StrEnum):
-    MAX_SCORE = "max score"
-    MIN_AREA = "min area"
+class MaskStrategy(enum.Enum):
+    MAX_SCORE = enum.auto()
+    MIN_AREA = enum.auto()
+    MEAN = enum.auto()
 
 
 @beartype
@@ -40,39 +41,64 @@ def get_lang_sam_module(sam_type: SAMType):
 
 
 @beartype
-def predict(
-    sam_type: SAMType,
-    imgs: typing.Iterable[PIL.Image.Image],  # [C, H, W]
-    prompts: typing.Iterable[str],
-    mask_strategy: MaskStrategy,
-    batch_size: int,
-) -> typing.Iterable[torch.Tensor]:  # [C, H, W]
-    assert 0 < batch_size
+class predict:
+    def __init__(
+        self,
+        sam_type: SAMType,
+        img: typing.Iterable[PIL.Image.Image],  # [C, H, W]
+        text_prompt: typing.Iterable[str],
+        mask_strategy: MaskStrategy,
+        batch_size: int,
+    ):
+        self.sam_type = sam_type
+        self.imgs = img
+        self.prompts = text_prompt
+        self.mask_strategy = mask_strategy
+        self.batch_size = batch_size
 
-    lang_sam_module = get_lang_sam_module(sam_type)
+        try:
+            self.length = (min(len(img), len(text_prompt)) +
+                           batch_size - 1) // batch_size
+        except:
+            self.length = None
 
-    with torch.no_grad():
-        for cur_batch in tqdm.tqdm(
-                itertools.batched(zip(imgs, prompts), batch_size)):
-            with utils.DisableStdOut():
-                result = lang_sam_module.predict(
-                    [k[0] for k in cur_batch],
-                    [k[1] for k in cur_batch],
-                )
+    @beartype
+    def __len__(self) -> typing.Optional[int]:
+        return self.length
 
-            for i in range(len(cur_batch)):
-                cur_result = result[i]
+    @beartype
+    def __iter__(self) -> typing.Iterable[torch.Tensor]:  # [C, H, W]
+        assert 0 < self.batch_size
 
-                masks = cur_result["masks"]
-                # [K, H, W]
+        lang_sam_module = get_lang_sam_module(self.sam_type)
 
-                mask_scores = cur_result["mask_scores"].reshape(masks.shape[0])
-                # [K]
+        with torch.no_grad():
+            for cur_batch in tqdm.tqdm(itertools.batched(
+                    zip(self.imgs, self.prompts), self.batch_size)):
+                with utils.DisableStdOut():
+                    result = lang_sam_module.predict(
+                        [k[0] for k in cur_batch],
+                        [k[1] for k in cur_batch],
+                    )
 
-                match mask_strategy:
-                    case MaskStrategy.MAX_SCORE:
-                        target_idx = mask_scores.argmax()
-                    case MaskStrategy.MIN_AREA:
-                        target_idx = masks.sum(axis=(1, 2)).argmin()
+                for i in range(len(cur_batch)):
+                    cur_result = result[i]
 
-                yield torch.from_numpy(masks[target_idx])
+                    masks = cur_result["masks"]
+                    # [K, H, W]
+
+                    mask_scores = cur_result["mask_scores"].reshape(
+                        masks.shape[0])
+                    # [K]
+
+                    match self.mask_strategy:
+                        case MaskStrategy.MAX_SCORE:
+                            mask = masks[mask_scores.argmax()]
+                        case MaskStrategy.MIN_AREA:
+                            mask = masks[masks.sum(axis=(1, 2)).argmin()]
+                        case MaskStrategy.MEAN:
+                            mask = masks.mean(axis=0)
+                        case _:
+                            raise utils.MismatchException()
+
+                    yield torch.from_numpy(mask)

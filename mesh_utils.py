@@ -4,10 +4,9 @@ import collections
 import dataclasses
 import enum
 import functools
+import heapq
 import itertools
 import typing
-
-# import open3d as o3d
 
 import torch
 import tqdm
@@ -722,20 +721,27 @@ class MeshGraph:
             mesh_graph=mesh_graph,
         )
 
+    def remove_orphan_vert(self) -> MeshGraph:
+        return self.extract(range(self.faces_cnt), True)
+
     def extract(
         self,
         target_faces: typing.Iterable[int],
+        remove_orphan_vert: bool,
     ) -> MeshExtractionResult:
         target_faces = sorted(set(target_faces))
 
         f_to_vvv = self.f_to_vvv.to(utils.CPU_DEVICE)
         # [F, 3]
 
-        v_mark = [False] * self.verts_cnt
+        if remove_orphan_vert:
+            v_mark = [False] * self.verts_cnt
 
-        for f in target_faces:
-            for v in map(int, f_to_vvv[f]):
-                v_mark[v] = True
+            for f in target_faces:
+                for v in map(int, f_to_vvv[f]):
+                    v_mark[v] = True
+        else:
+            v_mark = [True] * self.verts_cnt
 
         v_to_new_v: dict[int, int] = dict()
 
@@ -766,6 +772,62 @@ class MeshGraph:
             face_src_table=face_src_table,
             mesh_graph=mesh_graph,
         )
+
+    def get_cluster(
+        self,
+        vert_conn: bool,
+        edge_conn: bool,
+    ) -> list[list[int]]:
+        if vert_conn:
+            v_to_fs: list[list[int]] = [[] for _ in range(self.verts_cnt)]
+
+            for f in range(self.faces_cnt):
+                for v in map(int, self.f_to_vvv[f]):
+                    v_to_fs[v].append(f)
+
+        if edge_conn:
+            e_to_fs: list[list[int]] = [[] for _ in range(self.edges_cnt)]
+
+            for f in range(self.faces_cnt):
+                for e in map(int, self.f_to_eee[f]):
+                    e_to_fs[e].append(f)
+
+        ret: list[list[int]] = list()
+
+        passed = [False] * self.faces_cnt
+
+        q = list()
+
+        for f in range(self.faces_cnt):
+            if passed[f]:
+                continue
+
+            q.append(f)
+
+            cur_cluster = list()
+
+            while 0 < len(q):
+                f = heapq.heappop(q)
+                cur_cluster.append(f)
+
+                if passed[f]:
+                    continue
+
+                if vert_conn:
+                    for v in map(int, self.f_to_vvv[f]):
+                        for adj_f in v_to_fs[v]:
+                            if not passed[adj_f]:
+                                heapq.heappush(q, adj_f)
+
+                if edge_conn:
+                    for e in map(int, self.f_to_eee[f]):
+                        for adj_f in e_to_fs[e]:
+                            if not passed[adj_f]:
+                                heapq.heappush(q, adj_f)
+
+            ret.append(cur_cluster)
+
+        return ret
 
     def show(
         self,
@@ -1107,98 +1169,120 @@ class MeshData:
         return self.mesh_graph.calc_face_cos_sim(self.face_norm)
 
     @functools.cached_property
+    def face_edge_var(self) -> torch.Tensor:
+        mean_sq_x = self.face_edge_sum_sq_norm / 3
+        # [..., F]
+
+        sq_mean_x = (self.face_edge_sum_norm / 3).square()
+        # [..., F]
+
+        return mean_sq_x - sq_mean_x
+
+    @functools.cached_property
     def face_edge_rel_var(self) -> torch.Tensor:
-        return self.face_edge_sum_sq_norm / \
-            self.face_edge_sum_norm.detach().square() * 3 - 1
+        mean_sq_x = self.face_edge_sum_sq_norm / 3
+        # [..., F]
+
+        sq_mean_x = (self.face_edge_sum_norm / 3).square()
+        # [..., F]
+
+        return (mean_sq_x - sq_mean_x) / (
+            utils.EPS[sq_mean_x.dtype] + sq_mean_x.detach())
 
     @functools.cached_property
     def face_bary_coord_mat(self) -> torch.Tensor:  # [..., F, 4, 4]
         return make_bary_coord_mat(self.face_vert_pos, self.face_norm)
 
-    def remesh(self, target_length: float, iterations: int) -> MeshData:
-        """
-        ms = pymeshlab.MeshSet()
+    @functools.cached_property
+    def area_weighted_vert_norm(self) -> torch.Tensor:  # [..., V, 3]
+        faces = self.mesh_graph.f_to_vvv
 
-        ms.add_mesh(pymeshlab.Mesh(
-            vertex_matrix=self.vert_pos.numpy(force=True),
-            face_matrix=self.mesh_graph.f_to_vvv.numpy(force=True)
-        ), "cur_mesh")
+        face_norm = self.face_norm
+        # [..., F, 3]
 
-        ms.apply_filter(
-            'meshing_isotropic_explicit_remeshing',
-            targetlen=pymeshlab.PureValue(target_length),
-            iterations=iterations,
+        buffer = utils.zeros_like(self.vert_pos)
+        # [..., V, 3]
+
+        buffer.index_add_(-2, faces[:, 0], face_norm)
+        buffer.index_add_(-2, faces[:, 1], face_norm)
+        buffer.index_add_(-2, faces[:, 2], face_norm)
+
+        # buffer[..., faces[:, 0][i], :] += face_norm[..., i, :]
+        # buffer[..., faces[:, 1][i], :] += face_norm[..., i, :]
+        # buffer[..., faces[:, 2][i], :] += face_norm[..., i, :]
+
+        return utils.vec_normed(buffer)
+
+    def remesh(
+        self, epochs_cnt: int, lr: float, betas: tuple[float, float],
+    ) -> MeshData:
+        vert_pos = self.vert_pos.clone().requires_grad_()
+
+        optimizer = torch.optim.Adam([vert_pos], lr=lr, betas=betas)
+
+        alpha_edge_var = 0.1
+        alpha_lap_smoothness = 0.1
+
+        for _ in range(epochs_cnt):
+            optimizer.zero_grad()
+
+            mesh_data = MeshData(self.mesh_graph, vert_pos)
+
+            loss = \
+                alpha_edge_var * mesh_data.face_edge_var.mean() + \
+                alpha_lap_smoothness * mesh_data.l2_uni_lap_smoothness.mean()
+
+            loss.backward()
+
+            optimizer.step()
+
+        return MeshData(
+            self.mesh_graph,
+            vert_pos.detach(),
         )
 
-        new_mesh = ms.current_mesh()
-
-        new_vert_pos = torch.from_numpy(new_mesh.vertex_matrix()).to(
-            self.vert_pos)
-
-        new_f_to_vvv = torch.from_numpy(new_mesh.face_matrix()).to(
-            self.mesh_graph.f_to_vvv)
-
         """
+        bpy.ops.object.select_all(action='SELECT')
+        bpy.ops.object.delete(use_global=False)
 
+        mesh = bpy.data.meshes.new("mesh")
+        obj = bpy.data.objects.new("object", mesh)
+        bpy.context.collection.objects.link(obj)
+
+        mesh.from_pydata(
+            self.vert_pos.tolist(), [], self.mesh_graph.f_to_vvv.tolist())
+        mesh.update()
+
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+
+        bpy.ops.object.modifier_add(type='REMESH')
+        modifier = obj.modifiers[-1]
+        modifier.mode = 'VOXEL'
+        modifier.voxel_size = target_length
+        modifier.use_smooth_shade = False
+
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+
+        remeshed_vert_pos = torch.tensor(
+            [v.co[:] for v in obj.data.vertices],
+            dtype=self.vert_pos.dtype, device=self.device)
+        # [V_, 3]
+
+        remeshed_faces = torch.tensor(
+            [tuple(p.vertices) for p in obj.data.polygons],
+            dtype=torch.long, device=self.device)
+        # [F, 3]
+
+        return MeshData(
+            MeshGraph.from_faces(
+                remeshed_vert_pos.shape[0],
+                remeshed_faces,
+                self.device,
+            ),
+            remeshed_vert_pos,
+        )
         """
-        mesh = pymesh.form_mesh(
-            self.vert_pos.numpy(force=True),
-            self.mesh_graph.f_to_vvv.numpy(force=True))
-
-        mesh = pymesh.remove_isolated_vertices(mesh)
-        mesh = pymesh.remove_duplicated_faces(mesh)
-        mesh = pymesh.remove_degenerated_triangles(mesh)
-
-        new_mesh = pymesh.isotropic_remeshing(
-            mesh, target_edge_length=target_length, iterations=iterations)
-
-        new_vert_pos = torch.from_numpy(new_mesh.vertices).to(
-            self.vert_pos)
-
-        new_f_to_vvv = torch.from_numpy(new_mesh.faces).to(
-            self.mesh_graph.f_to_vvv)
-
-        """
-
-        """
-
-        mesh = o3d.geometry.TriangleMesh()
-
-        mesh.vertices = o3d.utility.Vector3dVector(
-            self.vert_pos.numpy(force=True))
-        mesh.triangles = o3d.utility.Vector3iVector(
-            self.mesh_graph.f_to_vvv.numpy(force=True))
-
-        mesh.remove_duplicated_vertices()
-        mesh.remove_degenerate_triangles()
-        mesh.remove_non_manifold_edges()
-
-        mesh = mesh.filter_smooth_simple(
-            number_of_iterations=iterations)
-
-        mesh = mesh.simplify_quadric_decimation(self.mesh_graph.faces_cnt)
-
-        new_vert_pos = torch.tensor(
-            mesh.vertices,
-            dtype=self.vert_pos.dtype,
-            device=self.vert_pos.device)
-
-        new_f_to_vvv = torch.tensor(
-            mesh.triangles,
-            dtype=self.mesh_graph.f_to_vvv.dtype,
-            device=self.mesh_graph.f_to_vvv.device)
-
-        new_mesh_data = MeshData(MeshGraph.from_faces(
-            new_vert_pos.shape[0],
-            new_f_to_vvv,
-            self.mesh_graph.device,
-        ), new_vert_pos)
-
-        return new_mesh_data
-
-        """
-
-        return self
 
     def calc_unsigned_dist(
         self,

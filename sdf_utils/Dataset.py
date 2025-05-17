@@ -18,6 +18,20 @@ class Sample:
 
 
 @beartype
+def generate_point(
+    mean: torch.Tensor,  # [..., D]
+    std: float,
+    N: int,
+) -> torch.Tensor:
+    D = utils.check_shapes(mean, (..., -1))
+
+    mean = mean[..., None, :]
+    # [..., 1, D]
+
+    return (mean + torch.normal(mean, std)).reshape(-1, D)
+
+
+@beartype
 class Dataset(dataset_utils.Dataset):
     def __init__(
         self,
@@ -48,9 +62,8 @@ class Dataset(dataset_utils.Dataset):
     def __getitem__(self, idx: tuple[torch.Tensor]) -> Sample:
         N = idx[0].numel()
 
-        point_pos = utils.empty_like(
-            self.mesh_data.vert_pos, shape=(N, 3),
-            dtype=self.dtype, device=self.device)
+        point_pos = torch.empty(
+            (N, 3), dtype=self.dtype, device=self.device)
 
         for d in range(3):
             torch.normal(self.mean[d], self.std[d], (N,), out=point_pos[:, d])

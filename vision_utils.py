@@ -19,11 +19,13 @@ from . import utils
 class ColorType(enum.StrEnum):
     GRAY = "gray"
     RGB = "rgb"
+    RGBA = "rgba"
 
 
 channels_cnt_table = {
     ColorType.GRAY: 1,
     ColorType.RGB: 3,
+    ColorType.RGBA: 4,
 }
 
 
@@ -35,12 +37,7 @@ def normalize_image(
     dtype: torch.dtype = torch.float32,
     device: typing.Optional[torch.device] = None,
 ) -> torch.Tensor:
-    return torch.div(
-        img.clamp(0, k),
-        k,
-        rounding_mode=None,
-        out=utils.empty_like(img, dtype=dtype, device=device),
-    )
+    return img.clamp(0, k).div(k, rounding_mode=None).to(device, dtype)
 
 
 @beartype
@@ -55,7 +52,7 @@ def denormalize_image(
 
 
 @beartype
-def read_image(path: os.PathLike):
+def read_image(path: os.PathLike) -> torch.Tensor:
     img = torchvision.io.read_image(
         path, torchvision.io.ImageReadMode.RGB)
     # [C, H, W]
@@ -91,14 +88,48 @@ def write_image(
     raise utils.MismatchException()
 
 
-_to_pillow_image_core = torchvision.transforms.ToPILImage()
+@beartype
+def to_pillow_image(
+    img: torch.Tensor,  # [H, W] or [C, H, W]
+) -> PIL.Image.Image:
+    if img.ndim == 2:
+        img = img[None, :, :]
+
+    C, H, W = utils.check_shapes(img, (-1, -2, -3))
+
+    assert C in (1, 3, 4)
+
+    if C == 1:
+        np_img = img[0].numpy(force=True)
+    else:
+        np_img = einops.rearrange(img, "c h w -> h w c").numpy(force=True)
+
+    return PIL.Image.fromarray(np_img)
 
 
 @beartype
-def to_pillow_image(
-    img: torch.Tensor,  # [C, H, W] 255
-) -> PIL.Image.Image:
-    return _to_pillow_image_core(img)
+def from_pillow_image(
+    img: PIL.Image.Image,
+    color_type: ColorType,
+    *,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+) -> torch.Tensor:  # [C, H, W]
+    match color_type:
+        case ColorType.GRAY:
+            img = img.convert("L")
+        case ColorType.RGB:
+            img = img.convert("RGB")
+        case _:
+            raise utils.MismatchException()
+
+    ret = torch.from_numpy(np.array(img))
+    # [H, W] or [H, W, C]
+
+    if ret.ndim == 2:
+        ret = ret[:, :, None]
+
+    return einops.rearrange(ret, "h w c -> c h w").to(device, dtype)
 
 
 @beartype
@@ -236,7 +267,7 @@ class SeqVideoGenerator(VideoGenerator):
         self.__img_idx = \
             (img_idx + self.frames_cnt + 1) % (self.frames_cnt + 1)
 
-    def read(self) -> torch.Tensor:
+    def read(self) -> typing.Optional[torch.Tensor]:
         if self.frames_cnt <= self.__img_idx:
             return None
 
@@ -254,6 +285,8 @@ class VideoReader(VideoGenerator):
         path: os.PathLike,
         color_type: ColorType = ColorType.RGB,
     ):
+        path = utils.to_pathlib_path(path)
+
         self.reader = cv.VideoCapture(path)
         self.color_type = color_type
 
@@ -312,6 +345,7 @@ class VideoWriter:
 
         path.parents[0].mkdir(parents=True, exist_ok=True)
 
+        self.path = path
         self.height = height
         self.width = width
         self.color_type = color_type
@@ -362,7 +396,15 @@ class VideoWriter:
         self.writer.write(cv.cvtColor(einops.rearrange(
             img.cpu().numpy(), "c h w -> h w c"), cv.COLOR_RGB2BGR))
 
+    def write_all(self, img: typing.Iterable[torch.Tensor]) -> None:
+        for i in img:
+            self.write(i)
+
     def close(self) -> None:
+        if not self.is_opened:
+            return
+
+        print(f"Write video to \"{self.path}\".")
         self.writer.release()
 
 
@@ -372,7 +414,8 @@ def read_video(
     color_type: ColorType,
     *,
     dtype: typing.Optional[torch.dtype] = None,
-    device: typing.Optional[torch.device] = None,
+    device: torch.device,
+    disk_mem: bool = False,
 ) -> tuple[
     typing.Optional[torch.Tensor],  # imgs
     float,  # fps
@@ -395,11 +438,19 @@ def read_video(
 
     reader = VideoReader(path, color_type)
 
-    ret = torch.empty(
-        (frames_cnt, channels_cnt_table[color_type], H, W),
-        dtype=first_frame.dtype if dtype is None else dtype,
-        device=device,
-    )
+    if disk_mem:
+        assert device == utils.CPU_DEVICE
+
+        ret = utils.disk_empty(
+            (frames_cnt, channels_cnt_table[color_type], H, W),
+            dtype=first_frame.dtype if dtype is None else dtype,
+        )
+    else:
+        ret = torch.empty(
+            (frames_cnt, channels_cnt_table[color_type], H, W),
+            dtype=first_frame.dtype if dtype is None else dtype,
+            device=device,
+        )
 
     for frame_i, frame in enumerate(reader):
         ret[frame_i] = frame
@@ -412,7 +463,8 @@ def read_video_mask(
     path: os.PathLike,
     *,
     dtype: typing.Optional[torch.dtype] = torch.float32,
-    device: typing.Optional[torch.device] = None,
+    device: torch.device,
+    disk_mem: bool = False,
 ) -> tuple[
     typing.Optional[torch.Tensor],  # mask[T, 1, H, W]
     float,  # fps
@@ -436,11 +488,19 @@ def read_video_mask(
 
     reader = VideoReader(path, ColorType.GRAY)
 
-    ret = torch.empty(
-        (frames_cnt, 1, H, W),
-        dtype=dtype,
-        device=device,
-    )
+    if disk_mem:
+        assert device == utils.CPU_DEVICE
+
+        ret = utils.disk_empty(
+            (frames_cnt, 1, H, W),
+            dtype=dtype,
+        )
+    else:
+        ret = torch.empty(
+            (frames_cnt, 1, H, W),
+            dtype=dtype,
+            device=device,
+        )
 
     for frame_i, frame in enumerate(reader):
         ret[frame_i] = frame.to(dtype=dtype) / 255
@@ -461,8 +521,6 @@ def write_video(
 
     if T == 0:
         return
-
-    print(f"Writing video to \"{path}\".")
 
     with VideoWriter(
         path,

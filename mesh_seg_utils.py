@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
 import typing
 
@@ -58,7 +59,7 @@ def batch_vote(
     pixel_to_face:  torch.Tensor,  # [H, W]
     ballot: torch.Tensor,  # [B, H, W]
     face_ballot_box: torch.Tensor,  # [F, B]
-):
+) -> None:
     # B number of parts
     # H image height
     # W image width
@@ -147,7 +148,7 @@ def assign(
 @dataclasses.dataclass
 class MeshSegmentationResult:
     mesh_subdivision_result: mesh_utils.MeshSubdivisionResult
-    sub_mesh_data: mesh_utils.MeshData
+    sub_vert_obj_kdx: torch.Tensor  # [V_]
     sub_face_obj_idx: torch.Tensor  # [F_]
     target_faces: list[list[int]]
 
@@ -159,41 +160,46 @@ class MeshSegmentor:
         *,
         mesh_graph: mesh_utils.MeshGraph,
 
-        objs_cnt: int,
-
-        ballot_cnt_dtype: torch.dtype = torch.int64,
-        ballot_box_dtype: torch.dtype = torch.float64,
-
-        device: typing.Optional[torch.device] = None,
+        vert_ballot_cnt: torch.Tensor,  # [V + 1, O]
+        vert_ballot_box: torch.Tensor,  # [V + 1, O]
     ):
         V = mesh_graph.verts_cnt
-        O = objs_cnt
 
-        assert 0 < O
+        O = utils.check_shapes(
+            vert_ballot_cnt, (V + 1, -1),
+            vert_ballot_box, (V + 1, -1),
+        )
 
         self.mesh_graph = mesh_graph
 
-        self.vert_ballot_cnt = torch.zeros(
-            (V + 1, O), dtype=ballot_cnt_dtype, device=device)
-
-        self.vert_ballot_box = torch.zeros(
-            (V + 1, O), dtype=ballot_box_dtype, device=device)
+        self.vert_ballot_cnt = vert_ballot_cnt
+        self.vert_ballot_box = vert_ballot_box
 
     @staticmethod
-    def from_mesh_graph(
+    def from_empty(
         mesh_graph: mesh_utils.MeshGraph,
+
         objs_cnt: int,
-        dtype: torch.dtype,
-        device: torch.device,
+
+        ballot_cnt_dtype: torch.dtype = torch.float64,
+        ballot_box_dtype: torch.dtype = torch.float64,
+
+        device: typing.Optional[torch.device] = None,
     ) -> MeshSegmentor:
+        V = mesh_graph.verts_cnt
+        O = objs_cnt
+
+        vert_ballot_cnt = torch.zeros(
+            (V + 1, O), dtype=ballot_cnt_dtype, device=device)
+
+        vert_ballot_box = torch.zeros(
+            (V + 1, O), dtype=ballot_box_dtype, device=device)
+
         return MeshSegmentor(
-            mesh_graph,
+            mesh_graph=mesh_graph,
 
-            torch.zeros((mesh_graph.verts_cnt + 1, objs_cnt),
-                        dtype=dtype, device=device),
-
-            torch.zeros((mesh_graph.verts_cnt + 1, objs_cnt),
-                        dtype=dtype, device=device),
+            vert_ballot_cnt=vert_ballot_cnt,
+            vert_ballot_box=vert_ballot_box,
         )
 
     @staticmethod
@@ -203,24 +209,22 @@ class MeshSegmentor:
         device: torch.device,
     ) -> MeshSegmentor:
         return MeshSegmentor(
-            mesh_utils.MeshGraph.from_state_dict(
+            mesh_graph=mesh_utils.MeshGraph.from_state_dict(
                 state_dict["mesh_graph"], device),
 
-            utils.tensor_deserialize(
+            vert_ballot_cnt=utils.tensor_deserialize(
                 state_dict["vert_ballot_cnt"], dtype, device),
 
-            utils.tensor_deserialize(
+            vert_ballot_box=utils.tensor_deserialize(
                 state_dict["vert_ballot_box"], dtype, device),
-
-            device,
         )
 
-    def state_dict(self):
-        return {
-            "mesh_graph": self.mesh_graph.state_dict(),
-            "vert_ballot_cnt": utils.tensor_serialize(self.vert_ballot_cnt),
-            "vert_ballot_box": utils.tensor_serialize(self.vert_ballot_box),
-        }
+    def state_dict(self) -> collections.OrderedDict[str, object]:
+        return collections.OrderedDict([
+            ("mesh_graph", self.mesh_graph.state_dict()),
+            ("vert_ballot_cnt", utils.tensor_serialize(self.vert_ballot_cnt)),
+            ("vert_ballot_box", utils.tensor_serialize(self.vert_ballot_box)),
+        ])
 
     def load_state_dict(
             self, state_dict: typing.Mapping[str, object]) -> MeshSegmentor:
@@ -252,41 +256,40 @@ class MeshSegmentor:
 
         N = shape.numel()
 
-        face_idx = face_idx.expand(shape).reshape(N)  # [N]
-        bary_coord = bary_coord.expand(*shape, 3).reshape(N, 3)  # [N, 3]
-        ballot = ballot.expand(shape).reshape(N)  # [N]
-
         vert_idx = torch.where(
-            (face_idx == -1)[:, None].expand(N, 3),
+            (face_idx == -1)[..., None].expand(*face_idx.shape, 3),
             V,
-            self.mesh_graph.f_to_vvv[face_idx.clamp(0, None)]  # [N, 3]
-        )
+            self.mesh_graph.f_to_vvv[face_idx.clamp(0, None)]
+        ).expand(*shape, 3).reshape(N, 3)
 
-        vert_ballot = bary_coord * ballot[..., None]  # [N, 3]
+        vert_ballot = bary_coord * ballot[..., None]
 
         for i in range(3):
             self.vert_ballot_cnt[:, obj_idx].index_add_(
                 0,
+
                 vert_idx[:, i],
-                bary_coord[:, i].to(self.vert_ballot_cnt),
+
+                bary_coord[..., i].expand(shape)
+                .to(self.vert_ballot_cnt).reshape(N),
             )
 
             self.vert_ballot_box[:, obj_idx].index_add_(
                 0,
+
                 vert_idx[:, i],
-                vert_ballot[:, i].to(self.vert_ballot_box),
+
+                vert_ballot[..., i].expand(shape)
+                .to(self.vert_ballot_box).reshape(N),
             )
 
-    def segment(
-        self,
-        mesh_data: mesh_utils.MeshData,
-    ) -> MeshSegmentationResult:
+    def segment(self, threshold: float) -> MeshSegmentationResult:
         max_vert_ballot, max_vert_ballot_idx = \
             self.vert_ballot_box[:-1].max(-1)
         # max_vert_ballot[V]
         # max_vert_ballot_idx[V]
 
-        vert_bg_mask = 0 < max_vert_ballot
+        vert_bg_mask = threshold <= max_vert_ballot
 
         vert_obj_kdx = torch.where(
             vert_bg_mask,
@@ -295,17 +298,11 @@ class MeshSegmentor:
         )
         # [V]
 
-        vert_weight = 1 / torch.where(
-            vert_bg_mask,
+        mesh_subdivision_result: mesh_utils.MeshSubdivisionResult = \
+            self.mesh_graph.subdivide()
 
-            1e-3 + max_vert_ballot / max_vert_ballot.max().clamp(1e-3, None),
-            # [0, 1]
-
-            1e3,
-        )
-        # [V]
-
-        mesh_subdivision_result = mesh_data.mesh_graph.subdivide()
+        vert_src_table = mesh_subdivision_result.vert_src_table
+        # [V_, 2]
 
         sub_mesh_graph = mesh_subdivision_result.mesh_graph
 
@@ -326,21 +323,6 @@ class MeshSegmentor:
         ).to(utils.CPU_DEVICE)
         # [F_]
 
-        edge_weight = vert_weight[mesh_subdivision_result.vert_src_table]
-        # [V_, 2]
-
-        sub_vert_pos = (
-            mesh_data.vert_pos[mesh_subdivision_result.vert_src_table] *
-            edge_weight[..., None]
-            # [V_, 2, D]
-        ).sum(-2) / (1e-2 + edge_weight.sum(-1, True))
-        # [V_, D]
-
-        sub_mesh_data = mesh_utils.MeshData(
-            mesh_subdivision_result.mesh_graph,
-            sub_vert_pos,
-        )
-
         O = self.vert_ballot_box.shape[1]
 
         target_faces: list[list[int]] = [list() for _ in range(O)]
@@ -351,116 +333,88 @@ class MeshSegmentor:
 
         return MeshSegmentationResult(
             mesh_subdivision_result,
-            sub_mesh_data,
+            sub_vert_obj_kdx,
             sub_face_obj_idx,
             target_faces,
         )
 
 
 @beartype
-@torch.no_grad()
-def vert_vote(
+def segment_mesh(
     *,
-    camera_config: camera_utils.CameraConfig,
-
-    camera_transform: transform_utils.ObjectTransform,  # [...]
-
     avatar_blender: avatar_utils.AvatarBlender,
 
-    mesh_segmentor: MeshSegmentor,
+    camera_config: camera_utils.CameraConfig,
+    camera_transform: transform_utils.ObjectTransform,
 
     blending_param: typing.Any,
 
-    mask: list[torch.Tensor],  # [O][..., H, W]
+    obj_mask: list[typing.Iterable[torch.Tensor]],  # [H, W]],  # [K, H, W]
 
-    mask_to_ballot: typing.Callable[[torch.Tensor], torch.Tensor],
+    batch_size: int,
 
-    device: torch.device,
+    device: typing.Optional[torch.device],
 ) -> MeshSegmentor:
     H, W = camera_config.img_h, camera_config.img_w
 
-    O = len(mask)
+    O = len(obj_mask)
 
-    for m in mask:
-        utils.check_shapes(m, (..., H, W))
+    assert 0 < batch_size
 
     shape = utils.broadcast_shapes(
         camera_transform,
         blending_param,
-        *(m.shape[:-2] for m in mask),
     )
 
     camera_transform = camera_transform.expand(shape)
     blending_param = blending_param.expand(shape)
 
-    for batch_idx in tqdm.tqdm(dataset_utils.BatchIdxIterator(
-            batch_size=1, shuffle=False)):
+    avatar_model: avatar_utils.AvatarModel = avatar_blender.get_avatar_model()
 
-        cur_camera_transform = camera_transform[batch_idx]
-        cur_blending_param = blending_param[batch_idx]
+    mesh_data = avatar_model.mesh_data
 
-        cur_mask = mask[batch_idx]
+    mesh_segmentor: MeshSegmentor = MeshSegmentor.from_empty(
+        mesh_graph=mesh_data.mesh_graph,
+        objs_cnt=O,
+        ballot_cnt_dtype=torch.float64,
+        ballot_box_dtype=torch.float64,
+        device=device,
+    )
 
-        cur_avatar_model: avatar_utils.AvatarModel = avatar_blender(
-            cur_blending_param)
+    with torch.no_grad():
+        for B, batch_idx in tqdm.tqdm(dataset_utils.BatchIdxIterator(
+                shape, batch_size=batch_size, shuffle=False)):
+            cur_camera_transform = camera_transform[batch_idx].to(device)
 
-        mesh_ras_result = rendering_utils.rasterize_mesh(
-            vert_pos=cur_avatar_model.vert_pos,
-            faces=cur_avatar_model.mesh_graph.f_to_vvv,
-            camera_config=camera_config,
-            camera_transform=cur_camera_transform,
-            faces_per_pixel=1,
-        )
+            cur_blending_param = blending_param[batch_idx].to(device)
 
-        pix_to_face: torch.Tensor = \
-            mesh_ras_result.pix_to_face.reshape(H, W)
-        # [H * W]
+            cur_avatar_model: avatar_utils.AvatarModel = \
+                avatar_blender(cur_blending_param)
 
-        bary_coord: torch.Tensor = \
-            mesh_ras_result.bary_coords.reshape(H, W, 3)
-        # [H, W, 3]
-
-        for o in range(O):
-            cur_mask = utils.batch_indexing(mask[o], shape, batch_idx)
-
-            ballot = mask_to_ballot(cur_mask).reshape(H * W)
-
-            mesh_segmentor.vote(
-                o,
-                pix_to_face,  # [H * W]
-                bary_coord,  # [H * W, 3]
-                ballot,  # [H * W]
+            mesh_ras_result = rendering_utils.rasterize_mesh(
+                vert_pos=cur_avatar_model.vert_pos.to(device),
+                faces=cur_avatar_model.mesh_graph.f_to_vvv.to(device),
+                camera_config=camera_config,
+                camera_transform=cur_camera_transform.to(device),
+                faces_per_pixel=1,
             )
 
+            cur_pix_to_face = mesh_ras_result.pix_to_face.reshape(B, H, W)
+            # [B, H, W]
+
+            cur_bary_coord = mesh_ras_result.bary_coord.reshape(B, H, W, 3)
+            # [B, H, W, 3]
+
+            for b in range(B):
+                for o in range(O):
+                    cur_mask = next(obj_mask[o])
+                    # [H, W]
+
+                    mesh_segmentor.vote(
+                        o,
+                        cur_pix_to_face[b],  # [H, W]
+                        cur_bary_coord[b],  # [H, W, 3]
+                        (cur_mask * 2 - 1).to(device),  # [H, W]
+                    )
+
     return mesh_segmentor
-
-
-@beartype
-def vert_ballot_blur(
-    mesh_segmentor: MeshSegmentor,
-    std: float = 50 * 1e-3,
-):
-    assert 0 < std
-
-    vert_ballot_cnt = mesh_segmentor.vert_ballot_cnt
-    # [V + 1, O]
-
-    vert_ballot_box = mesh_segmentor.vert_ballot_box
-    # [V + 1, O]
-
-    def kernel(x):
-        return (-(x / std)**2 / 2).exp()
-
-    vert_ballot_cnt[:-1] = kernel_splatting_utils.interp(
-        model_data.vert_pos,  # [V, 3]
-        vert_ballot_cnt[:-1],  # [V, K]
-        model_data.vert_pos,  # [V, 3]
-        kernel,
-    )
-
-    vert_ballot_box[:-1] = kernel_splatting_utils.interp(
-        model_data.vert_pos,  # [V, 3]
-        vert_ballot_box[:-1],  # [V, K]
-        model_data.vert_pos,  # [V, 3]
-        kernel,
-    )

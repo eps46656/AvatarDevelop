@@ -5,7 +5,7 @@ import pathlib
 import torch
 from beartype import beartype
 
-from . import (camera_utils, config, gom_utils, people_snapshot_utils,
+from . import (camera_utils, config, gom_avatar_utils, people_snapshot_utils,
                smplx_utils, transform_utils, utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
@@ -76,7 +76,7 @@ def main1():
         device=DEVICE,
     )
 
-    gom_avatar_module = gom_utils.Module(
+    gom_avatar_module = gom_avatar_utils.Module(
         avatar_blender=smplx_model_builder,
         color_channels_cnt=3,
     ).train()
@@ -99,7 +99,7 @@ def main1():
 
             print(f"{epoch_i=}\t\t{frame_i=}")
 
-            result: gom_utils.ModuleForwardResult =\
+            result: gom_avatar_utils.ModuleForwardResult =\
                 gom_avatar_module(
                     subject_data.camera_transform,
                     subject_data.camera_config,
@@ -125,10 +125,10 @@ def main1():
 
             frames[frame_i] = result.gp_render_img.detach()
 
-            mean_rgb_loss = result.rgb_loss.mean()
-            mean_lap_loss = result.lap_smoothness_loss.mean()
-            mean_normal_sim_loss = result.nor_sim_loss.mean()
-            mean_color_diff_loss = result.color_diff_loss.mean()
+            mean_rgb_loss = result.img_diff.mean()
+            mean_lap_loss = result.lap_diff.mean()
+            mean_normal_sim_loss = result.nor_sim.mean()
+            mean_color_diff_loss = result.gp_color_diff.mean()
 
             print(f"{mean_rgb_loss=}")
             print(f"{mean_lap_loss=}")

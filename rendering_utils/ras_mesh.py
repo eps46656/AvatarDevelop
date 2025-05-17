@@ -10,6 +10,12 @@ import pytorch3d.structures
 from .. import camera_utils, transform_utils, utils
 
 
+@dataclasses.dataclass
+class MeshRasterizationResult:
+    pix_to_face: torch.Tensor  # [..., H, W, FPP]
+    bary_coord: torch.Tensor  # [..., H, W, FPP, 3]
+
+
 @beartype
 def rasterize_mesh(
     vert_pos: torch.Tensor,  # [..., V, 3]
@@ -22,9 +28,9 @@ def rasterize_mesh(
     faces_per_pixel: int,
 
     cull_backface: bool = True,
-) -> pytorch3d.renderer.mesh.rasterizer.Fragments:
+) -> MeshRasterizationResult:
     # pix_to_face[B, H, W, FPP]
-    # bary_coords[B, H, W, FPP, 3]
+    # bary_coord[B, H, W, FPP, 3]
     # pix_dists[B, H, W, FPP]
 
     V, F = -1, -2
@@ -38,11 +44,11 @@ def rasterize_mesh(
 
     img_h, img_w = camera_config.img_h, camera_config.img_w
 
-    image_size = (img_h, img_w)
+    img_size = (img_h, img_w)
 
     device = utils.check_devices(camera_transform, vert_pos)
 
-    batch_shape = utils.broadcast_shapes(
+    shape = utils.broadcast_shapes(
         vert_pos.shape[:-2],
         faces.shape[:-2],
         camera_transform,
@@ -68,59 +74,68 @@ def rasterize_mesh(
     )
     # [..., 4, 4]
 
-    vert_pos = utils.batch_expand(vert_pos, batch_shape, -2).to(torch.float)
-    faces = utils.batch_expand(faces, batch_shape, -2)
-    world_view_mat = utils.batch_expand(world_view_mat, batch_shape, -2) \
+    vert_pos = utils.batch_expand(vert_pos, shape, 2).to(torch.float)
+    faces = utils.batch_expand(faces, shape, 2)
+    world_view_mat = utils.batch_expand(world_view_mat, shape, 2) \
         .to(torch.float)
-    camera_proj_mat = utils.batch_expand(camera_proj_mat, batch_shape, -2) \
+    camera_proj_mat = utils.batch_expand(camera_proj_mat, shape, 2) \
         .to(torch.float)
 
-    N = batch_shape.numel()
-
-    camera_R: list[torch.Tensor] = list()
-    camera_T: list[torch.Tensor] = list()
-    camera_K: list[torch.Tensor] = list()
-
-    for idxes in utils.get_batch_idxes(batch_shape):
-        cur_world_view_mat = world_view_mat[idxes]
-        # [4, 4]
-
-        cur_camera_proj_mat = camera_proj_mat[idxes]
-        # [4, 4]
-
-        camera_R.append(cur_world_view_mat[:3, :3].T)
-        camera_T.append(cur_world_view_mat[:3, 3])
-        camera_K.append(cur_camera_proj_mat)
-
-    cameras = pytorch3d.renderer.PerspectiveCameras(
-        R=torch.stack(camera_R),
-        T=torch.stack(camera_T),
-        K=torch.stack(camera_K),
-        in_ndc=True,
+    pix_to_face = torch.empty(
+        shape + (img_h, img_w, faces_per_pixel),
+        dtype=torch.int32,
         device=device,
     )
 
-    raster_settings = pytorch3d.renderer.RasterizationSettings(
-        image_size=image_size,
-        blur_radius=0.0,
-        faces_per_pixel=faces_per_pixel,
-        max_faces_per_bin=1024 * 32,
-        cull_backfaces=cull_backface,
+    bary_coord = torch.empty(
+        shape + (img_h, img_w, faces_per_pixel, 3),
+        dtype=vert_pos.dtype,
+        device=device,
     )
 
-    rasterizer = pytorch3d.renderer.MeshRasterizer(
-        cameras=cameras,
-        raster_settings=raster_settings,
+    for batch_idx in utils.get_batch_idxes(shape):
+        cur_world_view_mat = world_view_mat[batch_idx]
+        # [4, 4]
+
+        cameras = pytorch3d.renderer.PerspectiveCameras(
+            R=cur_world_view_mat[:3, :3].T[None, ...],
+            T=cur_world_view_mat[:3, 3][None, ...],
+            K=camera_proj_mat[batch_idx][None, ...],
+            in_ndc=True,
+            device=device,
+        )
+
+        raster_settings = pytorch3d.renderer.RasterizationSettings(
+            image_size=img_size,
+            blur_radius=0.0,
+            faces_per_pixel=faces_per_pixel,
+            max_faces_per_bin=1024 * 32,
+            cull_backfaces=cull_backface,
+        )
+
+        rasterizer = pytorch3d.renderer.MeshRasterizer(
+            cameras=cameras,
+            raster_settings=raster_settings,
+        )
+
+        mesh = pytorch3d.structures.Meshes(
+            verts=vert_pos[batch_idx].view(1, V, 3).to(utils.FLOAT),
+            faces=faces[batch_idx].view(1, F, 3),
+            textures=None,
+        )
+
+        fragments: pytorch3d.renderer.mesh.rasterizer.Fragments = rasterizer(
+            mesh)
+        # fragments.pix_to_face[N, H, W, FPP]
+        # fragments.bary_coords[N, H, W, FPP, 3]
+
+        pix_to_face[batch_idx] = fragments.pix_to_face.view(
+            img_h, img_w, faces_per_pixel)
+
+        bary_coord[batch_idx] = fragments.bary_coords.view(
+            img_h, img_w, faces_per_pixel, 3)
+
+    return MeshRasterizationResult(
+        pix_to_face=pix_to_face,
+        bary_coord=bary_coord,
     )
-
-    mesh = pytorch3d.structures.Meshes(
-        verts=vert_pos.to(utils.FLOAT).reshape(N, V, 3),
-        faces=faces.reshape(N, F, 3),
-        textures=None,
-    )
-
-    fragments: pytorch3d.renderer.mesh.rasterizer.Fragments = rasterizer(mesh)
-    # fragments.pix_to_face[N, H, W, FPP]
-    # fragments.bary_coords[N, H, W, FPP, 3]
-
-    return fragments

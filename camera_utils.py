@@ -480,7 +480,7 @@ def make_proj_mat_with_config(
     camera_config: CameraConfig,
     camera_view_transform: transform_utils.ObjectTransform,  # [...]
     proj_config: ProjConfig,
-    dtype: torch.dtype = utils.FLOAT,
+    dtype: torch.dtype,
 ) -> torch.Tensor:  # [4, 4]
     device = camera_view_transform.device
     dtype = camera_view_transform.dtype

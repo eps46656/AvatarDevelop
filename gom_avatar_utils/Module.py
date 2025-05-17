@@ -8,7 +8,7 @@ import torch
 from beartype import beartype
 
 from .. import (avatar_utils, camera_utils, gaussian_utils, mesh_utils,
-                rendering_utils, transform_utils, utils)
+                transform_utils, utils)
 from .utils import FaceCoordResult, get_face_coord
 
 
@@ -30,44 +30,12 @@ class ModuleForwardResult:
 
     gp_render_img: torch.Tensor  # [..., C, H, W]
 
-    rgb_loss: torch.Tensor  # [...]
-    lap_smoothness_loss: torch.Tensor  # [...]
-    nor_sim_loss: torch.Tensor  # [...]
-    edge_var_loss: torch.Tensor  # [...]
-    color_diff_loss: torch.Tensor  # [...]
-    gp_scale_diff_loss: torch.Tensor  # [...]
-
-
-@beartype
-def leaky_clamp(
-    x: torch.Tensor,
-    lb: float,
-    rb: float,
-    leaky: float = 0.05,
-) -> torch.Tensor:
-
-    assert lb < rb
-    assert 0 <= leaky
-
-    """
-
-    f(x)=(
-    Sigmoid(
-        (
-            (x-xcenter)/(xwidth)
-        )*4
-    )-0.5) xwidth (1-leaky)+leaky (x-xcenter)+xcenter
-
-    """
-
-    center = (lb + rb) / 2
-    width = rb - lb
-    k = width * (1 - leaky)
-
-    y = k * ((x - center) * (4 / width)).sigmoid() + \
-        leaky * x + (center - leaky * center - k * 0.5)
-
-    return y
+    img_diff: torch.Tensor  # [...]
+    lap_diff: torch.Tensor  # [...]
+    nor_sim: torch.Tensor  # [...]
+    edge_var: torch.Tensor  # [...]
+    gp_color_diff: torch.Tensor  # [...]
+    gp_scale_diff: torch.Tensor  # [...]
 
 
 @beartype
@@ -92,13 +60,13 @@ class Module(torch.nn.Module):
             (faces_cnt,), dtype=utils.FLOAT))
 
         self.gp_scale_x = torch.nn.Parameter(torch.full(
-            (faces_cnt,), -3, dtype=utils.FLOAT))
+            (faces_cnt,), 0, dtype=utils.FLOAT))
 
         self.gp_scale_y = torch.nn.Parameter(torch.full(
-            (faces_cnt,), -3, dtype=utils.FLOAT))
+            (faces_cnt,), 0, dtype=utils.FLOAT))
 
         self.gp_scale_z = torch.nn.Parameter(torch.full(
-            (faces_cnt,), -3, dtype=utils.FLOAT))
+            (faces_cnt,), 0, dtype=utils.FLOAT))
 
         self.gp_color = torch.nn.Parameter(torch.rand(
             (faces_cnt, color_channels_cnt), dtype=utils.FLOAT))
@@ -254,25 +222,22 @@ class Module(torch.nn.Module):
         world_gp_scale = utils.empty_like(
             scale_factor, shape=(*scale_factor.shape[:-1], F, 3))
 
-        world_gp_scale[..., 0] = scale_factor * leaky_clamp(
-            x=self.gp_scale_x.exp(),  # clamp local scale
-            lb=0.1,
-            rb=3.0,
-            leaky=0.1,
+        world_gp_scale[..., 0] = scale_factor * utils.smooth_clamp(
+            x=self.gp_scale_x,  # clamp local scale
+            lb=1.0 / 3,
+            rb=2.0 / 3,
         )
 
-        world_gp_scale[..., 1] = scale_factor * leaky_clamp(
-            x=self.gp_scale_y.exp(),  # clamp local scale
-            lb=0.1,
-            rb=3.0,
-            leaky=0.1,
+        world_gp_scale[..., 1] = scale_factor * utils.smooth_clamp(
+            x=self.gp_scale_y,  # clamp local scale
+            lb=1.0 / 3,
+            rb=2.0 / 3,
         )
 
-        world_gp_scale[..., 2] = leaky_clamp(
-            x=scale_factor * self.gp_scale_z.exp(),  # clamp global scale
-            lb=0.001,
-            rb=0.010,
-            leaky=0.005,
+        world_gp_scale[..., 2] = utils.smooth_clamp(
+            x=scale_factor * self.gp_scale_z,  # clamp global scale
+            lb=5e-3 / 3,
+            rb=10e-3 / 3,
         )
 
         return ModuleWorldGPResult(
@@ -291,6 +256,7 @@ class Module(torch.nn.Module):
         img: torch.Tensor,  # [..., C, H, W]
         mask: torch.Tensor,  # [..., H, W]
         blending_param: object,
+        lap_diff_clamp_norm: typing.Optional[float],
     ) -> ModuleForwardResult:
         device = next(self.parameters()).device
 
@@ -330,53 +296,69 @@ class Module(torch.nn.Module):
         # [..., C, H, W]
 
         if not self.training:
-            rgb_loss = torch.Tensor()
+            ret_img_diff = torch.Tensor()
         else:
             person_masked_img = img * mask + (1 - mask)
 
             rgb_sum_sq_diff = (
-                gp_render_img - person_masked_img).square().sum((-1, -2, -3))
+                gp_render_img - person_masked_img).square().sum((-3, -2, -1))
             # [...]
 
-            rgb_loss = rgb_sum_sq_diff / mask.sum((-1, -2, -3))
+            ret_img_diff = rgb_sum_sq_diff / mask.sum((-3, -2, -1))
             # [...]
 
         if not self.training:
-            lap_smoothness_loss = torch.Tensor()
+            ret_lap_diff = torch.Tensor()
         else:
-            lap_smoothness_loss = avatar_model.mesh_data.l2_cot_lap_smoothness
+            raw_lap_diff = avatar_model.mesh_data.cot_lap_diff
+            # [..., V, 3]
+
+            lap_diff_norm = utils.vec_norm(raw_lap_diff.detach(), keepdim=True)
+            # [..., V, 1]
+
+            """
+            lap_diff = raw_lap_diff * (
+                lap_diff_clamp_norm /
+                lap_diff_norm.clamp(lap_diff_clamp_norm, None)
+            )
+            # [..., V, 3]
+            """
+
+            lap_diff = raw_lap_diff
+
+            ret_lap_diff = lap_diff.square().sum((-2, -1)) / lap_diff.shape[-2]
             # [...]
 
         if not self.training:
-            nor_sim_loss = torch.Tensor()
+            ret_nor_sim = torch.Tensor()
         else:
             nor_sim = avatar_model.mesh_data.face_norm_cos_sim
             # [..., FP]
 
-            nor_sim_loss = 1 - nor_sim.square().mean(-1)
+            ret_nor_sim = -nor_sim.square().mean(-1)
             # [...]
 
         if not self.training:
-            edge_var_loss = torch.Tensor()
+            ret_edge_var = torch.Tensor()
         else:
             rel_edge_var = avatar_model.mesh_data.face_edge_rel_var
             # [..., F]
 
-            edge_var_loss = rel_edge_var.mean(-1)
+            ret_edge_var = rel_edge_var.mean(-1)
             # [...]
 
         if not self.training:
-            color_diff_loss = torch.Tensor()
+            ret_gp_color_diff = torch.Tensor()
         else:
-            color_diff = avatar_model.mesh_graph.calc_face_cos_sim(
+            gp_color_diff = avatar_model.mesh_graph.calc_face_cos_sim(
                 world_gp_result.gp_color)
             # [..., FP]
 
-            color_diff_loss = color_diff.square().mean(-1)
+            ret_gp_color_diff = gp_color_diff.square().mean(-1)
             # [...]
 
         if not self.training:
-            gp_scale_diff_loss = torch.Tensor()
+            ret_gp_scale_diff = torch.Tensor()
         else:
             world_gp_x_scale = world_gp_result.gp_scale[..., 0]
             world_gp_y_scale = world_gp_result.gp_scale[..., 1]
@@ -388,7 +370,8 @@ class Module(torch.nn.Module):
                 word_gp_xy_scale[..., None])
             # [..., FP, 1]
 
-            gp_scale_diff_loss = word_gp_xy_scale_diff.mean((-1, -2))
+            ret_gp_scale_diff = word_gp_xy_scale_diff.sum((-2, -1)) / \
+                word_gp_xy_scale_diff.shape[-2]
             # [...]
 
         return ModuleForwardResult(
@@ -396,12 +379,12 @@ class Module(torch.nn.Module):
 
             gp_render_img=gp_render_img,
 
-            rgb_loss=rgb_loss,
-            lap_smoothness_loss=lap_smoothness_loss,
-            nor_sim_loss=nor_sim_loss,
-            edge_var_loss=edge_var_loss,
-            color_diff_loss=color_diff_loss,
-            gp_scale_diff_loss=gp_scale_diff_loss,
+            img_diff=ret_img_diff,
+            lap_diff=ret_lap_diff,
+            nor_sim=ret_nor_sim,
+            edge_var=ret_edge_var,
+            gp_color_diff=ret_gp_color_diff,
+            gp_scale_diff=ret_gp_scale_diff,
         )
 
     def refresh(self) -> None:
