@@ -97,18 +97,24 @@ class TrainerCore(training_utils.TrainerCore):
             -> collections.OrderedDict[str, typing.Any]:
         return collections.OrderedDict([
             ("epoch", self.epoch),
-            ("tex", utils.tensor_serialize(self.tex)),
-            ("ref_img", list(map(utils.tensor_serialize, self.ref_img))),
+            ("tex", utils.serialize_tensor(self.tex)),
+            ("ref_img", list(map(utils.serialize_tensor, self.ref_img))),
         ])
 
     def load_state_dict(self, state_dict: typing.Mapping[str, typing.Any]) \
             -> None:
         self.epoch = state_dict["epoch"]
 
-        self.tex = utils.tensor_deserialize(state_dict["tex"]).detach().to(
+        self.tex = utils.deserialize_tensor(state_dict["tex"]).detach().to(
             self.tex, copy=True).requires_grad_()
 
-        self.ref_img = map(utils.tensor_deserialize, state_dict["ref_img"])
+        self.ref_img = map(utils.deserialize_tensor, state_dict["ref_img"])
+
+        self.optimizer = self._make_optimizer()
+        self.optimizer.load_state_dict(state_dict["optimizer"])
+
+        self.scheduler = self._make_scheduler()
+        self.scheduler.load_state_dict(state_dict["scheduler"])
 
     # ---
 
@@ -224,14 +230,6 @@ class TrainerCore(training_utils.TrainerCore):
 
         self._prepare_mesh_rasterization_cache()
 
-        def _make_inpaint_control_img(img, mask):
-            # img[..., C, H, W]
-            # mask[..., 1, H, W]
-
-            C, H, W = img.shape[-3:]
-
-            return torch.where((mask < 0.5).expand(img.shape), img, -1)
-
         for B, batch_idx, sample in tqdm.tqdm(dataset_utils.load(
             self.dataset,
             batch_size=self.config.batch_size,
@@ -253,13 +251,13 @@ class TrainerCore(training_utils.TrainerCore):
             print(f"{cur_img.max()=}")
 
             cur_person_mask = sample.person_mask.to(
-                self.config.device, torch.float16).reshape(B, 1, H, W)
+                self.config.device, torch.float32).reshape(B, 1, H, W)
 
             print(f"{cur_person_mask.min()=}")
             print(f"{cur_person_mask.max()=}")
 
             cur_skin_mask = sample.skin_mask.to(
-                self.config.device, torch.float16).reshape(B, 1, H, W)
+                self.config.device, torch.float32).reshape(B, 1, H, W)
 
             print(f"{cur_skin_mask.min()=}")
             print(f"{cur_skin_mask.max()=}")
@@ -283,12 +281,11 @@ class TrainerCore(training_utils.TrainerCore):
                 tex_coord=cur_tex_coord,
                 wrap_mode=rendering_utils.WrapMode.MIRROR,
                 sampling_mode=rendering_utils.SamplingMode.LINEAR,
-            ).to(torch.float16)
-            # [B, tex_h, tex_w, C]
+            ).to(torch.float64)
+            # [B, H, W, C]
 
             rendered_img = torch.where(
-                (0 <= cur_pix_to_face)[..., None].expand(
-                    *cur_pix_to_face.shape, C),
+                (0 <= cur_pix_to_face)[..., None],
                 # [..., H, W, C]
 
                 rendered_img,
@@ -302,22 +299,25 @@ class TrainerCore(training_utils.TrainerCore):
             print(f"{rendered_img.min()=}")
             print(f"{rendered_img.max()=}")
 
-            """
-            vision_utils.write_image(
-                self.config.proj_dir / f"img_{utils.timestamp_sec()}.png",
-
-                vision_utils.denormalize_image(
-                    einops.rearrange(img.view(H, W, C), "h w c -> c h w")))
-            """
-
-            cur_control_image = _make_inpaint_control_img(
-                cur_img, cur_occl_skin_mask)
+            cur_control_image = torch.where(
+                cur_img < 0.5, cur_occl_skin_mask, -1)
             # [B, C, H, W]
 
             loss = 0.0
 
             for b in range(B):
                 utils.mem_clear()
+
+                vision_utils.show_image(
+                    "rendered_img",
+
+                    utils.rct(
+                        einops.rearrange(
+                            rendered_img[b], "h w c -> c h w") * 255,
+                        dtype=torch.uint8,
+                        device=utils.CPU_DEVICE,
+                    ),
+                )
 
                 with torch.no_grad():
                     cur_ref_img = self.ref_img[flatten_batch_idx[b]]
@@ -355,30 +355,25 @@ class TrainerCore(training_utils.TrainerCore):
                             device=utils.CPU_DEVICE,
                         ) / 255
 
-                        if random.randint(0, 20) < 1:
-                            vision_utils.write_image(
-                                self.config.proj_dir /
-                                f"cur_occl_skin_mask_{utils.timestamp_sec()}.png",
+                        vision_utils.show_image(
+                            "cur_occl_skin_mask",
 
-                                utils.rct(
-                                    cur_occl_skin_mask[b] * 255,
-                                    dtype=torch.uint8,
-                                    device=utils.CPU_DEVICE
-                                ),
+                            utils.rct(
+                                cur_occl_skin_mask[b] * 255,
+                                dtype=torch.uint8,
+                                device=utils.CPU_DEVICE,
                             )
+                        )
 
-                            vision_utils.write_image(
-                                self.config.proj_dir /
-                                f"ref_img_{utils.timestamp_sec()}.png",
+                        vision_utils.show_image(
+                            f"new_ref_img",
 
-                                utils.rct(
-                                    new_ref_img * 255,
-                                    dtype=torch.uint8,
-                                    device=utils.CPU_DEVICE
-                                ),
-                            )
-
-                        print(f"{new_ref_img.shape=}")
+                            utils.rct(
+                                new_ref_img * 255,
+                                dtype=torch.uint8,
+                                device=utils.CPU_DEVICE
+                            ),
+                        )
 
                         cur_ref_img = new_ref_img if cur_ref_img is None else \
                             cur_ref_img * self.config.ref_img_gamma + \
@@ -387,6 +382,16 @@ class TrainerCore(training_utils.TrainerCore):
                         utils.mem_clear()
 
                     self.ref_img[flatten_batch_idx[b]] = cur_ref_img
+
+                    vision_utils.show_image(
+                        f"cur_ref_img",
+
+                        utils.rct(
+                            cur_ref_img * 255,
+                            dtype=torch.uint8,
+                            device=utils.CPU_DEVICE
+                        ),
+                    )
 
                 print(f"{rendered_img[b].shape=}")
                 print(f"{cur_person_mask[b].shape=}")
@@ -397,6 +402,9 @@ class TrainerCore(training_utils.TrainerCore):
                 ) * cur_person_mask[b]
                 # [C, H, W]
 
+                print(f"{img_diff.square().mean()=}")
+                print(f"{cur_person_mask[b].sum()=}")
+
                 loss = loss + img_diff.square().sum() / \
                     cur_person_mask[b].sum()
 
@@ -404,7 +412,21 @@ class TrainerCore(training_utils.TrainerCore):
 
             loss.backward()
 
+            print(f"{self.tex.grad.abs().min()=}")
+            print(f"{self.tex.grad.abs().max()=}")
+            print(f"{self.tex.grad.abs().mean()=}")
+
             self.optimizer.step()
+
+            vision_utils.show_image(
+                "tex",
+
+                utils.rct(
+                    self.tex * 255,
+                    dtype=torch.uint8,
+                    device=utils.CPU_DEVICE,
+                ),
+            )
 
         self.epoch += 1
         self.scheduler.step()
@@ -418,7 +440,7 @@ class TrainerCore(training_utils.TrainerCore):
         img_path = self.config.proj_dir / f"tex_{utils.timestamp_sec()}.png"
 
         vision_utils.write_image(
-            img_path, vision_utils.denormalize_image(self.tex))
+            img_path, utils.rct(self.tex * 255, dtype=torch.uint8))
 
     @utils.mem_clear
     def output_rgb_video(self) -> None:
@@ -426,10 +448,7 @@ class TrainerCore(training_utils.TrainerCore):
 
         H, W = camera_config.img_h, camera_config.img_w
 
-        C, tex_h, tex_w = self.tex.shape
-
-        bg_color = torch.tensor(
-            [255], dtype=torch.uint8, device=self.config.device)
+        C = self.tex.shape[0]
 
         video_writer = vision_utils.VideoWriter(
             path=self.config.proj_dir / f"rgb_{utils.timestamp_sec()}.avi",
@@ -446,41 +465,39 @@ class TrainerCore(training_utils.TrainerCore):
             batch_size=self.config.batch_size,
             shuffle=False,
         )):
-            batch_idx: tuple[torch.Tensor, ...]
+            cur_pix_to_face = self.cache_pix_to_face[batch_idx].to(
+                self.config.device).reshape(B, H, W)
+            # [B, H, W]
 
-            # mesh_ras_result.pix_to_face[..., H, W, 1]
-            # mesh_ras_result.bary_coord[..., H, W, 1, 3]
+            cur_tex_coord = self.cache_tex_coord[batch_idx].to(
+                self.config.device).reshape(B, H, W, 2)
+            # [B, H, W, 2]
 
-            pix_to_face = self.cache_pix_to_face[batch_idx].to(
-                self.config.device)
-            # [..., H, W]
-
-            tex_coord = self.cache_tex_coord[batch_idx].to(
-                self.config.device)
-            # [..., H, W, 2]
-
-            img = rendering_utils.sample_texture(
+            rendered_img = rendering_utils.sample_texture(
                 texture=einops.rearrange(self.tex, "c h w -> h w c"),
-                tex_coord=tex_coord,
+                tex_coord=cur_tex_coord,
                 wrap_mode=rendering_utils.WrapMode.MIRROR,
                 sampling_mode=rendering_utils.SamplingMode.LINEAR,
-            )
-            # [..., tex_h, tex_w, C]
+            ).to(torch.float64)
+            # [B, H, W, C]
 
-            print(f"{img.grad_fn=}")
-
-            img = torch.where(
-                (0 <= pix_to_face)[..., None].expand(*pix_to_face.shape, C),
+            rendered_img = torch.where(
+                (0 <= cur_pix_to_face)[..., None].expand(
+                    *cur_pix_to_face.shape, C),
                 # [..., H, W, C]
 
-                img,
+                rendered_img,
 
-                bg_color.expand(*img.shape),
+                1,
             )
-            # [..., H, W, C]
+            # [B, H, W, C]
 
-            video_writer.write(vision_utils.denormalize_image(einops.rearrange(
-                img.view(H, W, C), "h w c -> c h w")))
+            for b in range(B):
+                video_writer.write(utils.rct(einops.rearrange(
+                    rendered_img[b], "h w c -> c h w") * 255,
+                    dtype=torch.uint8,
+                    device=utils.CPU_DEVICE,
+                ))
 
         video_writer.close()
 

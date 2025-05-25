@@ -97,13 +97,13 @@ class ModelBlender(avatar_utils.AvatarBlender):
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> mesh_utils.MeshSubdivisionResult:
-        model_data_subdivision_result = self.model_builder.subdivide(
+    ) -> mesh_utils.MeshSubdivideResult:
+        model_data_subdivide_result = self.model_builder.subdivide(
             target_edges=target_edges,
             target_faces=target_faces,
         )
 
-        return model_data_subdivision_result.mesh_subdivision_result
+        return model_data_subdivide_result.mesh_subdivide_result
 
     def forward(self, blending_param: BlendingParam):
         def f(x, y):

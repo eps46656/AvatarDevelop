@@ -16,19 +16,17 @@ from .ModelConfig import ModelConfig
 
 @beartype
 @dataclasses.dataclass
-class ModelDataSubdivisionResult:
-    mesh_subdivision_result: mesh_utils.MeshSubdivisionResult
+class ModelDataSubdivideResult:
+    mesh_subdivide_result: mesh_utils.MeshSubdivideResult
     model_data: ModelData
 
 
 @beartype
 @dataclasses.dataclass
-class ModelDataExtractionResult:
-    mesh_graph_extraction_result: typing.Optional[
-        mesh_utils.MeshExtractionResult]
+class ModelDataExtractResult:
+    mesh_extract_result: typing.Optional[mesh_utils.MeshExtractResult]
 
-    tex_mesh_graph_extraction_result: typing.Optional[
-        mesh_utils.MeshExtractionResult]
+    tex_mesh_extract_result: typing.Optional[mesh_utils.MeshExtractResult]
 
     model_data: ModelData
 
@@ -130,7 +128,9 @@ class ModelData:
 
         F = max(0, F)
 
-        assert max(0, P) == max(0, J - 1) * 3 * 3
+        P = max(0, P)
+
+        assert P == max(0, J - 1) * 3 * 3
 
         assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
@@ -313,8 +313,15 @@ class ModelData:
 
         # ---
 
-        mesh_graph = mesh_utils.MeshGraph.from_faces(V, faces, device)
-        tex_mesh_graph = mesh_utils.MeshGraph.from_faces(TV, tex_faces, device)
+        def f(obj):
+            return obj.to(device, dtype)
+
+        # ---
+
+        mesh_graph = mesh_utils.MeshGraph.from_faces(
+            V, faces.to(device))
+        tex_mesh_graph = mesh_utils.MeshGraph.from_faces(
+            TV, tex_faces.to(device))
 
         joint_t_mean = utils.einsum(
             "...jv, ...vx -> ...jx",
@@ -333,11 +340,6 @@ class ModelData:
             joint_regressor,
             expr_shape_vert_dir,
         )
-
-        # ---
-
-        def f(obj):
-            return obj.to(device, dtype)
 
         # ---
 
@@ -380,11 +382,11 @@ class ModelData:
         assert dtype is None or dtype.is_floating_point
 
         def try_fetch_int(field_name: str):
-            return utils.tensor_deserialize(
+            return utils.deserialize_tensor(
                 state_dict.get(field_name, None), torch.long, device)
 
         def try_fetch_float(field_name: str):
-            return utils.tensor_deserialize(
+            return utils.deserialize_tensor(
                 state_dict.get(field_name, None), dtype, device)
 
         vert_pos = try_fetch_float("vert_pos")
@@ -407,10 +409,10 @@ class ModelData:
                 state_dict["joint_parents"]),
 
             mesh_graph=None if faces is None else
-            mesh_utils.MeshGraph.from_faces(V, faces, device),
+            mesh_utils.MeshGraph.from_faces(V, faces.to(device)),
 
             tex_mesh_graph=None if tex_faces is None else
-            mesh_utils.MeshGraph.from_faces(TV, tex_faces, device),
+            mesh_utils.MeshGraph.from_faces(TV, tex_faces.to(device)),
 
             joint_t_mean=try_fetch_float("joint_t_mean"),
 
@@ -433,10 +435,10 @@ class ModelData:
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
         def to_int_np(x: torch.Tensor):
-            return utils.tensor_serialize(x, dtype=np.int64)
+            return utils.serialize_tensor(x, dtype=np.int64)
 
         def to_float_np(x: torch.Tensor):
-            return utils.tensor_serialize(x, dtype=np.float64)
+            return utils.serialize_tensor(x, dtype=np.float64)
 
         return collections.OrderedDict([
             ("joint_parents", self.kin_tree.parents),
@@ -550,14 +552,14 @@ class ModelData:
         self, *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-        mesh_subdivision_result:
-            typing.Optional[mesh_utils.MeshSubdivisionResult] = None,
+        mesh_subdivide_result:
+            typing.Optional[mesh_utils.MeshSubdivideResult] = None,
         new_vert_t: typing.Optional[torch.Tensor] = None,
-    ) -> ModelDataSubdivisionResult:
-        if mesh_subdivision_result is None:
+    ) -> ModelDataSubdivideResult:
+        if mesh_subdivide_result is None:
             assert self.mesh_graph is not None
 
-            mesh_subdivision_result = self.mesh_graph.subdivide(
+            mesh_subdivide_result = self.mesh_graph.subdivide(
                 target_edges=target_edges,
                 target_faces=target_faces,
             )
@@ -566,17 +568,17 @@ class ModelData:
             assert target_edges is None
             assert target_faces is None
 
-        edge_mark = mesh_subdivision_result.edge_mark
+        edge_mark = mesh_subdivide_result.edge_mark
         # [E]
 
-        vert_src_table = mesh_subdivision_result.vert_src_table
+        vert_src_table = mesh_subdivide_result.vert_src_table
         # [V_, 2]
 
-        face_src_table = mesh_subdivision_result.face_src_table
+        face_src_table = mesh_subdivide_result.face_src_table
 
-        face_src_type_table = mesh_subdivision_result.face_src_type_table
+        face_src_type_table = mesh_subdivide_result.face_src_type_table
 
-        new_mesh_graph = mesh_subdivision_result.mesh_graph
+        new_mesh_graph = mesh_subdivide_result.mesh_graph
 
         if new_vert_t is None:
             new_vert_s = None
@@ -614,6 +616,11 @@ class ModelData:
 
             new_tex_mesh_faces = list()
 
+            TypeEnum = mesh_utils.MeshGraphSubdivideFaceSrcTypeEnum
+
+            def _add_face(a, b, c):
+                new_tex_mesh_faces.append((a, b, c))
+
             for f in range(new_mesh_graph.faces_cnt):
                 src_f = face_src_table[f]
                 src_type = face_src_type_table[f]
@@ -626,32 +633,21 @@ class ModelData:
                 uc = tex_mesh_e_to_new_v[ec]
 
                 match src_type:
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_VC:
-                        new_tex_mesh_faces.append((va, vb, vc))
+                    case TypeEnum.VA_VB_VC: _add_face(va, vb, vc)
 
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_EC_EB:
-                        new_tex_mesh_faces.append((va, uc, ub))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_EA_EC:
-                        new_tex_mesh_faces.append((vb, ua, uc))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_EB_EA:
-                        new_tex_mesh_faces.append((vc, ub, ua))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.EA_EB_EC:
-                        new_tex_mesh_faces.append((ua, ub, uc))
+                    case TypeEnum.VA_EC_EB: _add_face(va, uc, ub)
+                    case TypeEnum.VB_EA_EC: _add_face(vb, ua, uc)
+                    case TypeEnum.VC_EB_EA: _add_face(vc, ub, ua)
+                    case TypeEnum.EA_EB_EC: _add_face(ua, ub, uc)
 
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EA:
-                        new_tex_mesh_faces.append((va, vb, ua))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EA:
-                        new_tex_mesh_faces.append((vc, va, ua))
+                    case TypeEnum.VA_VB_EA: _add_face(va, vb, ua)
+                    case TypeEnum.VC_VA_EA: _add_face(vc, va, ua)
 
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EB:
-                        new_tex_mesh_faces.append((vb, vc, ub))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VA_VB_EB:
-                        new_tex_mesh_faces.append((va, vb, ub))
+                    case TypeEnum.VB_VC_EB: _add_face(vb, vc, ub)
+                    case TypeEnum.VA_VB_EB: _add_face(va, vb, ub)
 
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VC_VA_EC:
-                        new_tex_mesh_faces.append((vc, va, uc))
-                    case mesh_utils.MeshSubdivisionFaceSrcTypeEnum.VB_VC_EC:
-                        new_tex_mesh_faces.append((vb, vc, uc))
+                    case TypeEnum.VC_VA_EC: _add_face(vc, va, uc)
+                    case TypeEnum.VB_VC_EC: _add_face(vb, vc, uc)
 
             tex_mesh_vert_src_table = torch.tensor(
                 tex_mesh_vert_src_table, dtype=torch.long, device=self.device)
@@ -662,8 +658,7 @@ class ModelData:
             # [F_, 3]
 
             new_tex_mesh_graph = mesh_utils.MeshGraph.from_faces(
-                tex_mesh_vert_src_table.shape[0],
-                new_tex_mesh_faces, self.device)
+                tex_mesh_vert_src_table.shape[0], new_tex_mesh_faces)
 
         def _f(x, src_table, t, s, cdims):
             if x is None:
@@ -727,43 +722,47 @@ class ModelData:
             pose_vert_dir=new_pose_vert_dir,
         )
 
-        return ModelDataSubdivisionResult(
-            mesh_subdivision_result=mesh_subdivision_result,
+        return ModelDataSubdivideResult(
+            mesh_subdivide_result=mesh_subdivide_result,
             model_data=model_data,
         )
 
     def extract(
         self,
         *,
-        target_faces: typing.Collection[int],
-        remove_orphan_vert: bool,
-    ) -> ModelDataExtractionResult:
+        mesh_extract_result:
+        typing.Optional[mesh_utils.MeshExtractResult] = None,
+
+        target_faces: typing.Optional[typing.Collection[int]] = None,
+        remove_orphan_vert: bool = True,
+    ) -> ModelDataExtractResult:
         if self.mesh_graph is None:
-            mesh_graph_extraction_result = None
+            mesh_extract_result = None
             new_mesh_graph = None
             vert_src_table = None
         else:
-            mesh_graph_extraction_result = self.mesh_graph.extract(
-                target_faces, remove_orphan_vert)
-            # vert_src_table[V_]
-            # face_src_table[F_]
+            if mesh_extract_result is None:
+                mesh_extract_result = self.mesh_graph.extract(
+                    target_faces, remove_orphan_vert)
 
-            new_mesh_graph = mesh_graph_extraction_result.mesh_graph
+            new_mesh_graph = mesh_extract_result.mesh_graph
 
-            vert_src_table = mesh_graph_extraction_result.vert_src_table
+            vert_src_table = mesh_extract_result.vert_src_table
             # [V_]
 
         if self.tex_mesh_graph is None:
-            tex_mesh_graph_extraction_result = None
+            tex_mesh_extract_result = None
             new_tex_mesh_graph = None
             tex_vert_src_table = None
         else:
-            tex_mesh_graph_extraction_result = self.tex_mesh_graph.extract(
-                target_faces, remove_orphan_vert)
+            tex_mesh_extract_result = self.tex_mesh_graph.extract(
+                map(int, mesh_extract_result.face_src_table),
+                remove_orphan_vert,
+            )
 
-            new_tex_mesh_graph = tex_mesh_graph_extraction_result.mesh_graph
+            new_tex_mesh_graph = tex_mesh_extract_result.mesh_graph
 
-            tex_vert_src_table = tex_mesh_graph_extraction_result.vert_src_table
+            tex_vert_src_table = tex_mesh_extract_result.vert_src_table
             # [TV_]
 
         new_vert_pos = self.vert_pos \
@@ -825,9 +824,9 @@ class ModelData:
             pose_vert_dir=new_pose_vert_dir,
         )
 
-        return ModelDataExtractionResult(
-            mesh_graph_extraction_result=mesh_graph_extraction_result,
-            tex_mesh_graph_extraction_result=tex_mesh_graph_extraction_result,
+        return ModelDataExtractResult(
+            mesh_extract_result=mesh_extract_result,
+            tex_mesh_extract_result=tex_mesh_extract_result,
             model_data=model_data,
         )
 

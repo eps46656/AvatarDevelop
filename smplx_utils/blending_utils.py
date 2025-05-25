@@ -201,7 +201,7 @@ def get_shape_vert_dir(
     )
 
     if shape_vert_dir.numel() == 0 or shape.numel() == 0:
-        return utils.zeros_like(shape_vert_dir, shape=())
+        return utils.zeros(like=shape_vert_dir, shape=())
 
     return utils.einsum(
         "...ds, ...s -> ...d", shape_vert_dir, shape[..., None, :])
@@ -216,7 +216,7 @@ def blending(
     J = model_data.kin_tree.joints_cnt
     V = model_data.vert_pos.shape[-2]
 
-    pre_lbs_vp_trans_t = utils.zeros_like(model_data.vert_pos, shape=())
+    pre_lbs_vp_trans_t = utils.zeros(like=model_data.vert_pos, shape=())
 
     if blending_param.body_shape is not None:
         pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + get_shape_vert_dir(
@@ -247,9 +247,9 @@ def blending(
         )
         # [..., J, 3]
 
-    binding_pose_r = utils.eye_like(binding_joint_t, shape=(J, 3, 3))
+    binding_pose_r = utils.eye(like=binding_joint_t, shape=(J, 3, 3))
 
-    binding_pose_t = utils.empty_like(binding_joint_t)
+    binding_pose_t = utils.empty(like=binding_joint_t)
     binding_pose_t[..., model_data.kin_tree.root, :] = \
         binding_joint_t[..., model_data.kin_tree.root, :]
 
@@ -262,7 +262,7 @@ def blending(
         blending_param.get_poses(model_data), out_shape=(3, 3))
     # [..., J, 3, 3]
 
-    identity = utils.eye_like(target_pose_r, shape=(3, 3))
+    identity = utils.eye(like=target_pose_r, shape=(3, 3))
 
     pose_feature = target_pose_r[..., 1:, :, :] - identity
     # [..., J - 1, 3, 3]

@@ -60,8 +60,8 @@ def _read_mask(
         fps=fps,
     ) as video_writer:
         for i in tqdm.tqdm(range(T)):
-            video_writer.write(vision_utils.denormalize_image(torch.from_numpy(
-                masks[i]).expand(3, H, W)))
+            video_writer.write(utils.rct(torch.from_numpy(
+                masks[i]) * 255, dtype=torch.uint8).expand(3, H, W))
 
     return f()
 

@@ -13,8 +13,8 @@ import tqdm
 from beartype import beartype
 
 from . import (config, gart_utils, gaussian_utils, mesh_utils,
-               people_snapshot_utils, rbf_utils, segment_utils, smplx_utils,
-               utils, vision_utils)
+               people_snapshot_utils, rbf_utils, smplx_utils,
+               utils, video_seg_utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]

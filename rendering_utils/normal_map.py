@@ -60,13 +60,12 @@ def make_normal_map(
             :,
         ],  # [..., H, W, 3]
 
-        utils.zeros_like(mesh_data.mesh_graph.f_to_vvv, shape=(1,)).expand(
-            *shape, H, W, 3
-        )
+        0,
     ).reshape(*shape, H * W * 3, 1).expand(*shape, H * W * 3, 3)
     # [..., H, W, 3] -> [..., H * W * 3, 3]
 
-    face_vert_norm = vert_norm.gather(-2, f_vi).view(*shape, H, W, 3, 3)
+    face_vert_norm = vert_norm.expand(*shape, *vert_norm.shape) \
+        .gather(-2, f_vi).view(*shape, H, W, 3, 3)
     # [..., H, W, 3, 3]
 
     raw_pixel_nor = \
@@ -85,8 +84,13 @@ def make_normal_map(
     m: torch.Tensor = camera_transform.get_trans_to(
         nor_view_transform).to(raw_pixel_nor)
     # world -> nor_view
+    # [..., 4, 4]
 
-    raw_pixel_nor = (m[:3, :3] @ raw_pixel_nor[..., None])[..., 0]
+    print(f"{m.shape=}")
+    print(f"{raw_pixel_nor.shape=}")
+
+    raw_pixel_nor = (
+        m[..., None, None, :3, :3] @ raw_pixel_nor[..., None])[..., 0]
     # [..., H, W, 3]
 
     pixel_nor = torch.where(

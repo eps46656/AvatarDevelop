@@ -9,7 +9,7 @@ import torch
 from beartype import beartype
 
 from .. import rbf_utils, utils
-from .ModelData import ModelData, ModelDataSubdivisionResult
+from .ModelData import ModelData, ModelDataSubdivideResult
 
 
 @beartype
@@ -38,7 +38,7 @@ class ModelBuilder(torch.nn.Module):
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> ModelDataSubdivisionResult:
+    ) -> ModelDataSubdivideResult:
         raise NotImplementedError()
 
     def show(self) -> None:
@@ -202,29 +202,44 @@ class BlendingCoeffField:
     def query_body_shape_vert_dir(self, vert_pos: torch.Tensor) -> torch.Tensor:
         V = utils.check_shapes(vert_pos, (-1, 3))
 
-        return None if vert_pos is None else \
-            self.body_shape_vert_dir_interp(vert_pos).reshape(V, 3, -1)
-        # [V, 3, BS]
+        if vert_pos is None:
+            return None
+
+        ret = self.body_shape_vert_dir_interp(vert_pos)
+        # [V, 3 * ES]
+
+        return ret.reshape(V, 3, ret.shape[-1] // 3)
+        # [V, 3, ES]
 
     def query_expr_shape_vert_dir(self, vert_pos: torch.Tensor) -> torch.Tensor:
         V = utils.check_shapes(vert_pos, (-1, 3))
 
-        return None if vert_pos is None else \
-            self.expr_shape_vert_dir_interp(vert_pos).reshape(V, 3, -1)
+        if vert_pos is None:
+            return None
+
+        ret = self.expr_shape_vert_dir_interp(vert_pos)
+        # [V, 3 * ES]
+
+        return ret.reshape(V, 3, ret.shape[-1] // 3)
         # [V, 3, ES]
 
     def query_pose_vert_dir(self, vert_pos: torch.Tensor) -> torch.Tensor:
         V = utils.check_shapes(vert_pos, (-1, 3))
 
-        return None if vert_pos is None else \
-            self.pose_vert_dir_interp(vert_pos).reshape(V, 3, -1)
+        if vert_pos is None:
+            return None
+
+        ret = self.pose_vert_dir_interp(vert_pos)
+        # [V, 3 * (J - 1) * D * D]
+
+        return ret.reshape(V, 3, ret.shape[-1] // 3)
         # [V, 3, (J - 1) * D * D]
 
     def query_lbs_weight(self, vert_pos: torch.Tensor) -> torch.Tensor:
         V = utils.check_shapes(vert_pos, (-1, 3))
 
         return None if vert_pos is None else \
-            self.lbs_weight_interp(vert_pos).reshape(V, -1)
+            self.lbs_weight_interp(vert_pos)
         # [V, J]
 
     def query_model_data(self, model_data: ModelData) -> ModelData:
@@ -303,15 +318,40 @@ class DeformableModelBuilder(ModelBuilder):
     def __init__(
         self,
         temp_model_data: ModelData,
-        model_data: ModelData,
+        model_data: typing.Optional[ModelData],
     ):
         super().__init__()
 
+        if model_data is not None:
+            assert temp_model_data.body_shapes_cnt == \
+                model_data.body_shapes_cnt
+
+            assert temp_model_data.expr_shapes_cnt == \
+                model_data.expr_shapes_cnt
+
+            assert temp_model_data.body_joints_cnt == \
+                model_data.body_joints_cnt
+
+            assert temp_model_data.jaw_joints_cnt == \
+                model_data.jaw_joints_cnt
+
+            assert temp_model_data.eye_joints_cnt == \
+                model_data.eye_joints_cnt
+
+            assert temp_model_data.hand_joints_cnt == \
+                model_data.hand_joints_cnt
+
+            assert temp_model_data.kin_tree == \
+                model_data.kin_tree
+
         self.temp_model_data = temp_model_data
-        self.model_data = copy.copy(model_data)
+        self.model_data = copy.copy(
+            temp_model_data if model_data is None else model_data)
 
         self.model_data.vert_pos = torch.nn.Parameter(
-            self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
+            self.model_data.vert_pos
+            .to(dtype=torch.float64, copy=True).requires_grad_()
+        )
 
         self.vert_pos = self.model_data.vert_pos
 
@@ -354,7 +394,7 @@ class DeformableModelBuilder(ModelBuilder):
         if self.model_data.vert_pos.requires_grad:
             ret.append({
                 "params": [self.model_data.vert_pos],
-                "lr": min(1e-6, base_lr * 1e-2),
+                "lr": min(1e-5, base_lr * 1e-2),
             })
 
         return ret
@@ -374,8 +414,6 @@ class DeformableModelBuilder(ModelBuilder):
             state_dict["blending_coeff_field"])
 
     def refresh(self) -> None:
-        self.model_data.vert_pos = self.vert_pos
-
         blending_coeff = self.query_blending_coeff(self.vert_pos)
 
         self.model_data.body_shape_vert_dir = \
@@ -394,20 +432,20 @@ class DeformableModelBuilder(ModelBuilder):
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> ModelDataSubdivisionResult:
-        model_data_subdivision_result = self.model_data.subdivide(
+    ) -> ModelDataSubdivideResult:
+        model_data_subdivide_result = self.model_data.subdivide(
             target_edges=target_edges,
             target_faces=target_faces,
         )
 
-        self.model_data = model_data_subdivision_result.model_data
+        self.model_data = model_data_subdivide_result.model_data
 
         self.model_data.vert_pos = torch.nn.Parameter(
             self.model_data.vert_pos.to(dtype=torch.float64, copy=True))
 
         self.vert_pos = self.model_data.vert_pos
 
-        return model_data_subdivision_result
+        return model_data_subdivide_result
 
     def forward(self) -> ModelData:
         return self.model_data
@@ -416,8 +454,8 @@ class DeformableModelBuilder(ModelBuilder):
         self,
         vert_pos: torch.Tensor,  # [..., 3]
     ) -> DeoformingBlendingCoeff:
-        BS = self.model_data.body_shapes_cnt
-        ES = self.model_data.expr_shapes_cnt
+        BS = self.temp_model_data.body_shapes_cnt
+        ES = self.temp_model_data.expr_shapes_cnt
 
         vert_pos = vert_pos.to(self.device)
 
@@ -425,29 +463,29 @@ class DeformableModelBuilder(ModelBuilder):
             self.blending_coeff_field.query_body_shape_vert_dir(vert_pos)
 
         if body_shape_vert_dir is None:
-            body_shape_vert_dir = utils.zeros_like(
-                vert_pos, shape=(*vert_pos.shape[:-1], 3, BS))
+            body_shape_vert_dir = utils.zeros(
+                like=vert_pos, shape=(*vert_pos.shape[:-1], 3, BS))
 
         expr_shape_vert_dir = \
             self.blending_coeff_field.query_expr_shape_vert_dir(vert_pos)
 
         if expr_shape_vert_dir is None:
-            expr_shape_vert_dir = utils.zeros_like(
-                vert_pos, shape=(*vert_pos.shape[:-1], 3, ES))
+            expr_shape_vert_dir = utils.zeros(
+                like=vert_pos, shape=(*vert_pos.shape[:-1], 3, ES))
 
-        pose_vert_dir = expr_shape_vert_dir = \
+        pose_vert_dir = \
             self.blending_coeff_field.query_pose_vert_dir(vert_pos)
 
         if pose_vert_dir is None:
-            pose_vert_dir = utils.zeros_like(
-                vert_pos, shape=(*vert_pos.shape[:-1], 3, 0))
+            pose_vert_dir = utils.zeros(
+                like=vert_pos, shape=(*vert_pos.shape[:-1], 3, 0))
 
-        lbs_weight = expr_shape_vert_dir = \
+        lbs_weight = \
             self.blending_coeff_field.query_lbs_weight(vert_pos)
 
         if lbs_weight is None:
-            lbs_weight = utils.zeros_like(
-                vert_pos, shape=(*vert_pos.shape[:-1], 0))
+            lbs_weight = utils.zeros(
+                like=vert_pos, shape=(*vert_pos.shape[:-1], 0))
 
         return DeoformingBlendingCoeff(
             body_shape_vert_dir=body_shape_vert_dir,

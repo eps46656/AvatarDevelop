@@ -14,6 +14,7 @@ from .. import camera_utils, transform_utils, utils
 class MeshRasterizationResult:
     pix_to_face: torch.Tensor  # [..., H, W, FPP]
     bary_coord: torch.Tensor  # [..., H, W, FPP, 3]
+    dist: torch.Tensor  # [..., H, W, FPP]
 
 
 @beartype
@@ -31,7 +32,7 @@ def rasterize_mesh(
 ) -> MeshRasterizationResult:
     # pix_to_face[B, H, W, FPP]
     # bary_coord[B, H, W, FPP, 3]
-    # pix_dists[B, H, W, FPP]
+    # dist[B, H, W, FPP]
 
     V, F = -1, -2
 
@@ -82,13 +83,19 @@ def rasterize_mesh(
         .to(torch.float)
 
     pix_to_face = torch.empty(
-        shape + (img_h, img_w, faces_per_pixel),
+        (*shape, img_h, img_w, faces_per_pixel),
         dtype=torch.int32,
         device=device,
     )
 
     bary_coord = torch.empty(
-        shape + (img_h, img_w, faces_per_pixel, 3),
+        (*shape, img_h, img_w, faces_per_pixel, 3),
+        dtype=vert_pos.dtype,
+        device=device,
+    )
+
+    dist = torch.empty(
+        (*shape, img_h, img_w, faces_per_pixel),
         dtype=vert_pos.dtype,
         device=device,
     )
@@ -135,7 +142,11 @@ def rasterize_mesh(
         bary_coord[batch_idx] = fragments.bary_coords.view(
             img_h, img_w, faces_per_pixel, 3)
 
+        dist[batch_idx] = fragments.dists.view(
+            img_h, img_w, faces_per_pixel)
+
     return MeshRasterizationResult(
         pix_to_face=pix_to_face,
         bary_coord=bary_coord,
+        dist=dist,
     )

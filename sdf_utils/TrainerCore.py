@@ -3,6 +3,7 @@ import dataclasses
 import os
 import typing
 
+import tabulate
 import torch
 import tqdm
 from beartype import beartype
@@ -23,6 +24,32 @@ class TrainerCoreConfig:
     lr: float
     betas: tuple[float, float]
     gamma: float
+
+    alpha_signed_dist: float
+    alpha_eikonal: float
+
+
+@beartype
+def call_eikonal_loss(
+    point_pos: torch.Tensor,  # [..., D]
+    signed_dist: torch.Tensor,  # [...]
+) -> torch.Tensor:  # []
+    grads = torch.autograd.grad(
+        outputs=signed_dist,
+        inputs=point_pos,
+
+        grad_outputs=utils.dummy_ones(like=signed_dist),
+
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]  # [..., D]
+
+    grad_norm = utils.vec_norm(grads)  # [...]
+
+    loss = (grad_norm - 1).square().mean()
+
+    return loss
 
 
 @beartype
@@ -53,7 +80,7 @@ class TrainerCore(training_utils.TrainerCore):
 
     def _make_optimizer(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(
-            self.module.parameters(),
+            utils.get_param_groups(self.module, self.config.lr),
             lr=self.config.lr,
             betas=self.config.betas,
         )
@@ -102,21 +129,50 @@ class TrainerCore(training_utils.TrainerCore):
 
     # --
 
-    def calc_loss(self, forward_result: ModuleForwardResult) \
-            -> torch.Tensor:
-        # print(f"{forward_result.gt_signed_dist=}")
-        # print(f"{forward_result.pr_signed_dist=}")
+    def calc_loss(
+        self,
+        point_pos: torch.Tensor,  # [..., D]
+        forward_result: ModuleForwardResult
+    ) -> torch.Tensor:
+        D = point_pos.shape[-1]
 
-        diff = forward_result.pr_signed_dist - forward_result.gt_signed_dist
+        def _f(x):
+            return f"{x.item():+.4e}"
 
-        diff_rms = diff.square().mean().sqrt()
+        loss_tab = [("", "loss", "weighted loss")]
 
-        print(f"{diff_rms.item()=:+.6e}")
+        pr_signed_dist = forward_result.pr_signed_dist
+        gt_signed_dist = forward_result.gt_signed_dist
+        # [...]
 
-        rel_diff = diff.square() / (
-            1e-3 + forward_result.gt_signed_dist.square())
+        # ---
 
-        return rel_diff.mean()
+        """
+        diff = pr_signed_dist - gt_signed_dist
+
+        signed_dist_diff = (diff.square() / (
+            1e-4 + gt_signed_dist.square())).mean()
+        """
+
+        signed_dist_diff = (pr_signed_dist - gt_signed_dist).square().mean()
+
+        w_signed_dist_diff = self.config.alpha_signed_dist * signed_dist_diff
+
+        loss_tab.append(
+            ("signed_dist_diff", _f(signed_dist_diff), _f(w_signed_dist_diff)))
+
+        # ---
+
+        eikonal_loss = call_eikonal_loss(point_pos, pr_signed_dist)
+        w_eikonal_loss = self.config.alpha_eikonal * eikonal_loss
+
+        loss_tab.append(("eikonal_loss", _f(eikonal_loss), _f(w_eikonal_loss)))
+
+        # ---
+
+        print(tabulate.tabulate(zip(*loss_tab), tablefmt="grid"))
+
+        return w_signed_dist_diff + w_eikonal_loss
 
     # --
 
@@ -124,38 +180,50 @@ class TrainerCore(training_utils.TrainerCore):
     def train(self) -> training_utils.TrainingResult:
         sum_loss = 0.0
 
-        for batch_idxes, sample in tqdm.tqdm(dataset_utils.load(
-                self.dataset, batch_size=self.config.batch_size)):
-            batch_idxes: tuple[torch.Tensor, ...]
+        self.dataset.refresh()
 
+        for batch_size, batch_idx, sample in tqdm.tqdm(dataset_utils.load(
+            self.dataset,
+            batch_size=self.config.batch_size,
+            shuffle=True,
+        )):
             sample: Sample
 
+            self.optimizer.zero_grad()
+
+            point_pos = sample.point_pos.clone().requires_grad_()
+            signed_dist = sample.signed_dist
+
             result: ModuleForwardResult = self.module(
-                point_pos=sample.point_pos,
-                signed_dist=sample.signed_dist,
+                point_pos=point_pos,
+                signed_dist=signed_dist,
             )
 
-            loss = self.calc_loss(result)
+            loss = self.calc_loss(point_pos, result)
 
-            sum_loss += loss.item()
+            sum_loss += float(loss) * batch_size
 
-            self.optimizer.zero_grad()
             loss.backward()
 
             self.optimizer.step()
 
         avg_loss = sum_loss / self.dataset.shape.numel()
 
-        print(f"{avg_loss=}")
+        self.scheduler.step()
 
         self.epoch += 1
-        self.scheduler.step(avg_loss)
 
-        return training_utils.TrainingResult(message=str(avg_loss))
+        return training_utils.TrainingResult(
+            message=str(avg_loss)
+        )
 
     @utils.mem_clear
     def show_params(self):
         for name, param in self.module.named_parameters():
-            print(f"{name}: {param}")
+            mean = param.mean().item()
+            std = param.std().item()
+            grad = None if param.grad is None else param.grad.square().sum().sqrt().item()
 
-        print(self.optimizer.param_groups)
+            print(f"{name}: {mean=} {std=} {grad}")
+
+        # print(self.optimizer.param_groups)

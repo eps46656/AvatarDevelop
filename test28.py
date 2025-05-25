@@ -60,6 +60,9 @@ def main1():
     # print(f"{sd_a=}")
     # print(f"{sd_b=}")
 
+    print(f"{(sd_b < 0).nonzero().numel()=}")
+    print(f"{(0 < sd_b).nonzero().numel()=}")
+
     max_err = (sd_a - sd_b).abs().max()
 
     print(f"{max_err=}")

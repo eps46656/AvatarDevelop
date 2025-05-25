@@ -82,12 +82,6 @@ class LBSOperator:
             target_pose_t, (..., J, D),
         )
 
-        assert binding_pose_r.isfinite().all()
-        assert binding_pose_t.isfinite().all()
-
-        assert target_pose_r.isfinite().all()
-        assert target_pose_t.isfinite().all()
-
         device = utils.check_devices(
             binding_pose_r, binding_pose_t,
             target_pose_r, target_pose_t,

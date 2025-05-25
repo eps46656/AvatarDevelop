@@ -120,15 +120,14 @@ def render_gaussian(
                 gp_rot_mat, gp_sq_scale_mat, gp_rot_mat.transpose(-2, -1))
             # [..., N, 3, 3]
 
-        gp_cov3d_u = utils.empty_like(
-            gp_cov3d, shape=(*gp_cov3d.shape[:-2], 6))
-
-        gp_cov3d_u[..., 0] = gp_cov3d[..., 0, 0]
-        gp_cov3d_u[..., 1] = gp_cov3d[..., 0, 1]
-        gp_cov3d_u[..., 2] = gp_cov3d[..., 0, 2]
-        gp_cov3d_u[..., 3] = gp_cov3d[..., 1, 1]
-        gp_cov3d_u[..., 4] = gp_cov3d[..., 1, 2]
-        gp_cov3d_u[..., 5] = gp_cov3d[..., 2, 2]
+        gp_cov3d_u = torch.stack([
+            gp_cov3d[..., 0, 0],
+            gp_cov3d[..., 0, 1],
+            gp_cov3d[..., 0, 2],
+            gp_cov3d[..., 1, 1],
+            gp_cov3d[..., 1, 2],
+            gp_cov3d[..., 2, 2],
+        ], dim=-1)
 
     FT = utils.check_shapes(
         gp_sh, (..., N, -1, C),

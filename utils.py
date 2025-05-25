@@ -51,6 +51,7 @@ TiBYTE = 1024 * GiBYTE
 INT = torch.int32
 FLOAT = torch.float32
 
+DISK_DEVICE = torch.device("cpu")
 CPU_DEVICE = torch.device("cpu")
 CUDA_DEVICE = torch.device("cuda")
 
@@ -442,7 +443,7 @@ def check_shapes(
 
         assert ellipsis_cnt <= 1
 
-        if t is None or math.prod(t) == 0:
+        if t is None:
             for p_val in p:
                 if isinstance(p_val, int) and p_val < 0:
                     undet_shapes.setdefault(p_val, p_val)
@@ -556,6 +557,14 @@ class DiskMemoty:
         self.close()
 
 
+_disk_storages: weakref.WeakSet[torch.TypedStorage] = weakref.WeakSet()
+
+
+@beartype
+def is_disk_tensor(x: torch.Tensor) -> bool:
+    return x.storage() in _disk_storages
+
+
 @beartype
 def disk_empty(
     shape: tuple[int, ...],
@@ -574,113 +583,165 @@ def disk_empty(
 
     m = mmap.mmap(f.fileno(), size)
 
+    x = torch.frombuffer(m, dtype=dtype).view(shape)
+
+    storage = x.storage()
+    _disk_storages.add(storage)
+
     def _on_gc(x):
         del x
 
     weakref.finalize(m, _on_gc, f)
 
-    return torch.frombuffer(m, dtype=dtype).view(shape)
+    return x
 
 
 @beartype
-def empty_like(
-    x: torch.Tensor,
+def get_shape_dtype_device(
+    like: typing.Optional[torch.Tensor] = None,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+) -> tuple[tuple[int, ...], torch.dtype, torch.device]:
+    if shape is None:
+        assert like is not None
+        shape = like.shape
+
+    if dtype is None:
+        assert like is not None
+        dtype = like.dtype
+
+    if device is None:
+        assert like is not None
+        device = like.device
+
+    return shape, dtype, device
+
+
+@beartype
+def empty(
     *,
+    like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ):
-    if shape is None:
-        shape = x.shape
-
-    if dtype is None:
-        dtype = x.dtype
-
-    if device is None:
-        device = x.device
-
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
     return torch.empty(shape, dtype=dtype, device=device)
 
 
 @beartype
-def zeros_like(
-    x: torch.Tensor,
+def zeros(
     *,
+    like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ):
-    if shape is None:
-        shape = x.shape
-
-    if dtype is None:
-        dtype = x.dtype
-
-    if device is None:
-        device = x.device
-
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
     return torch.zeros(shape, dtype=dtype, device=device)
 
 
 @beartype
-def ones_like(
-    x: torch.Tensor,
+def dummy_zeros(
     *,
+    like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ):
-    if shape is None:
-        shape = x.shape
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    return torch.zeros((1,), dtype=dtype, device=device).expand(shape)
 
-    if dtype is None:
-        dtype = x.dtype
 
-    if device is None:
-        device = x.device
-
+@beartype
+def ones(
+    *,
+    like: typing.Optional[torch.Tensor] = None,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
     return torch.ones(shape, dtype=dtype, device=device)
 
 
 @beartype
-def full_like(
-    x: torch.Tensor,
-    full_value: object,
+def dummy_ones(
     *,
+    like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ):
-    if shape is None:
-        shape = x.shape
-
-    if dtype is None:
-        dtype = x.dtype
-
-    if device is None:
-        device = x.device
-
-    return torch.full(shape, full_value, dtype=dtype, device=device)
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    return torch.ones((1,), dtype=dtype, device=device).expand(shape)
 
 
 @beartype
-def eye_like(
-    x: torch.Tensor,
+def full(
+    val: object,
     *,
+    like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ):
-    if shape is None:
-        shape = x.shape
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    return torch.full(shape, val, dtype=dtype, device=device)
 
-    if dtype is None:
-        dtype = x.dtype
 
-    if device is None:
-        device = x.device
+@beartype
+def dummy_full(
+    val: object,
+    *,
+    like: typing.Optional[torch.Tensor] = None,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    return torch.full((1,), val, dtype=dtype, device=device).expand(shape)
 
-    return eye(shape, dtype=dtype, device=device)
+
+@beartype
+def eye(
+    *,
+    like: typing.Optional[torch.Tensor] = None,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+
+    assert 2 <= len(shape)
+
+    N, M = shape[-2:]
+    assert N == M
+
+    l = [0] * (N * N)
+
+    for i in range(N):
+        l[i * N + i] = 1
+
+    t = torch.tensor(l, dtype=dtype).view(N, N).expand(shape).to(device)
+
+    if 0 in t.stride():
+        t = t.clone()
+
+    return t
+
+
+@beartype
+def dummy_eye(
+    *,
+    like: typing.Optional[torch.Tensor] = None,
+    shape: typing.Optional[tuple[int, ...]] = None,
+    dtype: typing.Optional[torch.dtype] = None,
+    device: typing.Optional[torch.device] = None,
+):
+    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    return eye(shape=shape[-2:], dtype=dtype, device=device).expand(shape)
 
 
 @beartype
@@ -720,16 +781,17 @@ def set_quaternion_wxyz(
     y: torch.Tensor,  # [...]
     z: torch.Tensor,  # [...]
     order: str,  # wxyz
-    dst: torch.Tensor,  # [..., 4]
-) -> None:
-    check_shapes(dst, (..., 4))
+) -> torch.Tensor:  # [..., 4]
+    l: list[torch.Tensor] = list()
 
     for i, k in enumerate(check_quaternion_order(order)):
         match k:
-            case "W": dst[..., i] = w
-            case "X": dst[..., i] = x
-            case "Y": dst[..., i] = y
-            case "Z": dst[..., i] = z
+            case "W": l.append(w)
+            case "X": l.append(x)
+            case "Y": l.append(y)
+            case "Z": l.append(z)
+
+    return torch.stack(l, dim=-1)
 
 
 @beartype
@@ -1036,19 +1098,6 @@ def get_param_groups(module: object, base_lr: float):
 
 
 @beartype
-def eye(
-    shape,  # [..., N, N]
-    *,
-    dtype: torch.dtype = None,
-    device: torch.device = None,
-) -> torch.Tensor:  # [..., n, m]
-    N, M = check_shapes(shape, (..., -1, -2))
-    x = torch.zeros(shape, dtype=dtype, device=device)
-    x.diagonal(0, -2, -1).fill_(1)
-    return x
-
-
-@beartype
 def make_diag(
     diag_elems: torch.Tensor,  # [..., D, ...]
     dim: int = -1,
@@ -1066,9 +1115,9 @@ def make_diag(
     assert 0 < shape[0]
     assert 0 < shape[1]
 
-    zeros = zeros_like(diag_elems, shape=(1,)).expand(*sa, *sb)
-
-    l: list[torch.Tensor] = [zeros] * (shape[0] * shape[1])
+    l: list[torch.Tensor] = \
+        [dummy_zeros(like=diag_elems, shape=(*sa, *sb))] * \
+        (shape[0] * shape[1])
 
     ia = [slice(None) for _ in range(len(sa))]
     ib = [slice(None) for _ in range(len(sb))]
@@ -1243,11 +1292,7 @@ def axis_angle_to_quaternion(
     y = unit_axis[..., 1] * s
     z = unit_axis[..., 2] * s
 
-    ret = empty_like(unit_axis, shape=(*x.shape, 4))
-
-    set_quaternion_wxyz(w, x, y, z, order, ret)
-
-    return ret
+    return set_quaternion_wxyz(w, x, y, z, order)
 
 
 @beartype
@@ -1274,11 +1319,7 @@ def quaternion_to_axis_angle(
 
     p = ((1 + EPS[w.dtype]) - w.square()).rsqrt()
 
-    axis = empty_like(quaternion, shape=(*quaternion.shape[:-1], 3))
-
-    torch.mul(x, p, out=axis[..., 0])
-    torch.mul(y, p, out=axis[..., 1])
-    torch.mul(z, p, out=axis[..., 2])
+    axis = torch.stack([x * p, y * p, z * p], dim=-1)
 
     return axis, w.acos() * 2
 
@@ -1609,8 +1650,6 @@ def quaternion_mul(
     order_1: str,  # wxyz
     order_2: str,  # wxyz
     order_out: str,  # wxyz
-
-    out: typing.Optional[torch.Tensor] = None,  # [..., 4]
 ) -> torch.Tensor:  # [..., 4]
     batch_shape = broadcast_shapes(q1, q2)
 
@@ -1625,12 +1664,7 @@ def quaternion_mul(
     out_y = q1w * q2y - q1x * q2z + q1y * q2w + q1z * q2x
     out_z = q1w * q2z + q1x * q2y - q1y * q2x + q1z * q2w
 
-    if out is None:
-        out = torch.empty(batch_shape, dtype=out_w.dtype, device=out_w.device)
-
-    set_quaternion_wxyz(out_w, out_x, out_y, out_z, order_out, out)
-
-    return out
+    return set_quaternion_wxyz(out_w, out_x, out_y, out_z, order_out)
 
 
 @beartype
@@ -1768,7 +1802,7 @@ def get_inv_rt(
     )
 
     if out_r is None:
-        out_r = empty_like(r)
+        out_r = empty(like=r)
 
     if out_t is None:
         out_t = torch.empty(
@@ -2152,33 +2186,8 @@ def smooth_clamp(
     return (x / d).sigmoid() * d + lb
 
 
-_tensor_serialize_np_dtype_table = {
-    torch.bool: np.bool_,
-
-    torch.int8: np.int8,
-    torch.uint8: np.uint8,
-
-    torch.int16: np.int16,
-    torch.uint16: np.uint16,
-
-    torch.int32: np.int32,
-    torch.uint32: np.uint32,
-
-    torch.int64: np.int64,
-    torch.uint64: np.uint64,
-
-    torch.float16: np.float16,
-    torch.bfloat16: np.float32,
-    torch.float32: np.float32,
-    torch.float64: np.float64,
-
-    torch.complex64: np.complex64,
-    torch.complex128: np.complex128,
-}
-
-
 @beartype
-def tensor_serialize(
+def serialize_tensor(
     x: typing.Optional[torch.Tensor],
     dtype: typing.Optional[object] = None,
 ) -> typing.Optional[np.ndarray]:
@@ -2187,10 +2196,22 @@ def tensor_serialize(
 
 
 @beartype
-def tensor_deserialize(
+def deserialize_tensor(
     x: typing.Optional[np.ndarray],
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
 ) -> typing.Optional[torch.Tensor]:
     return None if x is None \
         else torch.from_numpy(x).to(device, dtype, copy=True)
+
+
+@beartype
+def show_point(
+    point: torch.Tensor,  # [..., 3]
+) -> None:
+    import trimesh
+
+    pc = trimesh.points.PointCloud(
+        point.detach().to(CPU_DEVICE).reshape(-1, 3))
+
+    pc.show()

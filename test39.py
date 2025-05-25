@@ -4,8 +4,8 @@ import pathlib
 import matplotlib.pyplot as plt
 import torch
 
-from . import (config, people_snapshot_utils, segment_utils, smplx_utils,
-               utils, vision_utils)
+from . import (config, people_snapshot_utils, smplx_utils,
+               utils, video_seg_utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]

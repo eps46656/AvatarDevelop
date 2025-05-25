@@ -175,7 +175,6 @@ def main5():
     mesh_graph: mesh_utils.MeshGraph = mesh_utils.MeshGraph.from_faces(
         V,
         model_data.mesh_graph.f_to_vvv,
-        DEVICE
     )
 
     vertices_cnt = mesh_graph.verts_cnt
@@ -190,11 +189,14 @@ def main5():
     vps_1.requires_grad = True
     vps_2.requires_grad = True
 
-    with utils.Timer():
-        loss_1 = mesh_graph.calc_l1_cot_lap_smoothness(vps_1)
+    print(f"{vps_1.requires_grad=}")
 
     with utils.Timer():
-        loss_2 = mesh_graph.calc_cot_lap_smoothness_pytorch3d(vps_2)
+        loss_1 = mesh_utils.MeshData(mesh_graph, vps_1).l1_uni_lap_smoothness
+
+    with utils.Timer():
+        loss_2 = mesh_utils.MeshData(
+            mesh_graph, vps_2).calc_uni_lap_smoothness_pytorch3d()
 
     print(f"{loss_1=}")
     print(f"{loss_2=}")
@@ -202,8 +204,13 @@ def main5():
     loss_1.backward()
     loss_2.backward()
 
+    vert_pos_diff = (vps_1 - vps_2).square().max()
+    print(f"{vert_pos_diff=}")
+
     loss_diff_err = (loss_1 - loss_2).square().max()
     print(f"{loss_diff_err=}")
+
+    assert vps_1 is not vps_2
 
     grad_diff_err = (vps_1.grad - vps_2.grad).square().max()
 

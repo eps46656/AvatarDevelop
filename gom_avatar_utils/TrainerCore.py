@@ -16,7 +16,7 @@ import pytorch3d.renderer
 import pytorch3d.structures
 
 from .. import (dataset_utils, mesh_utils, smplx_utils, training_utils, utils,
-                vision_utils)
+                vision_utils, gom_avatar_utils)
 from .Dataset import *
 from .Module import *
 
@@ -34,8 +34,6 @@ class TrainerCoreConfig:
     gamma: float
 
     vert_grad_norm_threshold: float
-
-    lap_diff_clamp_norm: float
 
     alpha_img_diff: float
     alpha_lap_diff: float
@@ -73,7 +71,7 @@ class TrainerCore(training_utils.TrainerCore):
 
     def _make_optimizer(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(
-            self.module.parameters(),
+            utils.get_param_groups(self.module, self.config.lr),
             lr=self.config.lr,
             betas=self.config.betas,
         )
@@ -129,8 +127,6 @@ class TrainerCore(training_utils.TrainerCore):
         def _f(x):
             return f"{x.item():+.4e}"
 
-        losses = dict()
-
         loss_tab = [("", "loss", "weighted loss")]
 
         # ---
@@ -179,6 +175,13 @@ class TrainerCore(training_utils.TrainerCore):
 
         # ---
 
+        assert img_diff.isfinite().all()
+        assert lap_diff.isfinite().all()
+        assert nor_sim.isfinite().all()
+        assert edge_var.isfinite().all()
+        assert gp_color_diff.isfinite().all()
+        assert gp_scale_diff.isfinite().all()
+
         print(tabulate.tabulate(zip(*loss_tab), tablefmt="grid"))
 
         return \
@@ -193,65 +196,127 @@ class TrainerCore(training_utils.TrainerCore):
 
     @utils.mem_clear
     def train(self) -> training_utils.TrainingResult:
-        sum_loss = 0.0
-
         for batch_size, batch_idx, sample in tqdm.tqdm(dataset_utils.load(
             self.dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
         )):
-            sample: Sample
-
             self.module.refresh()
-
-            result: ModuleForwardResult = self.module(
-                camera_transform=sample.camera_transform,
-                camera_config=sample.camera_config,
-                img=sample.img,
-                mask=sample.mask,
-                blending_param=sample.blending_param,
-                lap_diff_clamp_norm=self.config.lap_diff_clamp_norm,
-            )
-
-            loss: torch.Tensor = self.calc_loss(result)
-
-            sum_loss += float(loss) * batch_size
 
             self.optimizer.zero_grad()
 
+            sample: Sample
+
+            cur_camera_transform = sample.camera_transform.to(
+                self.config.device)
+
+            cur_camera_config = sample.camera_config
+
+            cur_img = sample.img.to(self.config.device)
+
+            cur_mask = sample.mask.to(self.config.device)
+
+            cur_blending_param = sample.blending_param.to(
+                self.config.device)
+
+            result: ModuleForwardResult = self.module(
+                camera_transform=cur_camera_transform,
+                camera_config=cur_camera_config,
+                img=cur_img,
+                mask=cur_mask,
+                blending_param=cur_blending_param,
+            )
+
+            loss = self.calc_loss(result)
+
             loss.backward()
 
-            avatar_blender = self.module.avatar_blender
+            if (
+                isinstance(self.module,
+                           gom_avatar_utils.Module) and
+                isinstance(self.module.avatar_blender,
+                           smplx_utils.ModelBlender) and
+                isinstance(self.module.avatar_blender.model_builder,
+                           smplx_utils.DeformableModelBuilder)
+            ):
+                vert_pos = self.module.avatar_blender.model_builder.vert_pos
+                # [V, D]
 
-            if isinstance(avatar_blender, smplx_utils.ModelBlender) and isinstance(avatar_blender.model_builder, smplx_utils.DeformableModelBuilder):
-                model_builder: smplx_utils.DeformableModelBuilder = avatar_blender.model_builder
+                if vert_pos.grad is not None:
+                    with torch.no_grad():
+                        grad_norm = utils.vec_norm(vert_pos.grad, keepdim=True)
+                        # [V, 1]
 
-                vert_pos = model_builder.model_data.vert_pos
+                        th = self.config.vert_grad_norm_threshold
 
-                vert_grad_norm_threshold = self.config.vert_grad_norm_threshold
+                        vert_pos.grad *= th / grad_norm.clamp(th, None)
 
-                if vert_pos.grad is not None and vert_grad_norm_threshold is not None:
-                    grad_norm = utils.vec_norm(vert_pos.grad, -1, True)
+                        new_grad_norm = utils.vec_norm(vert_pos.grad)
 
-                    vert_pos.grad *= vert_grad_norm_threshold / \
-                        grad_norm.clamp(vert_grad_norm_threshold)
+                        print(f"{new_grad_norm.min()=}")
+                        print(f"{new_grad_norm.max()=}")
 
             self.optimizer.step()
 
-        avg_loss = sum_loss / self.dataset.shape.numel()
-
         self.scheduler.step()
 
-        return training_utils.TrainingResult(
-            message=str(avg_loss)
-        )
+        self.epoch += 1
+
+        return training_utils.TrainingResult("")
 
     @utils.mem_clear
     def show_params(self):
-        for name, param in self.module.named_parameters():
-            print(f"{name}: {param}")
+        def _f(x):
+            return None if x is None else f"{x:+.4e}"
 
-        print(self.optimizer.param_groups)
+        tab = [(
+            "name",
+            "dtype",
+            "shape",
+            "device",
+            "requires_grad",
+            "grad_min",
+            "grad_max",
+            "grad_mean",
+            "grad_sum",
+            "grad_std",
+        )]
+
+        for name, param in self.module.named_parameters():
+            dtype = param.dtype
+            shape = param.shape
+            device = param.device
+            requires_grad = param.requires_grad
+
+            grad = param.grad
+
+            if grad is None:
+                grad_min = None
+                grad_max = None
+                grad_mean = None
+                grad_sum = None
+                grad_std = None
+            else:
+                grad_min = grad.min().item()
+                grad_max = grad.max().item()
+                grad_mean = grad.mean().item()
+                grad_sum = grad.sum().item()
+                grad_std = grad.std().item()
+
+            tab.append((
+                name,
+                dtype,
+                shape,
+                device,
+                requires_grad,
+                _f(grad_min),
+                _f(grad_max),
+                _f(grad_mean),
+                _f(grad_sum),
+                _f(grad_std),
+            ))
+
+        print(tabulate.tabulate(tab, tablefmt="grid"))
 
     @utils.mem_clear
     @torch.no_grad()
@@ -281,20 +346,31 @@ class TrainerCore(training_utils.TrainerCore):
         )):
             sample: Sample
 
+            cur_camera_transform = sample.camera_transform.to(
+                self.config.device)
+
+            cur_camera_config = sample.camera_config
+
+            cur_img = sample.img.to(self.config.device)
+
+            cur_mask = sample.mask.to(self.config.device)
+
+            cur_blending_param = sample.blending_param.to(
+                self.config.device)
+
             result: ModuleForwardResult = self.module(
-                camera_config=sample.camera_config,
-                camera_transform=sample.camera_transform,
-                img=sample.img,
-                mask=sample.mask,
-                blending_param=sample.blending_param,
-                lap_diff_clamp_norm=self.config.lap_diff_clamp_norm,
+                camera_config=cur_camera_config,
+                camera_transform=cur_camera_transform,
+                img=cur_img,
+                mask=cur_mask,
+                blending_param=cur_blending_param,
             )
 
             rendered_img = result.gp_render_img.reshape(-1, C, H, W)
             # [K, C, H, W]
 
             for i in rendered_img:
-                video_writer.write(vision_utils.denormalize_image(i))
+                video_writer.write(utils.rct(i * 255, dtype=torch.uint8))
 
         video_writer.close()
 

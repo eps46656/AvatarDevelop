@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import math
 import typing
 
 import torch
@@ -11,10 +12,48 @@ from .. import utils
 
 
 @beartype
+def init(
+    layer: torch.nn.Linear,
+) -> torch.nn.Linear:
+    with torch.no_grad():
+        torch.nn.init.xavier_uniform_(layer.weight)
+
+        if layer.bias is not None:
+            torch.nn.init.zeros_(layer.bias)
+
+    return layer
+
+
+@beartype
 @dataclasses.dataclass
 class ModuleForwardResult:
     gt_signed_dist: torch.Tensor  # [...]
     pr_signed_dist: torch.Tensor  # [...]
+
+
+@beartype
+class Block(torch.nn.Module):
+    def __init__(
+        self,
+        io_features: int,
+        m_features: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ):
+        super().__init__()
+
+        self.m = torch.nn.Sequential(
+            init(torch.nn.Linear(
+                io_features, m_features, dtype=dtype, device=device)),
+
+            torch.nn.SiLU(),
+
+            init(torch.nn.Linear(
+                m_features, io_features, dtype=dtype, device=device)),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.m(x)
 
 
 @beartype
@@ -45,16 +84,16 @@ class Module(torch.nn.Module):
 
         layers: list[torch.nn.Module] = list()
 
-        layers.append(torch.nn.Linear(3, 128, dtype=dtype, device=device))
-        layers.append(torch.nn.LeakyReLU(0.05))
+        layers.append(init(torch.nn.Linear(
+            3, 1024, dtype=dtype, device=device)))
+
+        layers.append(torch.nn.SiLU())
 
         for _ in range(24):
-            layers.append(torch.nn.Linear(
-                128, 128, dtype=dtype, device=device))
+            layers.append(Block(1024, 128, dtype, device))
 
-            layers.append(torch.nn.LeakyReLU(0.05))
-
-        layers.append(torch.nn.Linear(128, 1, dtype=dtype, device=device))
+        layers.append(init(torch.nn.Linear(
+            1024, 1, dtype=dtype, device=device)))
 
         self.module = torch.nn.Sequential(*layers)
 
@@ -72,7 +111,7 @@ class Module(torch.nn.Module):
 
     def get_param_groups(self, base_lr: float) -> list[dict]:
         return [{
-            "params": self.module.parameters(),
+            "params": list(self.module.parameters()),
             "lr": base_lr,
         }]
 
@@ -91,8 +130,6 @@ class Module(torch.nn.Module):
         pr_signed_dist: torch.Tensor = self.module(utils.do_rt(
             norm_m[:, :3], norm_m[:, 3], point_pos))[..., 0]
         # [...]
-
-        assert pr_signed_dist.shape == point_pos.shape[:-1]
 
         return ModuleForwardResult(
             gt_signed_dist=signed_dist,

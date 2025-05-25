@@ -11,7 +11,7 @@ import torchrbf
 import tqdm
 from beartype import beartype
 
-from . import (config, rbf_utils, segment_utils, smplx_utils, utils,
+from . import (config, rbf_utils, smplx_utils, utils, video_seg_utils,
                vision_utils)
 
 FILE = pathlib.Path(__file__)

@@ -100,9 +100,9 @@ class ObjectTransform:
         device: typing.Optional[torch.device] = None,
     ) -> ObjectTransform:
         return ObjectTransform(
-            utils.tensor_deserialize(
+            utils.deserialize_tensor(
                 state_dict["trans"], dtype, device),
-            utils.tensor_deserialize(
+            utils.deserialize_tensor(
                 state_dict["inv_trans"], dtype, device),
         )
 
@@ -184,18 +184,18 @@ class ObjectTransform:
 
     def state_dict(self) -> collections.OrderedDict[str, torch.Tensor]:
         return collections.OrderedDict([
-            ("trans", utils.tensor_serialize(self.trans)),
-            ("inv_trans", utils.tensor_serialize(self.inv_trans)),
+            ("trans", utils.serialize_tensor(self.trans)),
+            ("inv_trans", utils.serialize_tensor(self.inv_trans)),
         ])
 
     def load_state_dict(
         self,
         state_dict: collections.OrderedDict[str, torch.Tensor],
     ) -> None:
-        self.trans = utils.tensor_deserialize(
+        self.trans = utils.deserialize_tensor(
             state_dict["trans"], self.dtype, self.device)
 
-        self.inv_trans = utils.tensor_deserialize(
+        self.inv_trans = utils.deserialize_tensor(
             state_dict["inv_trans"], self.dtype, self.device)
 
     def expand(self, shape) -> ObjectTransform:
@@ -223,7 +223,7 @@ class ObjectTransform:
 
         # return: object <-> coord_b
 
-        new_trans = utils.mat_mul(self.trans, trans)
+        new_trans = utils.mat_mul(trans, self.trans)
 
         return ObjectTransform(new_trans, new_trans.inverse())
 

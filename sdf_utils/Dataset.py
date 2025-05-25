@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import torch
 from beartype import beartype
@@ -22,59 +23,72 @@ def generate_point(
     mean: torch.Tensor,  # [..., D]
     std: float,
     N: int,
-) -> torch.Tensor:
+) -> torch.Tensor:  # [..., N, D]
     D = utils.check_shapes(mean, (..., -1))
 
-    mean = mean[..., None, :]
-    # [..., 1, D]
-
-    return (mean + torch.normal(mean, std)).reshape(-1, D)
+    return torch.normal(
+        mean[..., None, :].expand(*mean.shape[:-1], N, D), std)
 
 
 @beartype
 class Dataset(dataset_utils.Dataset):
     def __init__(
         self,
-        mean: tuple[float, float,  float],
-        std: tuple[float, float,  float],
-        epoch_size: int,
+
         mesh_graph: mesh_utils.MeshGraph,
-        vert_pos: torch.Tensor,
-        dtype: torch.dtype,
-        device: torch.device,
+        vert_pos: torch.Tensor,  # [..., V, 3]
+
+        std: float,
+
+        shape: torch.Size,
     ):
-        assert 0 < epoch_size
+        assert 0 < std
 
-        self.mean = mean
-        self.std = std
-
-        self.epoch_size = epoch_size
+        assert 0 < math.prod(shape)
 
         self.mesh_data = mesh_utils.MeshData(mesh_graph, vert_pos)
 
-        self.dtype = dtype
-        self.device = device
+        self.std = std
+
+        self.__shape = shape
+
+        self.point_pos = None
+        self.signed_dist = None
 
     @property
     def shape(self) -> torch.Size:
-        return torch.Size((self.epoch_size,))
+        return self.__shape
 
     def __getitem__(self, idx: tuple[torch.Tensor]) -> Sample:
-        N = idx[0].numel()
-
-        point_pos = torch.empty(
-            (N, 3), dtype=self.dtype, device=self.device)
-
-        for d in range(3):
-            torch.normal(self.mean[d], self.std[d], (N,), out=point_pos[:, d])
-
-        signed_dists = self.mesh_data.calc_signed_dist(point_pos)  # [N]
+        if self.point_pos is None:
+            self.refresh()
 
         return Sample(
-            point_pos=point_pos,
-            signed_dist=signed_dists,
+            point_pos=self.point_pos[idx],
+            signed_dist=self.signed_dist[idx],
         )
 
     def to(self, *args, **kwargs) -> Dataset:
         self.mesh_data = self.mesh_data.to(*args, **kwargs)
         return self
+
+    def refresh(self) -> None:
+        points_cnt = math.prod(self.shape)
+
+        V = self.mesh_data.verts_cnt
+
+        assert 0 < V
+
+        N = points_cnt // V + 1
+
+        p = generate_point(self.mesh_data.vert_pos, self.std, N).view(-1, 3)
+        # [P, 3]
+
+        self.point_pos = p[
+            torch.randperm(p.shape[0], dtype=torch.long, device=p.device)
+            [:points_cnt]
+        ]
+        # [B, 3]
+
+        self.signed_dist = self.mesh_data.calc_signed_dist(
+            self.point_pos)

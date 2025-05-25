@@ -58,13 +58,21 @@ def main1():
 
     smplx_params_dir = DIR / "0421/smplx_params"
 
+    with open(DIR / "merged.json") as f:
+        hand_pose = json.load(f)
+
     for frame_idx in range(len(glob.glob(f"{smplx_params_dir}/*.json"))):
-        # filename = smplx_params_dir / f"smplx_param_{frame_idx:0>5}.json"
-        filename = smplx_params_dir / f"smplx_param_{frame_idx}.json"
+        filename = smplx_params_dir / f"smplx_param_{frame_idx:0>5}.json"
+        # filename = smplx_params_dir / f"smplx_param_{frame_idx}.json"
 
         print(f"{filename}")
         with open(filename) as f:
-            smplx_params.append(json.load(f))
+            d = json.load(f)
+
+            d["lhand_pose"] = hand_pose["lhand_pose"]
+            d["rhand_pose"] = hand_pose["rhand_pose"]
+
+            smplx_params.append(d)
 
     asyncio.run(LoopEmitSMPLXParams(smplx_params, 1 / 35))
 

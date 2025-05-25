@@ -28,13 +28,6 @@ def get_area_vec(
         vert_pos_c, (..., 3),
     )
 
-    batch_shape = utils.broadcast_shapes(
-        vert_pos_a, vert_pos_b, vert_pos_c)
-
-    vert_pos_a = vert_pos_a.expand(batch_shape)
-    vert_pos_b = vert_pos_b.expand(batch_shape)
-    vert_pos_c = vert_pos_c.expand(batch_shape)
-
     return utils.vec_cross(
         vert_pos_b - vert_pos_a,
         vert_pos_c - vert_pos_a)
@@ -78,7 +71,7 @@ def get_area_weighted_vert_nor(
     )
     # [..., F, 3]
 
-    vert_nor = utils.zeros_like(vert_pos)
+    vert_nor = utils.zeros(like=vert_pos)
     # [..., V, 3]
 
     vert_nor.index_add_(-2, faces[:, 0], area_vector)
@@ -93,26 +86,26 @@ def get_area_weighted_vert_nor(
 
 
 @beartype
-def calc_adj_sums(
+def calc_adj_sum(
     adj_rel_list: torch.Tensor,  # [P, 2]
-    vals: torch.Tensor,  # [..., V, D]
-):
+    val: torch.Tensor,  # [..., V, D]
+) -> torch.Tensor:  # [..., V, D]
     P, V, D = -1, -2, -3
 
     P, V, D = utils.check_shapes(
         adj_rel_list, (P, 2),
-        vals, (..., V, D)
+        val, (..., V, D)
     )
 
     idx_0 = adj_rel_list[:, 0]
     idx_1 = adj_rel_list[:, 1]
     # [P]
 
-    ret = utils.zeros_like(vals)
+    ret = utils.zeros(like=val)
     # [..., V, D]
 
-    ret.index_add_(-2, idx_0, vals[..., idx_1, :])
-    ret.index_add_(-2, idx_1, vals[..., idx_0, :])
+    ret.index_add_(-2, idx_0, val[..., idx_1, :])
+    ret.index_add_(-2, idx_1, val[..., idx_0, :])
 
     # ret[..., idx_0[i], :] += vals_1[..., i, :]
     # ret[..., idx_1[i], :] += vals_0[..., i, :]
@@ -121,25 +114,25 @@ def calc_adj_sums(
 
 
 @beartype
-def calc_adj_sums_naive(
+def calc_adj_sum_naive(
     adj_rel_list: torch.Tensor,  # [P, 2]
-    vals: torch.Tensor,  # [..., V, D]
-):
+    val: torch.Tensor,  # [..., V, D]
+) -> torch.Tensor:  # [..., V, D]
     P, V, D = -1, -2, -3
 
     P, V, D = utils.check_shapes(
         adj_rel_list, (P, 2),
-        vals, (..., V, D)
+        val, (..., V, D)
     )
 
-    ret = utils.zeros_like(vals)
+    ret = utils.zeros(like=val)
     # [..., V, D]
 
     for pi in range(P):
         va, vb = adj_rel_list[pi]
 
-        ret[..., va, :] += vals[..., vb, :]
-        ret[..., vb, :] += vals[..., va, :]
+        ret[..., va, :] += val[..., vb, :]
+        ret[..., vb, :] += val[..., va, :]
 
     return ret
 
@@ -147,23 +140,23 @@ def calc_adj_sums_naive(
 @beartype
 def make_bary_coord_mat(
     face_vert_pos: torch.Tensor,  # [..., 3, 3]
-    face_normal: torch.Tensor,  # [..., 3]
+    face_nor: torch.Tensor,  # [..., 3]
 ) -> torch.Tensor:  # [..., 4, 4]
     utils.check_shapes(
         face_vert_pos, (..., 3, 3),
-        face_normal, (..., 3),
+        face_nor, (..., 3),
     )
 
     shape = utils.broadcast_shapes(
         face_vert_pos.shape[:-2],
-        face_normal.shape[:-1],
+        face_nor.shape[:-1],
     )
 
     face_vert_pos = face_vert_pos.expand(*shape, 3, 3).detach()
-    face_normal = face_normal.expand(*shape, 3).detach()
+    face_nor = face_nor.expand(*shape, 3).detach()
 
-    dtype = utils.promote_dtypes(face_vert_pos, face_normal)
-    device = utils.all_same(face_vert_pos.device, face_normal.device)
+    dtype = utils.promote_dtypes(face_vert_pos, face_nor)
+    device = utils.all_same(face_vert_pos.device, face_nor.device)
 
     A = torch.zeros((*shape, 20, 16), dtype=dtype, device=device)
 
@@ -173,7 +166,7 @@ def make_bary_coord_mat(
 
         A[..., p:q, p:q] = face_vert_pos
         A[..., p:q, q] = 1
-        A[..., q, p:q] = face_normal
+        A[..., q, p:q] = face_nor
 
         A[..., 16 + i, i:-4:4] = 1
 
@@ -188,7 +181,7 @@ def make_bary_coord_mat(
     return torch.linalg.lstsq(A, b).solution.view(*shape, 4, 4)
 
 
-class MeshSubdivisionFaceSrcTypeEnum(enum.IntEnum):
+class MeshGraphSubdivideFaceSrcTypeEnum(enum.IntEnum):
     # no subdive
     VA_VB_VC = 0
 
@@ -213,8 +206,9 @@ class MeshSubdivisionFaceSrcTypeEnum(enum.IntEnum):
 
 @beartype
 @dataclasses.dataclass
-class MeshSubdivisionResult:
+class MeshSubdivideResult:
     edge_mark: list[bool]
+    # [E]
 
     vert_src_table: torch.Tensor
     # [V_, 2]
@@ -230,9 +224,13 @@ class MeshSubdivisionResult:
 
 @beartype
 @dataclasses.dataclass
-class MeshExtractionResult:
+class MeshExtractResult:
     vert_src_table: torch.Tensor
+    # [V_]
+
     face_src_table: torch.Tensor
+    # [F_]
+
     mesh_graph: MeshGraph
 
 
@@ -247,159 +245,35 @@ class MeshGraph:
         self,
         *,
 
-        e_to_vv: torch.Tensor,  # [E, 2]
-        vv_to_e: dict[tuple[int, int], int],  # [E]
-
+        verts_cnt: int,
         f_to_vvv: torch.Tensor,  # [F, 3]
-        f_to_eee: torch.Tensor,  # [F, 3]
-
-        ff: torch.Tensor,  # [FP, 2]
-
-        vert_deg: torch.Tensor,  # [V]
-        inv_vert_deg: torch.Tensor,  # [V]
     ):
-        V, F, VP, FP = -1, -2, -3, -4
+        assert 0 <= verts_cnt
 
-        V, F, VP, FP = utils.check_shapes(
-            e_to_vv, (VP, 2),
-            f_to_vvv, (F, 3),
-            ff, (FP, 2),
+        F = utils.check_shapes(f_to_vvv, (-1, 3))
 
-            vert_deg, (V,),
-            inv_vert_deg, (V,),
-        )
-
-        self.e_to_vv = e_to_vv
-        self.vv_to_e = vv_to_e
-
+        self.verts_cnt = verts_cnt
         self.f_to_vvv = f_to_vvv
-        self.f_to_eee = f_to_eee
-
-        self.ff = ff
-
-        self.vert_deg = vert_deg
-        self.inv_vert_deg = inv_vert_deg
 
     @staticmethod
     def empty(verts_cnt: int, device: torch.device) -> MeshGraph:
         return MeshGraph(
-            e_to_vv=torch.empty((0, 2), dtype=torch.long, device=device),
-            vv_to_e=dict(),
-
+            verts_cnt=verts_cnt,
             f_to_vvv=torch.empty((0, 3), dtype=torch.long, device=device),
-            f_to_eee=torch.empty((0, 3), dtype=torch.long, device=device),
-
-            ff=torch.empty((0, 2), dtype=torch.long, device=device),
-
-            vert_deg=torch.zeros(
-                (verts_cnt,), dtype=torch.int32, device=device),
-            inv_vert_deg=torch.zeros(
-                (verts_cnt,), dtype=torch.float64, device=device),
         )
 
     @staticmethod
     def from_faces(
         verts_cnt: int,
         faces: torch.Tensor,  # [F, 3]
-        device: torch.device,
     ) -> MeshGraph:
-        faces_cnt = utils.check_shapes(faces, (-1, 3))
+        assert 0 <= verts_cnt
 
-        origin_faces = faces
-
-        faces = faces.to(utils.CPU_DEVICE, torch.long)
-
-        ee_to_f_d: collections.defaultdict[tuple[int, int], set[int]] = \
-            collections.defaultdict(set)
-
-        for f in range(faces_cnt):
-            va, vb, vc = sorted(map(int, faces[f]))
-
-            assert 0 <= va, f"{va=}"
-            assert va < vb
-            assert vb < vc
-            assert vc < verts_cnt, f"{vc=}, {verts_cnt=}"
-
-            ee_to_f_d[(vb, vc)].add(f)
-            ee_to_f_d[(va, vc)].add(f)
-            ee_to_f_d[(va, vb)].add(f)
-
-        e_to_vv_l = sorted(ee_to_f_d.keys())
-
-        vv_to_e = {(va, vb): e for e, (va, vb) in enumerate(e_to_vv_l)}
-
-        f_to_eee_l: list[tuple[int, int, int]] = list()
-
-        for f in range(faces_cnt):
-            va, vb, vc = map(int, faces[f])
-
-            f_to_eee_l.append((
-                vv_to_e[utils.min_max(vb, vc)],
-                vv_to_e[utils.min_max(va, vc)],
-                vv_to_e[utils.min_max(va, vb)],
-            ))
-
-        ff: set[tuple[int, int]] = set()
-
-        vert_deg = torch.zeros((verts_cnt,), dtype=torch.int32)
-
-        for (va, vb), fs in ee_to_f_d.items():
-            assert 0 <= va
-            assert va < vb
-            assert vb < verts_cnt
-
-            vert_deg[va] += 1
-            vert_deg[vb] += 1
-
-            for fa, fb in itertools.combinations(fs, 2):
-                ff.add(utils.min_max(fa, fb))
-
-        faces = origin_faces.to(device, torch.long)
-
-        e_to_vv = torch.tensor(
-            sorted(ee_to_f_d.keys()),
-            dtype=torch.long,
-            device=device,
-        )
-
-        if e_to_vv.numel() == 0:
-            e_to_vv = e_to_vv.expand(0, 2)
-
-        f_to_eee = torch.tensor(
-            f_to_eee_l,
-            dtype=torch.long,
-            device=device,
-        )
-
-        if f_to_eee.numel() == 0:
-            f_to_eee = f_to_eee.expand(0, 3)
-
-        ff: torch.Tensor = torch.tensor(
-            sorted(ff),
-            dtype=torch.long,
-            device=device,
-        )
-
-        if ff.numel() == 0:
-            ff = ff.expand(0, 2)
-
-        inv_vert_deg = torch.where(
-            vert_deg == 0,
-            0,
-            1.0 / vert_deg,
-        ).to(device, torch.float64)
+        F = utils.check_shapes(faces, (-1, 3))
 
         return MeshGraph(
-            e_to_vv=e_to_vv,
-            vv_to_e=vv_to_e,
-
+            verts_cnt=verts_cnt,
             f_to_vvv=faces,
-            f_to_eee=f_to_eee,
-
-            ff=ff,
-
-            vert_deg=vert_deg.to(device),
-            inv_vert_deg=inv_vert_deg,
         )
 
     @staticmethod
@@ -407,19 +281,16 @@ class MeshGraph:
         state_dict: typing.Mapping[str, object],
         device: torch.device,
     ) -> MeshGraph:
-        return MeshGraph.from_faces(
-            state_dict["verts_cnt"],
-            utils.tensor_deserialize(state_dict["faces"]),
-            device,
+        return MeshGraph(
+            verts_cnt=state_dict["verts_cnt"],
+
+            f_to_vvv=utils.deserialize_tensor(state_dict["faces"])
+            .to(device, torch.long),
         )
 
     @property
     def device(self) -> torch.device:
         return self.f_to_vvv.device
-
-    @property
-    def verts_cnt(self) -> int:
-        return self.vert_deg.shape[0]
 
     @property
     def faces_cnt(self) -> int:
@@ -438,44 +309,148 @@ class MeshGraph:
         return self.ff.shape[0]
 
     def to(self, *args, **kwargs) -> MeshGraph:
-        def f(x):
-            return None if x is None else x.to(*args, **kwargs)
-
         return MeshGraph(
-            e_to_vv=f(self.e_to_vv),
-            vv_to_e=self.vv_to_e,
-
-            f_to_vvv=f(self.f_to_vvv),
-            f_to_eee=f(self.f_to_eee),
-
-            ff=f(self.ff),
-
-            vert_deg=f(self.vert_deg),
-            inv_vert_deg=f(self.inv_vert_deg),
+            verts_cnt=self.verts_cnt,
+            f_to_vvv=self.f_to_vvv.to(*args, **kwargs),
         )
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([
             ("verts_cnt", self.verts_cnt),
-            ("faces", utils.tensor_serialize(self.f_to_vvv)),
+            ("faces", utils.serialize_tensor(self.f_to_vvv)),
         ])
 
     def load_state_dict(
             self, state_dict: typing.Mapping[str, object]) -> MeshGraph:
-        mesh_graph = MeshGraph.from_state_dict(state_dict, self.device)
+        self.verts_cnt = state_dict["verts_cnt"]
 
-        self.e_to_vv = mesh_graph.e_to_vv
-        self.vv_to_e = mesh_graph.vv_to_e
-
-        self.f_to_vvv = mesh_graph.f_to_vvv
-        self.f_to_eee = mesh_graph.f_to_eee
-
-        self.ff = mesh_graph.ff
-
-        self.vert_deg = mesh_graph.vert_deg
-        self.inv_vert_deg = mesh_graph.inv_vert_deg
+        self.f_to_vvv = utils.deserialize_tensor(
+            state_dict["f_to_vvv"],
+            dtype=torch.long,
+            device=self.f_to_vvv.device
+        )
 
         return self
+
+    @functools.cached_property
+    def f_to_vvv_cpu(self) -> torch.Tensor:  # [F, 3]
+        return self.f_to_vvv.to(utils.CPU_DEVICE)
+
+    @functools.cached_property
+    def _v_to_fs__vv_to_fs(self):
+        v_to_fs_raw: list[set[int]] = [set() for _ in range(self.verts_cnt)]
+
+        vv_to_fs_raw: collections.defaultdict[tuple[int, int], set[int]] = \
+            collections.defaultdict(set)
+
+        for f in range(self.faces_cnt):
+            va, vb, vc = sorted(map(int, self.f_to_vvv[f]))
+
+            assert 0 <= va, f"{va=}"
+            assert va < vb
+            assert vb < vc
+            assert vc < self.verts_cnt, f"{vc=}, {self.verts_cnt=}"
+
+            v_to_fs_raw[va].add(f)
+            v_to_fs_raw[vb].add(f)
+            v_to_fs_raw[vc].add(f)
+
+            vv_to_fs_raw[(vb, vc)].add(f)
+            vv_to_fs_raw[(va, vc)].add(f)
+            vv_to_fs_raw[(va, vb)].add(f)
+
+        return v_to_fs_raw, dict(sorted(vv_to_fs_raw.items()))
+
+    @functools.cached_property
+    def v_to_fs(self) -> list[set[int]]:
+        return self._v_to_fs__vv_to_fs[0]
+
+    @functools.cached_property
+    def vv_to_fs(self) -> dict[tuple[int, int], set[int]]:
+        return self._v_to_fs__vv_to_fs[1]
+
+    @functools.cached_property
+    def e_to_fs(self) -> list[set[int]]:
+        return list(self.vv_to_fs.values())
+
+    @functools.cached_property
+    def e_to_vv(self) -> torch.Tensor:  # [E, 2]
+        return self.e_to_vv_cpu.to(self.device)
+
+    @functools.cached_property
+    def e_to_vv_cpu(self) -> torch.Tensor:  # [E, 2]
+        ret = torch.tensor(list(self.vv_to_fs.keys()), dtype=torch.long)
+
+        if ret.numel() == 0:
+            ret.resize_(0, 2)
+
+        return ret
+
+    @functools.cached_property
+    def vv_to_e(self) -> dict[tuple[int, int], int]:
+        return {vv: e for e, vv in enumerate(self.vv_to_fs.keys())}
+
+    @functools.cached_property
+    def f_to_eee(self) -> torch.Tensor:  # [F, 3]
+        return self.f_to_eee_cpu.to(self.device)
+
+    @functools.cached_property
+    def f_to_eee_cpu(self) -> torch.Tensor:  # [F, 3]
+        f_to_vvv = self.f_to_vvv_cpu
+        vv_to_e = self.vv_to_e
+
+        ret = torch.empty((self.faces_cnt, 3), dtype=torch.long)
+
+        for f in range(self.faces_cnt):
+            va, vb, vc = map(int, f_to_vvv[f])
+
+            ret[f, 0] = vv_to_e[utils.min_max(vb, vc)]
+            ret[f, 1] = vv_to_e[utils.min_max(vc, va)]
+            ret[f, 2] = vv_to_e[utils.min_max(va, vb)]
+
+        return ret
+
+    @functools.cached_property
+    def vert_deg(self) -> torch.Tensor:  # [V]
+        e_to_vv = self.e_to_vv
+        # [E, 2]
+
+        return \
+            e_to_vv[:, 0].bincount(minlength=self.verts_cnt) + \
+            e_to_vv[:, 1].bincount(minlength=self.verts_cnt)
+
+    @functools.cached_property
+    def vert_deg_cpu(self) -> torch.Tensor:  # [V]
+        return self.vert_deg.to(utils.CPU_DEVICE)
+
+    @functools.cached_property
+    def inv_vert_deg(self) -> torch.Tensor:  # [V]
+        return torch.where(
+            self.vert_deg == 0, 0, 1.0 / self.vert_deg,
+        ).to(torch.float64)
+
+    @functools.cached_property
+    def inv_vert_deg_cpu(self) -> torch.Tensor:  # [V]
+        return self.inv_vert_deg.to(utils.CPU_DEVICE)
+
+    @functools.cached_property
+    def ff(self) -> torch.Tensor:  # [FP, 2]
+        return self.ff_cpu.to(self.device)
+
+    @functools.cached_property
+    def ff_cpu(self) -> torch.Tensor:  # [FP, 2]
+        s: set[tuple[int, int]] = set()
+
+        for f in self.vv_to_fs.values():
+            s.update(utils.min_max(fa, fb)
+                     for fa, fb in itertools.combinations(f, 2))
+
+        ret = torch.tensor(sorted(s), dtype=torch.long)
+
+        if ret.numel() == 0:
+            ret.resize_(0, 2)
+
+        return ret
 
     def calc_face_cos_sim(
         self,
@@ -483,29 +458,8 @@ class MeshGraph:
     ) -> torch.Tensor:  # [..., FP]
         utils.check_shapes(face_vec, (..., self.faces_cnt, -1))
 
-        vecs_0 = face_vec[..., self.ff[:, 0], :]
-        vecs_1 = face_vec[..., self.ff[:, 1], :]
-        # [..., FP, D]
-
-        return utils.vec_dot(vecs_0, vecs_1)
-
-    def calc_face_cos_sim_naive(
-        self,
-        face_vec: torch.Tensor,  # [..., F, D]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vec, (..., self.faces_cnt, -1))
-
-        FP = self.adj_face_face_pairs_cnt
-
-        ret = utils.empty_like(
-            face_vec, shape=(*face_vec.shape[:-2], FP))
-
-        for fp in range(FP):
-            fa, fb = self.ff[fp, :]
-            ret[..., fp] = utils.vec_dot(
-                face_vec[..., fa, :], (face_vec[..., fb, :]))
-
-        return ret
+        return utils.vec_dot(
+            face_vec[..., self.ff[:, 0], :], face_vec[..., self.ff[:, 1], :])
 
     def calc_face_diff(
         self,
@@ -513,29 +467,7 @@ class MeshGraph:
     ) -> torch.Tensor:  # [..., FP, D]
         utils.check_shapes(face_vec, (..., self.faces_cnt, -1))
 
-        vecs_0 = face_vec[..., self.ff[:, 0], :]
-        vecs_1 = face_vec[..., self.ff[:, 1], :]
-        # [..., FP, D]
-
-        return vecs_0 - vecs_1
-
-    def calc_face_diff_naive(
-        self,
-        face_vec: torch.Tensor,  # [..., F]
-    ) -> torch.Tensor:  # [..., FP]
-        utils.check_shapes(face_vec, (..., self.faces_cnt, -1))
-
-        FP = self.adj_face_face_pairs_cnt
-
-        ret = utils.empty_like(
-            face_vec, shape=(*face_vec.shape[:-2], FP))
-
-        for fp in range(FP):
-            fa, fb = self.ff[fp, :]
-
-            ret[..., fp] = face_vec[..., fa, :] - (face_vec[..., fb, :])
-
-        return ret
+        return face_vec[..., self.ff[:, 0], :] - face_vec[..., self.ff[:, 1], :]
 
     def face_lap_trans(
         self,
@@ -551,7 +483,7 @@ class MeshGraph:
         fa = self.ff[:, 0]
         fb = self.ff[:, 1]
 
-        buffer = utils.zeros_like(face_features)
+        buffer = utils.zeros(like=face_features)
 
         buffer.index_add_(-2, fa, face_features[fb], alpha=trans_ratio)
         buffer.index_add_(-2, fb, face_features[fa], alpha=trans_ratio)
@@ -563,21 +495,17 @@ class MeshGraph:
         *,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
-    ) -> MeshSubdivisionResult:
-        f_to_vvv = self.f_to_vvv.to(utils.CPU_DEVICE)
+    ) -> MeshSubdivideResult:
+        f_to_vvv = self.f_to_vvv_cpu
         # [F, 3]
 
-        f_to_eee = self.f_to_eee.to(utils.CPU_DEVICE)
+        f_to_eee = self.f_to_eee_cpu
         # [F, 3]
 
-        e_to_vv = self.e_to_vv.to(utils.CPU_DEVICE)
+        e_to_vv = self.e_to_vv_cpu
         # [VP, 2]
 
-        e_to_fs: list[list[int]] = [[] for _ in range(self.edges_cnt)]
-
-        for f in range(self.faces_cnt):
-            for e in map(int, f_to_eee[f]):
-                e_to_fs[e].append(f)
+        e_to_f = self.e_to_fs
 
         se_cnts = [0] * self.faces_cnt
 
@@ -606,7 +534,7 @@ class MeshGraph:
         while 0 < len(edge_queue):
             e = edge_queue.pop()
 
-            for f in e_to_fs[e]:
+            for f in e_to_f[e]:
                 se_cnts[f] += 1
 
                 if se_cnts[f] == 2:
@@ -635,6 +563,8 @@ class MeshGraph:
             face_src_table.append(src)
             face_src_type_table.append(src_type.value)
 
+        TypeEnum = MeshGraphSubdivideFaceSrcTypeEnum
+
         for f, cnt in enumerate(se_cnts):
             va, vb, vc = map(int, f_to_vvv[f])
             ea, eb, ec = map(int, f_to_eee[f])
@@ -642,7 +572,7 @@ class MeshGraph:
             assert cnt == 0 or cnt == 1 or cnt == 3
 
             if cnt == 0:
-                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_VC, va, vb, vc)
+                add_face(f, TypeEnum.VA_VB_VC, va, vb, vc)
                 continue
 
             if cnt == 3:
@@ -650,10 +580,10 @@ class MeshGraph:
                 ub = e_to_new_v[eb]
                 uc = e_to_new_v[ec]
 
-                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VA_EC_EB, va, uc, ub)
-                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VB_EA_EC, vb, ua, uc)
-                add_face(f, MeshSubdivisionFaceSrcTypeEnum.VC_EB_EA, vc, ub, ua)
-                add_face(f, MeshSubdivisionFaceSrcTypeEnum.EA_EB_EC, ua, ub, uc)
+                add_face(f, TypeEnum.VA_EC_EB, va, uc, ub)
+                add_face(f, TypeEnum.VB_EA_EC, vb, ua, uc)
+                add_face(f, TypeEnum.VC_EB_EA, vc, ub, ua)
+                add_face(f, TypeEnum.EA_EB_EC, ua, ub, uc)
 
                 continue
 
@@ -665,26 +595,20 @@ class MeshGraph:
                 case 0b100:
                     ua = e_to_new_v[ea]
 
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_EA, va, vb, ua)
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VC_VA_EA, vc, va, ua)
+                    add_face(f, TypeEnum.VA_VB_EA, va, vb, ua)
+                    add_face(f, TypeEnum.VC_VA_EA, vc, va, ua)
 
                 case 0b010:
                     ub = e_to_new_v[eb]
 
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VB_VC_EB, vb, vc, ub)
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VA_VB_EB, va, vb, ub)
+                    add_face(f, TypeEnum.VB_VC_EB, vb, vc, ub)
+                    add_face(f, TypeEnum.VA_VB_EB, va, vb, ub)
 
                 case 0b001:
                     uc = e_to_new_v[ec]
 
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VC_VA_EC, vc, va, uc)
-                    add_face(
-                        f, MeshSubdivisionFaceSrcTypeEnum.VB_VC_EC, vb, vc, uc)
+                    add_face(f, TypeEnum.VC_VA_EC, vc, va, uc)
+                    add_face(f, TypeEnum.VB_VC_EC, vb, vc, uc)
 
                 case _:
                     raise utils.MismatchException()
@@ -701,19 +625,19 @@ class MeshGraph:
             face_src_type_table, dtype=torch.uint8, device=self.device)
         # [F_]
 
-        new_faces = torch.tensor(new_faces, dtype=torch.long)
+        new_faces = torch.tensor(
+            new_faces, dtype=torch.long, device=self.device)
 
         if new_faces.numel() == 0:
-            vert_src_table = vert_src_table.expand(0, 2)
-            new_faces = new_faces.expand(0, 3)
+            vert_src_table.resize_(0, 2)
+            new_faces.resize_(0, 3)
 
         mesh_graph = MeshGraph.from_faces(
             len(vert_src_table),
             new_faces,
-            self.device,
         )
 
-        return MeshSubdivisionResult(
+        return MeshSubdivideResult(
             edge_mark=edge_mark,
             vert_src_table=vert_src_table,
             face_src_table=face_src_table,
@@ -728,46 +652,43 @@ class MeshGraph:
         self,
         target_faces: typing.Iterable[int],
         remove_orphan_vert: bool,
-    ) -> MeshExtractionResult:
-        target_faces = sorted(set(target_faces))
+        device: typing.Optional[torch.device] = None,
+    ) -> MeshExtractResult:
 
-        f_to_vvv = self.f_to_vvv.to(utils.CPU_DEVICE)
+        if device is None:
+            device = self.device
+
+        f_to_vvv = self.f_to_vvv_cpu
         # [F, 3]
 
+        face_src_table = torch.tensor(
+            sorted(set(target_faces)), dtype=torch.long)
+        # [F_]
+
+        new_f_to_old_vvv = f_to_vvv[face_src_table]
+        # [F_, 3]
+
         if remove_orphan_vert:
-            v_mark = [False] * self.verts_cnt
-
-            for f in target_faces:
-                for v in map(int, f_to_vvv[f]):
-                    v_mark[v] = True
+            v_mark = torch.zeros(self.verts_cnt, dtype=torch.bool)
+            v_mark.index_put_(new_f_to_old_vvv.view(-1), True)
         else:
-            v_mark = [True] * self.verts_cnt
+            v_mark = torch.ones(self.verts_cnt, dtype=torch.bool)
 
-        v_to_new_v: dict[int, int] = dict()
+        v_to_new_v = v_mark.cumsum(dtype=torch.long) - 1
+        # [V]
 
-        vert_src_table = torch.empty((v_mark.count(True),), dtype=torch.long)
+        vert_src_table = v_mark.nonzero(as_tuple=True)[0]
+        # [V_]
 
-        for new_v, v in enumerate(v for v, mark in enumerate(v_mark) if mark):
-            v_to_new_v[v] = new_v
-            vert_src_table[new_v] = v
-
-        new_f_to_vvv = torch.empty((len(target_faces), 3), dtype=torch.long)
-
-        face_src_table = torch.empty((len(target_faces),), dtype=torch.long)
-
-        for new_f, f in enumerate(target_faces):
-            for k in range(3):
-                new_f_to_vvv[new_f, k] = v_to_new_v[int(f_to_vvv[f, k])]
-
-            face_src_table[new_f] = f
+        new_f_to_vvv = v_to_new_v[new_f_to_old_vvv]
+        # [F_, 3]
 
         mesh_graph = MeshGraph.from_faces(
             vert_src_table.shape[0],
-            new_f_to_vvv,
-            device=self.device,
+            new_f_to_vvv.to(device),
         )
 
-        return MeshExtractionResult(
+        return MeshExtractResult(
             vert_src_table=vert_src_table,
             face_src_table=face_src_table,
             mesh_graph=mesh_graph,
@@ -778,20 +699,6 @@ class MeshGraph:
         vert_conn: bool,
         edge_conn: bool,
     ) -> list[list[int]]:
-        if vert_conn:
-            v_to_fs: list[list[int]] = [[] for _ in range(self.verts_cnt)]
-
-            for f in range(self.faces_cnt):
-                for v in map(int, self.f_to_vvv[f]):
-                    v_to_fs[v].append(f)
-
-        if edge_conn:
-            e_to_fs: list[list[int]] = [[] for _ in range(self.edges_cnt)]
-
-            for f in range(self.faces_cnt):
-                for e in map(int, self.f_to_eee[f]):
-                    e_to_fs[e].append(f)
-
         ret: list[list[int]] = list()
 
         passed = [False] * self.faces_cnt
@@ -814,12 +721,16 @@ class MeshGraph:
                     continue
 
                 if vert_conn:
+                    v_to_fs = self.v_to_fs
+
                     for v in map(int, self.f_to_vvv[f]):
                         for adj_f in v_to_fs[v]:
                             if not passed[adj_f]:
                                 heapq.heappush(q, adj_f)
 
                 if edge_conn:
+                    e_to_fs = self.e_to_fs
+
                     for e in map(int, self.f_to_eee[f]):
                         for adj_f in e_to_fs[e]:
                             if not passed[adj_f]:
@@ -841,7 +752,7 @@ class MeshGraph:
 
         tm = trimesh.Trimesh(
             vertices=vert_pos,
-            faces=self.f_to_vvv.to(utils.CPU_DEVICE),
+            faces=self.f_to_vvv_cpu,
             validate=True,
         )
 
@@ -908,7 +819,7 @@ class MeshData:
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([
             ("mesh_graph", self.mesh_graph.state_dict()),
-            ("vert_pos", utils.tensor_serialize(self.vert_pos)),
+            ("vert_pos", utils.serialize_tensor(self.vert_pos)),
         ])
 
     def load_state_dict(
@@ -921,7 +832,7 @@ class MeshData:
             **kwargs,
         )
 
-        self.vert_pos = utils.tensor_deserialize(
+        self.vert_pos = utils.deserialize_tensor(
             state_dict["vert_pos"],
             self.vert_pos.dtype,
             self.vert_pos.device,
@@ -1078,14 +989,14 @@ class MeshData:
 
     @functools.cached_property
     def uni_lap_diff(self) -> torch.Tensor:  # [..., V, D]
-        return calc_adj_sums(
+        return calc_adj_sum(
             self.mesh_graph.e_to_vv, self.vert_pos
         ) * self.mesh_graph.inv_vert_deg[..., None] - self.vert_pos
 
     @functools.cached_property
     def cot_lap_diff(self) -> torch.Tensor:  # [..., V, D]
-        e_weight = utils.zeros_like(
-            self.vert_pos, shape=(*self.shape, self.edges_cnt))
+        e_weight = utils.zeros(
+            like=self.vert_pos, shape=(*self.shape, self.edges_cnt))
         # [..., E]
 
         for k in range(3):
@@ -1095,16 +1006,16 @@ class MeshData:
 
         e_to_vv = self.mesh_graph.e_to_vv
 
-        v_sum_weight = utils.zeros_like(
-            self.vert_pos, shape=self.vert_pos.shape[:-1])
+        v_sum_weight = utils.zeros(
+            like=self.vert_pos, shape=self.vert_pos.shape[:-1])
         # [..., V]
 
         v_sum_weight.index_add_(-1, e_to_vv[:, 0], e_weight)
         v_sum_weight.index_add_(-1, e_to_vv[:, 1], e_weight)
 
-        weighted_e_diff = self.edge_dir.detach() * e_weight[..., None]
+        weighted_e_diff = self.edge_dir * e_weight[..., None]
 
-        buffer = utils.zeros_like(self.vert_pos)
+        buffer = utils.zeros(like=self.vert_pos)
         # [..., V, D]
 
         buffer.index_add_(-2, e_to_vv[:, 0], weighted_e_diff, alpha=+1)
@@ -1140,7 +1051,7 @@ class MeshData:
 
         mesh = pytorch3d.structures.Meshes(
             verts=[self.vert_pos],
-            faces=[self.f_to_vvv],
+            faces=[self.mesh_graph.f_to_vvv],
             textures=None,
         ).to(self.vert_pos.device)
 
@@ -1158,7 +1069,7 @@ class MeshData:
 
         mesh = pytorch3d.structures.Meshes(
             verts=[self.vert_pos],
-            faces=[self.f_to_vvv],
+            faces=[self.mesh_graph.f_to_vvv],
             textures=None,
         ).to(self.vert_pos.device)
 
@@ -1200,7 +1111,7 @@ class MeshData:
         face_norm = self.face_norm
         # [..., F, 3]
 
-        buffer = utils.zeros_like(self.vert_pos)
+        buffer = utils.zeros(like=self.vert_pos)
         # [..., V, 3]
 
         buffer.index_add_(-2, faces[:, 0], face_norm)
@@ -1474,16 +1385,10 @@ class MeshData:
         with utils.Timer():
             ret = torch.from_numpy(-trimesh.proximity.signed_distance(
                 tm,
-                point_pos,
-            ))
+                point_pos.reshape(-1, 3).cpu(),
+            )).to(point_pos)
 
-        return ret
-
-    def calc_subdivided_vert_pos(
-        self,
-        mesh_subdivision_result: MeshSubdivisionResult
-    ) -> torch.Tensor:  # [V, 3]
-        pass
+        return ret.view(point_pos.shape[:-1])
 
     def show(self) -> None:
         self.mesh_graph.show(self.vert_pos)

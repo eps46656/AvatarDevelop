@@ -128,7 +128,7 @@ class Dataset(dataset_utils.Dataset):
     def __getitem__(self, idx) -> Sample:
         ret = self.sample[idx]
 
-        ret.raw_img = vision_utils.normalize_image(ret.raw_img)
+        ret.raw_img = utils.rct(ret.raw_img / 255, dtype=torch.uint8)
 
         return ret
 

@@ -75,9 +75,9 @@ def main1():
     blending_param = avatar_pack.blending_param
 
     obj_type_list = [
-        video_seg_utils.ObjectType.HAIR,
-        video_seg_utils.ObjectType.UPPER_GARMENT,
-        video_seg_utils.ObjectType.LOWER_GARMENT,
+        "HAIR",
+        "UPPER_GARMENT",
+        "LOWER_GARMENT",
     ]
 
     obj_mask_videos = {
@@ -91,7 +91,7 @@ def main1():
 
     H, W = camera_config.img_h, camera_config.img_w
 
-    mesh_segmentor: mesh_seg_utils.MeshSegmentor = mesh_seg_utils.segment_mesh(
+    mesh_segmentor: mesh_seg_utils.MeshSegmentor = mesh_seg_utils.mesh_mask_vote(
         avatar_blender=avatar_blender,
 
         camera_config=camera_config,
@@ -141,9 +141,9 @@ def main2():
     mesh_data = avatar_model.mesh_data
 
     obj_type_list = [
-        video_seg_utils.ObjectType.HAIR,
-        video_seg_utils.ObjectType.UPPER_GARMENT,
-        video_seg_utils.ObjectType.LOWER_GARMENT,
+        "HAIR",
+        "UPPER_GARMENT",
+        "LOWER_GARMENT",
     ]
 
     O = len(obj_type_list)
@@ -264,7 +264,7 @@ def main2():
         total_sub_vert_pos_b * total_sub_vert_t[..., None]
 
     total_sub_model_data = model_data.subdivide(
-        mesh_subdivision_result=mesh_segment_result.mesh_subdivision_result,
+        mesh_subdivide_result=mesh_segment_result.mesh_subdivision_result,
         new_vert_t=total_sub_vert_t,
     ).model_data
 

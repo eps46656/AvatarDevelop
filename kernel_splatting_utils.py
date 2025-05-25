@@ -69,10 +69,9 @@ def splat(
 
     batch_size = utils.clamp(10**8 // q_points_cnt, 1, N)
 
-    val = utils.zeros_like(
-        data_point_val, shape=(*q_point_pos.shape[:-1], Q))
+    val = utils.zeros(like=data_point_val, shape=(*q_point_pos.shape[:-1], Q))
 
-    weight = utils.zeros_like(data_point_pos, shape=q_point_pos.shape[:-1])
+    weight = utils.zeros(like=data_point_pos, shape=q_point_pos.shape[:-1])
 
     for data_beg in range(0, N, batch_size):
         data_end = min(data_beg + batch_size, N)

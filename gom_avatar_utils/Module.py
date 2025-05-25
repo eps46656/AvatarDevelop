@@ -144,12 +144,12 @@ class Module(torch.nn.Module):
         target_edges: typing.Optional[typing.Iterable[int]] = None,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
     ) -> Module:
-        mesh_subdivision_result = self.avatar_blender.subdivide(
+        mesh_subdivide_result = self.avatar_blender.subdivide(
             target_edges=target_edges,
             target_faces=target_faces,
         )
 
-        face_src_table = mesh_subdivision_result.face_src_table
+        face_src_table = mesh_subdivide_result.face_src_table
 
         self.gp_rot_z = torch.nn.Parameter(self.gp_rot_z[face_src_table])
         # [F_]
@@ -187,7 +187,7 @@ class Module(torch.nn.Module):
         face_coord_rot_qs = utils.rot_mat_to_quaternion(
             face_coord_result.r, order="WXYZ")
 
-        zeros = utils.zeros_like(self.gp_rot_z, shape=()).expand(F)
+        zeros = utils.zeros(like=self.gp_rot_z, shape=()).expand(F)
         # [F]
 
         half_gp_rot_thetas = self.gp_rot_z * 0.5
@@ -219,25 +219,35 @@ class Module(torch.nn.Module):
         scale_factor = face_coord_result.area.sqrt()
         # [..., F]
 
-        world_gp_scale = utils.empty_like(
-            scale_factor, shape=(*scale_factor.shape[:-1], F, 3))
-
-        world_gp_scale[..., 0] = scale_factor * utils.smooth_clamp(
+        world_gp_scale_x = scale_factor * utils.smooth_clamp(
             x=self.gp_scale_x,  # clamp local scale
-            lb=1.0 / 3,
-            rb=2.0 / 3,
+            lb=2.0 / 3,
+            rb=4.0 / 3,
         )
+        # [..., F]
 
-        world_gp_scale[..., 1] = scale_factor * utils.smooth_clamp(
+        world_gp_scale_y = scale_factor * utils.smooth_clamp(
             x=self.gp_scale_y,  # clamp local scale
-            lb=1.0 / 3,
-            rb=2.0 / 3,
+            lb=2.0 / 3,
+            rb=4.0 / 3,
         )
+        # [..., F]
 
-        world_gp_scale[..., 2] = utils.smooth_clamp(
+        world_gp_scale_z = utils.smooth_clamp(
             x=scale_factor * self.gp_scale_z,  # clamp global scale
-            lb=5e-3 / 3,
-            rb=10e-3 / 3,
+            lb=20e-3 / 3,
+            rb=30e-3 / 3,
+        )
+        # [..., F]
+
+        world_gp_scale = torch.stack([
+            world_gp_scale_x, world_gp_scale_y, world_gp_scale_z], -1)
+        # [..., F, 3]
+
+        world_gp_opacity = utils.smooth_clamp(
+            x=self.gp_opacity,
+            lb=0.8,
+            rb=1.0,
         )
 
         return ModuleWorldGPResult(
@@ -246,7 +256,7 @@ class Module(torch.nn.Module):
             gp_rot_q=world_gp_rot_q,
             gp_scale=world_gp_scale,
             gp_color=self.gp_color,
-            gp_opacity=self.gp_opacity.exp(),
+            gp_opacity=world_gp_opacity,
         )
 
     def forward(
@@ -256,7 +266,6 @@ class Module(torch.nn.Module):
         img: torch.Tensor,  # [..., C, H, W]
         mask: torch.Tensor,  # [..., H, W]
         blending_param: object,
-        lap_diff_clamp_norm: typing.Optional[float],
     ) -> ModuleForwardResult:
         device = next(self.parameters()).device
 
@@ -274,11 +283,18 @@ class Module(torch.nn.Module):
 
         world_gp_result = self.get_world_gp(avatar_model.mesh_data)
 
+        normal_bg_color = 1.0
+        abnormal_bg_color = 2.0
+
         gp_render_result = gaussian_utils.render_gaussian(
             camera_config=camera_config,
             camera_transform=camera_transform,
 
-            bg_color=torch.ones((C,), dtype=world_gp_result.gp_color.dtype),
+            bg_color=utils.full(
+                normal_bg_color,
+                shape=(C,),
+                dtype=world_gp_result.gp_color.dtype,
+            ),
 
             gp_mean=world_gp_result.gp_mean,
             gp_rot_q=world_gp_result.gp_rot_q,
@@ -298,10 +314,23 @@ class Module(torch.nn.Module):
         if not self.training:
             ret_img_diff = torch.Tensor()
         else:
-            person_masked_img = img * mask + (1 - mask)
+            normal_person_masked_img = img * mask + \
+                normal_bg_color * (1 - mask)
 
-            rgb_sum_sq_diff = (
-                gp_render_img - person_masked_img).square().sum((-3, -2, -1))
+            abnormal_person_masked_img = img * mask + \
+                abnormal_bg_color * (1 - mask)
+
+            raw_rgb_sum_sq_diff_base = (
+                normal_person_masked_img - abnormal_person_masked_img
+            ).square().sum((-3, -2, -1))
+            # [...]
+
+            raw_rgb_sum_sq_diff = (
+                gp_render_img - abnormal_person_masked_img
+            ).square().sum((-3, -2, -1))
+            # [...]
+
+            rgb_sum_sq_diff = raw_rgb_sum_sq_diff - raw_rgb_sum_sq_diff_base
             # [...]
 
             ret_img_diff = rgb_sum_sq_diff / mask.sum((-3, -2, -1))
@@ -310,13 +339,13 @@ class Module(torch.nn.Module):
         if not self.training:
             ret_lap_diff = torch.Tensor()
         else:
-            raw_lap_diff = avatar_model.mesh_data.cot_lap_diff
+            raw_lap_diff = avatar_model.mesh_data.uni_lap_diff
             # [..., V, 3]
 
+            """
             lap_diff_norm = utils.vec_norm(raw_lap_diff.detach(), keepdim=True)
             # [..., V, 1]
 
-            """
             lap_diff = raw_lap_diff * (
                 lap_diff_clamp_norm /
                 lap_diff_norm.clamp(lap_diff_clamp_norm, None)
@@ -335,7 +364,7 @@ class Module(torch.nn.Module):
             nor_sim = avatar_model.mesh_data.face_norm_cos_sim
             # [..., FP]
 
-            ret_nor_sim = -nor_sim.square().mean(-1)
+            ret_nor_sim = (1 - nor_sim).square().mean(-1)
             # [...]
 
         if not self.training:

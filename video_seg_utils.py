@@ -103,7 +103,7 @@ def refine(
 
 
 @beartype
-def _read_src(out_dir: os.PathLike) \
+def read_src(out_dir: os.PathLike) \
         -> vision_utils.VideoReader:  # [C, H, W]
 
     out_dir = utils.to_pathlib_path(out_dir)
@@ -143,10 +143,8 @@ def _read_refined_mask(
 
 @beartype
 @utils.mem_clear
-def _read_person_mask(out_dir: os.PathLike) \
+def read_person_mask(out_dir: os.PathLike) \
         -> vision_utils.VideoReader:  # [1, H, W]
-    from . import lang_sam_utils
-
     out_dir = utils.to_pathlib_path(out_dir)
 
     person_mask_path = out_dir / PERSON_MASK_FILENAME
@@ -158,7 +156,9 @@ def _read_person_mask(out_dir: os.PathLike) \
     if person_mask_path.exists():
         return read_and_return()
 
-    src = _read_src(out_dir)
+    from . import lang_sam_utils
+
+    src = read_src(out_dir)
 
     gen = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
@@ -182,43 +182,44 @@ def _read_person_mask(out_dir: os.PathLike) \
 
 
 @beartype
-def _read_refined_person_mask(out_dir: os.PathLike) \
+def read_refined_person_mask(out_dir: os.PathLike) \
         -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
     return _read_refined_mask(
         out_dir / REFINED_PERSON_MASK_FILENAME,
-        _read_person_mask(out_dir),
+        read_person_mask(out_dir),
     )
 
 
 @beartype
-def _read_person_masked(out_dir: os.PathLike):
+def read_person_masked(out_dir: os.PathLike):
     out_dir = utils.to_pathlib_path(out_dir)
 
     person_masked_path = out_dir / PERSON_MASKED_FILENAME
 
     def read_and_return():
         return vision_utils.VideoReader(
-            person_masked_path, vision_utils.ColorType.GRAY)
+            person_masked_path, vision_utils.ColorType.RGB)
 
     if person_masked_path.exists():
         return read_and_return()
 
-    src = _read_src(out_dir)
+    src = read_src(out_dir)
 
-    refined_person_mask = _read_refined_person_mask(out_dir)
+    refined_person_mask = read_refined_person_mask(out_dir)
 
     video_writer = vision_utils.VideoWriter(
         person_masked_path,
         height=refined_person_mask.height,
         width=refined_person_mask.width,
-        color_type=vision_utils.ColorType.GRAY,
+        color_type=vision_utils.ColorType.RGB,
         fps=refined_person_mask.fps,
     )
 
     with refined_person_mask, video_writer:
-        for cur_img, cur_refined_person_mask in zip(src, refined_person_mask):
+        for cur_img, cur_refined_person_mask in tqdm.tqdm(zip(
+                src, refined_person_mask)):
             m = cur_refined_person_mask.to(torch.float64) / 255
 
             video_writer.write(utils.rct(
@@ -229,13 +230,11 @@ def _read_person_masked(out_dir: os.PathLike):
 
 @beartype
 @utils.mem_clear
-def _read_obj_mask(
+def read_obj_mask(
     out_dir: os.PathLike,
     obj_name: str,
-    text_prompt: str,
+    text_prompt: typing.Optional[str],
 ) -> vision_utils.VideoReader:  # [1, H, W]
-    from . import lang_sam_utils
-
     out_dir = utils.to_pathlib_path(out_dir)
 
     obj_mask_path = out_dir / get_obj_mask_filename(obj_name)
@@ -247,11 +246,13 @@ def _read_obj_mask(
     if obj_mask_path.exists():
         return read_and_return()
 
-    person_masked = _read_person_masked(out_dir)
+    from . import lang_sam_utils
+
+    src = read_src(out_dir)
 
     gen = lang_sam_utils.predict(
         sam_type=lang_sam_utils.SAMType.LARGE,
-        img=(vision_utils.to_pillow_image(img) for img in person_masked),
+        img=(vision_utils.to_pillow_image(img) for img in src),
         text_prompt=itertools.repeat(text_prompt),
         mask_strategy=lang_sam_utils.MaskStrategy.MEAN,
         batch_size=PREDICT_BATCH_SIZE,
@@ -259,10 +260,10 @@ def _read_obj_mask(
 
     video_writer = vision_utils.VideoWriter(
         obj_mask_path,
-        height=person_masked.height,
-        width=person_masked.width,
+        height=src.height,
+        width=src.width,
         color_type=vision_utils.ColorType.GRAY,
-        fps=person_masked.fps,
+        fps=src.fps,
     )
 
     with video_writer:
@@ -273,23 +274,23 @@ def _read_obj_mask(
 
 
 @beartype
-def _read_refined_obj_mask(
+def read_refined_obj_mask(
     out_dir: os.PathLike,
     obj_name: str,
-    text_prompt: str,
+    text_prompt: typing.Optional[str],
 ) -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
     return _read_refined_mask(
-        out_dir / REFINED_PERSON_MASK_FILENAME,
-        _read_obj_mask(out_dir, obj_name, text_prompt),
+        out_dir / get_refined_obj_mask_filename(obj_name),
+        read_obj_mask(out_dir, obj_name, text_prompt),
     )
 
 
 @beartype
-def _read_skin_mask(
+def read_skin_mask(
     out_dir: os.PathLike,
-    obj_text_prompt: typing.Mapping[str, str],
+    obj_text_prompt: typing.Optional[typing.Mapping[str, str]],
 ) -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
@@ -302,10 +303,12 @@ def _read_skin_mask(
     if skin_mask_path.exists():
         return read_and_return()
 
-    person_mask = _read_person_mask(out_dir)
+    assert obj_text_prompt is not None
+
+    person_mask = read_person_mask(out_dir)
 
     obj_masks = {
-        obj_name: _read_obj_mask(out_dir, obj_name, text_prompt)
+        obj_name: read_obj_mask(out_dir, obj_name, text_prompt)
         for obj_name, text_prompt in obj_text_prompt.items()
     }
 
@@ -324,18 +327,14 @@ def _read_skin_mask(
         if person_mask_frame is None:
             break
 
-        acc_mask = torch.zeros_like(person_mask_frame)
+        acc_mask = torch.zeros(like=person_mask_frame)
 
         for frame in obj_mask_frames:
-            cur_mask = frame.to(torch.float64) / 255
+            acc_mask = frame if acc_mask is None else \
+                torch.max(acc_mask, frame)
 
-            if acc_mask is None:
-                acc_mask = cur_mask
-            else:
-                acc_mask = torch.max(acc_mask, cur_mask)
-
-        acc_mask = torch.min(person_mask_frame.to(torch.float64) / 255,
-                             1 - acc_mask)
+        acc_mask = (torch.min(
+            person_mask_frame, 255 - acc_mask) / 255).pow(0.5)
 
         video_writer.write(utils.rct(acc_mask * 255, dtype=torch.uint8))
 
@@ -343,15 +342,15 @@ def _read_skin_mask(
 
 
 @beartype
-def _read_refined_skin_mask(
+def read_refined_skin_mask(
     out_dir: os.PathLike,
-    obj_text_prompt: typing.Mapping[str, str],
+    obj_text_prompt: typing.Optional[typing.Mapping[str, str]],
 ) -> vision_utils.VideoReader:  # [1, H, W]
     out_dir = utils.to_pathlib_path(out_dir)
 
     return _read_refined_mask(
         out_dir / REFINED_SKIN_MASK_FILENAME,
-        _read_skin_mask(out_dir, obj_text_prompt),
+        read_skin_mask(out_dir, obj_text_prompt),
     )
 
 
@@ -370,19 +369,22 @@ def segment(
     H, W = src.height, src.width
     fps = src.fps
 
-    src_video_writer = vision_utils.VideoWriter(
-        out_dir / SRC_FILENAME,
-        height=H,
-        width=W,
-        color_type=vision_utils.ColorType.RGB,
-        fps=fps,
-    )
+    src_video_path = out_dir / SRC_FILENAME
 
-    with src_video_writer:
-        for i in tqdm.tqdm(src):
-            src_video_writer.write(utils.rct(i, dtype=torch.uint8))
+    if not src_video_path.exists():
+        src_video_writer = vision_utils.VideoWriter(
+            out_dir / SRC_FILENAME,
+            height=H,
+            width=W,
+            color_type=vision_utils.ColorType.RGB,
+            fps=fps,
+        )
+
+        with src_video_writer:
+            for i in tqdm.tqdm(src):
+                src_video_writer.write(utils.rct(i, dtype=torch.uint8))
 
     for obj_name, text_prompt in obj_text_prompt.items():
-        _read_refined_obj_mask(out_dir, obj_name, text_prompt)
+        read_refined_obj_mask(out_dir, obj_name, text_prompt)
 
-    _read_refined_skin_mask(out_dir, obj_text_prompt)
+    read_refined_skin_mask(out_dir, obj_text_prompt)

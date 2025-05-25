@@ -102,6 +102,12 @@ class KinTree:
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([("parents", self.parents)])
 
+    def __eq__(self, other: KinTree) -> bool:
+        return self.parents == other.parents
+
+    def __ne__(self, other: KinTree) -> bool:
+        return not (self == other)
+
     def get_joint_T(
         self,
         pose_r: torch.Tensor,  # [..., J, D, D]

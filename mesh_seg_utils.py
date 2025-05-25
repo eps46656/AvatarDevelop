@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import collections
 import dataclasses
 import typing
 
@@ -8,340 +7,94 @@ import torch
 import tqdm
 from beartype import beartype
 
-from . import (avatar_utils, camera_utils, dataset_utils, mesh_utils,
-               rendering_utils, transform_utils, utils)
+from . import (avatar_utils, camera_utils, dataset_utils,
+               kernel_splatting_utils, mesh_utils, rendering_utils,
+               smplx_utils, transform_utils, utils, vision_utils)
 
 
 @beartype
 def vote(
-    pix_to_face:  torch.Tensor,  # [..., H, W]
-    ballot: torch.Tensor,  # [..., H, W]
-    face_ballot_box: torch.Tensor,  # [F]
+    *,
+    box_weight: torch.Tensor,  # [P],
+    box_conf: torch.Tensor,  # [P],
+
+    idx: torch.Tensor,  # [...]
+    ballot_weight: torch.Tensor,  # [...]
+    ballot_conf: torch.Tensor,  # [...]
 ) -> None:
-    # H image height
-    # W image width
-    # F number of faces
-
-    H, W, F = -1, -2, -3
-
-    H, W, F = utils.check_shapes(
-        pix_to_face, (..., H, W),
-        ballot, (..., H, W),
-        face_ballot_box, (F,),
+    P = utils.check_shapes(
+        box_weight, (-1,),
+        box_conf, (-1,),
+        idx, (...,),
+        ballot_weight, (...,),
+        ballot_conf, (...,),
     )
 
-    batch_shape = utils.broadcast_shapes(
-        pix_to_face.shape[:-2],
-        ballot.shape[:-2],
+    shape = utils.broadcast_shapes(
+        idx,
+        ballot_weight,
+        ballot_conf,
     )
 
-    pix_to_face = pix_to_face.expand(*batch_shape, H, W)
-    ballot = ballot.expand(*batch_shape, H, W)
-    face_ballot_box = face_ballot_box.expand(*batch_shape, F)
+    idx = idx.expand(shape)
 
-    pix_to_face = pix_to_face.view(*batch_shape, H * W)
-    # [..., H * W]
+    box_weight.index_add_(
+        0, idx.flatten(),
+        ballot_weight.expand(shape).to(box_weight).flatten(),
+    )
 
-    ballot = ballot.view(*batch_shape, H * W)
-    # [..., H * W]
-
-    face_ballot_box.scatter_add_(-1, pix_to_face, ballot)
-
-    """
-
-    face_ballot_box[..., pixel_to_face[..., i]] += ballot[..., i]
-
-    """
+    box_conf.index_add_(
+        0, idx.flatten(),
+        ballot_conf.expand(shape).to(box_conf).flatten(),
+    )
 
 
 @beartype
-def batch_vote(
-    pixel_to_face:  torch.Tensor,  # [H, W]
-    ballot: torch.Tensor,  # [B, H, W]
-    face_ballot_box: torch.Tensor,  # [F, B]
+def face_vert_vote_ras(
+    *,
+    vert_weight: torch.Tensor,  # [V + 1],
+    vert_conf: torch.Tensor,  # [V + 1],
+
+    f_to_vvv: torch.Tensor,  # [F, 3]
+    face_idx: torch.Tensor,  # [...]
+    bary_coord: torch.Tensor,  # [..., 3]
+
+    ballot_conf: torch.Tensor,  # [...]
 ) -> None:
-    # B number of parts
-    # H image height
-    # W image width
-    # F number of faces
+    V_, F = -1, -2
 
-    N, B, H, W, F = -1, -2, -3, -4
-
-    N, B, H, W = utils.check_shapes(
-        pixel_to_face, (N, H, W),
-        ballot, (N, B, H, W),
-        face_ballot_box, (F, B),
+    V_, F = utils.check_shapes(
+        vert_weight, (V_,),
+        vert_conf, (V_,),
+        f_to_vvv, (F, 3),
+        face_idx, (...,),
+        bary_coord, (..., 3),
+        ballot_conf, (...,),
     )
 
-    for n in range(N):
-        for b in range(B):
-            vote(
-                pixel_to_face,  # [H, W]
-                ballot[b],  # [H, W]
-                b,
-                face_ballot_box[:, b],  # [F]
-            )
+    V = V_ - 1
 
+    vote(
+        box_weight=vert_weight,
+        box_conf=vert_conf,
 
-@beartype
-def elect(
-    pixel_to_face: list[torch.Tensor],  # [H, W]
-    ballot: torch.Tensor,  # [..., K, H, W]
-    faces_cnt: int,
-):
-    assert 0 <= faces_cnt
-
-    K, H, W = -1, -2, -3
-
-    K, H, W = utils.check_shapes(
-        pixel_to_face, (..., H, W),
-        ballot, (..., K, H, W),
-    )
-
-    batch_shape = utils.broadcast_shapes(
-        pixel_to_face.shape[:-2],
-        ballot.shape[:-2],
-    )
-
-    pixel_to_face = pixel_to_face.expand(*batch_shape, H, W)
-    ballot = ballot.expand(*batch_shape, K, H, W)
-
-    face_ballot_box = utils.zeros_like(
-        ballot,
-        shape=(K, faces_cnt + 1),  # F + 1 for -1 pixel to face index
-    )
-
-    for batch_idxes in utils.get_batch_idxes(batch_shape):
-        for k in range(K):
-            vote(
-                pixel_to_face[batch_idxes],  # [H, W]
-                ballot[*batch_idxes, k],  # [H, W]
-                face_ballot_box[k],
-            )
-
-    face_obj_idx = face_ballot_box.argmax(0)
-    # [F]
-
-    pass
-
-
-@beartype
-def assign(
-    face_ballot_box: torch.Tensor,  # [..., F, K]
-    threshold: float = 0.5,
-    bg_idx: int = -1,
-):
-    utils.check_shapes(face_ballot_box, (..., -1, -2))
-
-    max_ballot, max_obj = face_ballot_box.max(-1)
-    # max_ballot[..., F]
-    # max_obj[..., F]
-
-    return torch.where(
-        threshold <= max_ballot,
-        max_obj,
-        bg_idx,
-    )
-
-
-@beartype
-@dataclasses.dataclass
-class MeshSegmentationResult:
-    mesh_subdivision_result: mesh_utils.MeshSubdivisionResult
-    sub_vert_obj_kdx: torch.Tensor  # [V_]
-    sub_face_obj_idx: torch.Tensor  # [F_]
-    target_faces: list[list[int]]
-
-
-@beartype
-class MeshSegmentor:
-    def __init__(
-        self,
-        *,
-        mesh_graph: mesh_utils.MeshGraph,
-
-        vert_ballot_cnt: torch.Tensor,  # [V + 1, O]
-        vert_ballot_box: torch.Tensor,  # [V + 1, O]
-    ):
-        V = mesh_graph.verts_cnt
-
-        O = utils.check_shapes(
-            vert_ballot_cnt, (V + 1, -1),
-            vert_ballot_box, (V + 1, -1),
-        )
-
-        self.mesh_graph = mesh_graph
-
-        self.vert_ballot_cnt = vert_ballot_cnt
-        self.vert_ballot_box = vert_ballot_box
-
-    @staticmethod
-    def from_empty(
-        mesh_graph: mesh_utils.MeshGraph,
-
-        objs_cnt: int,
-
-        ballot_cnt_dtype: torch.dtype = torch.float64,
-        ballot_box_dtype: torch.dtype = torch.float64,
-
-        device: typing.Optional[torch.device] = None,
-    ) -> MeshSegmentor:
-        V = mesh_graph.verts_cnt
-        O = objs_cnt
-
-        vert_ballot_cnt = torch.zeros(
-            (V + 1, O), dtype=ballot_cnt_dtype, device=device)
-
-        vert_ballot_box = torch.zeros(
-            (V + 1, O), dtype=ballot_box_dtype, device=device)
-
-        return MeshSegmentor(
-            mesh_graph=mesh_graph,
-
-            vert_ballot_cnt=vert_ballot_cnt,
-            vert_ballot_box=vert_ballot_box,
-        )
-
-    @staticmethod
-    def from_state_dict(
-        state_dict: typing.Mapping[str, object],
-        dtype: typing.Optional[torch.dtype],
-        device: torch.device,
-    ) -> MeshSegmentor:
-        return MeshSegmentor(
-            mesh_graph=mesh_utils.MeshGraph.from_state_dict(
-                state_dict["mesh_graph"], device),
-
-            vert_ballot_cnt=utils.tensor_deserialize(
-                state_dict["vert_ballot_cnt"], dtype, device),
-
-            vert_ballot_box=utils.tensor_deserialize(
-                state_dict["vert_ballot_box"], dtype, device),
-        )
-
-    def state_dict(self) -> collections.OrderedDict[str, object]:
-        return collections.OrderedDict([
-            ("mesh_graph", self.mesh_graph.state_dict()),
-            ("vert_ballot_cnt", utils.tensor_serialize(self.vert_ballot_cnt)),
-            ("vert_ballot_box", utils.tensor_serialize(self.vert_ballot_box)),
-        ])
-
-    def load_state_dict(
-            self, state_dict: typing.Mapping[str, object]) -> MeshSegmentor:
-        face_segmentor: MeshSegmentor = MeshSegmentor.from_state_dict(
-            state_dict, self.mesh_graph.device)
-
-        self.mesh_graph = face_segmentor.mesh_graph
-        self.vert_ballot_cnt = face_segmentor.vert_ballot_cnt
-        self.vert_ballot_box = face_segmentor.vert_ballot_box
-
-        return self
-
-    def vote(
-        self,
-        obj_idx: int,
-        face_idx: torch.Tensor,  # [...]
-        bary_coord: torch.Tensor,  # [..., 3]
-        ballot: torch.Tensor,  # [...]
-    ):
-        utils.check_shapes(bary_coord, (..., 3))
-
-        V = self.mesh_graph.verts_cnt
-
-        shape = utils.broadcast_shapes(
-            face_idx,
-            bary_coord.shape[:-1],
-            ballot,
-        )
-
-        N = shape.numel()
-
-        vert_idx = torch.where(
+        idx=torch.where(
             (face_idx == -1)[..., None].expand(*face_idx.shape, 3),
             V,
-            self.mesh_graph.f_to_vvv[face_idx.clamp(0, None)]
-        ).expand(*shape, 3).reshape(N, 3)
+            f_to_vvv[face_idx.clamp(0, None)]
+        ),  # [..., 3]
 
-        vert_ballot = bary_coord * ballot[..., None]
-
-        for i in range(3):
-            self.vert_ballot_cnt[:, obj_idx].index_add_(
-                0,
-
-                vert_idx[:, i],
-
-                bary_coord[..., i].expand(shape)
-                .to(self.vert_ballot_cnt).reshape(N),
-            )
-
-            self.vert_ballot_box[:, obj_idx].index_add_(
-                0,
-
-                vert_idx[:, i],
-
-                vert_ballot[..., i].expand(shape)
-                .to(self.vert_ballot_box).reshape(N),
-            )
-
-    def segment(self, threshold: float) -> MeshSegmentationResult:
-        max_vert_ballot, max_vert_ballot_idx = \
-            self.vert_ballot_box[:-1].max(-1)
-        # max_vert_ballot[V]
-        # max_vert_ballot_idx[V]
-
-        vert_bg_mask = threshold <= max_vert_ballot
-
-        vert_obj_kdx = torch.where(
-            vert_bg_mask,
-            max_vert_ballot_idx + 1,
-            0,
-        )
-        # [V]
-
-        mesh_subdivision_result: mesh_utils.MeshSubdivisionResult = \
-            self.mesh_graph.subdivide()
-
-        vert_src_table = mesh_subdivision_result.vert_src_table
-        # [V_, 2]
-
-        sub_mesh_graph = mesh_subdivision_result.mesh_graph
-
-        vert_src_table = mesh_subdivision_result.vert_src_table
-
-        sub_vert_obj_kdx_ab = vert_obj_kdx[vert_src_table]
-        # [V_, 2]
-
-        sub_vert_obj_kdx = torch.where(
-            sub_vert_obj_kdx_ab[:, 0] == sub_vert_obj_kdx_ab[:, 1],
-            sub_vert_obj_kdx_ab[:, 0],
-            0,
-        )
-        # [V_]
-
-        sub_face_obj_idx = (
-            sub_vert_obj_kdx[sub_mesh_graph.f_to_vvv].max(-1).values - 1
-        ).to(utils.CPU_DEVICE)
-        # [F_]
-
-        O = self.vert_ballot_box.shape[1]
-
-        target_faces: list[list[int]] = [list() for _ in range(O)]
-
-        for f, obj_idx in enumerate(sub_face_obj_idx):
-            if 0 <= obj_idx:
-                target_faces[int(obj_idx)].append(f)
-
-        return MeshSegmentationResult(
-            mesh_subdivision_result,
-            sub_vert_obj_kdx,
-            sub_face_obj_idx,
-            target_faces,
-        )
+        ballot_weight=bary_coord,  # [..., 3]
+        ballot_conf=bary_coord * ballot_conf[..., None],  # [..., 3]
+    )
 
 
 @beartype
-def segment_mesh(
+def face_vert_vote(
     *,
+    vert_weight: typing.Optional[torch.Tensor],  # [V + 1, O]
+    vert_conf: typing.Optional[torch.Tensor],  # [V + 1, O]
+
     avatar_blender: avatar_utils.AvatarBlender,
 
     camera_config: camera_utils.CameraConfig,
@@ -349,12 +102,18 @@ def segment_mesh(
 
     blending_param: typing.Any,
 
-    obj_mask: list[typing.Iterable[torch.Tensor]],  # [H, W]],  # [K, H, W]
+    obj_mask: list[typing.Iterable[torch.Tensor]],
+    # [O][H, W]] or [O][K, H, W]
+
+    mask_to_conf: typing.Callable[[torch.Tensor], torch.Tensor],
 
     batch_size: int,
 
     device: typing.Optional[torch.device],
-) -> MeshSegmentor:
+) -> tuple[
+    torch.Tensor,  # vert_weight[V + 1, O]
+    torch.Tensor,  # vert_conf[V + 1, O]
+]:
     H, W = camera_config.img_h, camera_config.img_w
 
     O = len(obj_mask)
@@ -372,18 +131,29 @@ def segment_mesh(
     avatar_model: avatar_utils.AvatarModel = avatar_blender.get_avatar_model()
 
     mesh_data = avatar_model.mesh_data
+    mesh_graph = mesh_data.mesh_graph
 
-    mesh_segmentor: MeshSegmentor = MeshSegmentor.from_empty(
-        mesh_graph=mesh_data.mesh_graph,
-        objs_cnt=O,
-        ballot_cnt_dtype=torch.float64,
-        ballot_box_dtype=torch.float64,
-        device=device,
+    V = mesh_graph.verts_cnt
+
+    if vert_weight is None:
+        vert_weight = torch.zeros(
+            (V + 1, O), dtype=torch.float64, device=device)
+
+    if vert_conf is None:
+        vert_conf = torch.zeros(
+            (V + 1, O), dtype=torch.float64, device=device)
+
+    utils.check_shapes(
+        vert_weight, (V + 1, O),
+        vert_conf, (V + 1, O),
     )
 
     with torch.no_grad():
         for B, batch_idx in tqdm.tqdm(dataset_utils.BatchIdxIterator(
-                shape, batch_size=batch_size, shuffle=False)):
+            shape,
+            batch_size=batch_size,
+            shuffle=False,
+        )):
             cur_camera_transform = camera_transform[batch_idx].to(device)
 
             cur_blending_param = blending_param[batch_idx].to(device)
@@ -410,11 +180,336 @@ def segment_mesh(
                     cur_mask = next(obj_mask[o])
                     # [H, W]
 
-                    mesh_segmentor.vote(
-                        o,
-                        cur_pix_to_face[b],  # [H, W]
-                        cur_bary_coord[b],  # [H, W, 3]
-                        (cur_mask * 2 - 1).to(device),  # [H, W]
+                    if o == 2:
+                        vision_utils.show_image(
+                            utils.rct(cur_mask * 255, dtype=torch.uint8))
+
+                    face_vert_vote_ras(
+                        vert_weight=vert_weight[:, o],  # [V + 1]
+                        vert_conf=vert_conf[:, o],  # [V + 1]
+
+                        f_to_vvv=cur_avatar_model.mesh_graph.f_to_vvv,
+                        # [F, 3]
+
+                        face_idx=cur_pix_to_face[b],  # [H, W]
+                        bary_coord=cur_bary_coord[b],  # [H, W, 3]
+
+                        ballot_conf=mask_to_conf(cur_mask)[0, ...].to(device),
+                        # [H, W]
                     )
 
-    return mesh_segmentor
+    return vert_weight, vert_conf
+
+
+@beartype
+def refine_vert_conf(
+    *,
+    vert_conf: torch.Tensor,  # [V, O]
+
+    vert_pos: torch.Tensor,  # [V, 3]
+
+    kernel: typing.Callable[[torch.Tensor], torch.Tensor],
+
+    iters_cnt: int,
+) -> torch.Tensor:  # [V, O]
+    V, O = -1, -2
+
+    V, O = utils.check_shapes(
+        vert_conf, (V, O),
+        vert_pos, (V, 3),
+    )
+
+    vert_weight = 1 / (1e-2 + kernel_splatting_utils.calc_density(
+        vert_pos,  # [V, 3]
+        kernel,
+    ))
+    # [V]
+
+    for _ in range(iters_cnt):
+        vert_conf = kernel_splatting_utils.interp(
+            vert_pos,  # [V, 3]
+            vert_conf,  # [V, K]
+            vert_weight,  # [V]
+            vert_pos,  # [V, 3]
+            kernel,
+        )
+
+    return vert_conf
+
+
+@beartype
+@dataclasses.dataclass
+class AssignSubMeshFacesResult:
+    mesh_subdivide_result: mesh_utils.MeshSubdivideResult
+    sub_vert_obj_idx: torch.Tensor  # [V_]
+    sub_face_obj_idx: torch.Tensor  # [F_]
+    target_faces: list[list[int]]  # [O]
+
+
+@beartype
+def assign_sub_mesh_faces(
+    *,
+    mesh_graph: mesh_utils.MeshGraph,
+    vert_conf: torch.Tensor,  # [V + 1, O]
+) -> AssignSubMeshFacesResult:
+    V, F = mesh_graph.verts_cnt, mesh_graph.faces_cnt
+
+    O = utils.check_shapes(vert_conf, (V + 1, -1))
+
+    vert_obj_idx = vert_conf[:-1].max(-1).indices
+    # [V]
+
+    mesh_subdivide_result = mesh_graph.subdivide()
+
+    sub_mesh_graph = mesh_subdivide_result.mesh_graph
+
+    vert_src_table = mesh_subdivide_result.vert_src_table
+    # [V_, 2]
+
+    sub_vert_obj_idx_ab = vert_obj_idx[vert_src_table]
+    # [V_, 2]
+
+    sub_vert_obj_idx = torch.where(
+        sub_vert_obj_idx_ab[:, 0] == sub_vert_obj_idx_ab[:, 1],
+        sub_vert_obj_idx_ab[:, 0],
+        -1,
+    )
+    # [V_]
+
+    sub_face_obj_idx = (
+        sub_vert_obj_idx[sub_mesh_graph.f_to_vvv].max(-1).values
+    ).to(utils.CPU_DEVICE)
+    # [F_]
+
+    target_faces: list[list[int]] = [list() for _ in range(O)]
+
+    for f, obj_idx in enumerate(sub_face_obj_idx):
+        if 0 <= obj_idx:
+            target_faces[int(obj_idx)].append(f)
+
+    return AssignSubMeshFacesResult(
+        mesh_subdivide_result=mesh_subdivide_result,
+        sub_vert_obj_idx=sub_vert_obj_idx,
+        sub_face_obj_idx=sub_face_obj_idx,
+        target_faces=target_faces,
+    )
+
+
+@beartype
+@dataclasses.dataclass
+class ExtractSubMeshDataResult:
+    mesh_subdivide_result: mesh_utils.MeshSubdivideResult
+
+    total_sub_vert_pos_a: torch.Tensor  # [V_, 3]
+    total_sub_vert_pos_b: torch.Tensor  # [V_, 3]
+    total_sub_vert_t: torch.Tensor  # [V_]
+    total_sub_vert_pos: torch.Tensor  # [V_, 3]
+
+    total_sub_mesh_data: mesh_utils.MeshData
+
+    sub_mesh_extract_result: list[mesh_utils.MeshExtractResult]
+    sub_mesh_data: list[mesh_utils.MeshData]
+
+    remaining_sub_mesh_extract_result: mesh_utils.MeshExtractResult
+    remaining_sub_mesh_data: mesh_utils.MeshData
+
+
+@beartype
+def extract_sub_mesh_data(
+    *,
+    mesh_data: mesh_utils.MeshData,
+    mesh_subdivide_result: mesh_utils.MeshSubdivideResult,
+    target_faces: list[list[int]]  # [O]
+):
+    O = len(target_faces)
+
+    vert_src_table = mesh_subdivide_result.vert_src_table
+    # [V_, 2]
+
+    V_ = vert_src_table.shape[0]
+
+    total_vert_pos = mesh_data.vert_pos[vert_src_table]
+    # [V_, 2, 3]
+
+    total_sub_vert_pos_a = total_vert_pos[:, 0]
+    total_sub_vert_pos_b = total_vert_pos[:, 1]
+    # [V_, 3]
+
+    total_sub_mesh_graph = mesh_subdivide_result.mesh_graph
+
+    T_LB = 0.1
+    T_RB = 0.9
+
+    raw_vert_t = utils.zeros(
+        like=mesh_data.vert_pos, shape=(V_,)
+    ).requires_grad_()
+
+    optimizer = torch.optim.Adam(
+        [raw_vert_t],
+
+        lr=max(
+            1e-5,
+
+            (
+                mesh_data.vert_pos.max(0).values -
+                mesh_data.vert_pos.min(0).values
+            ).mean().item() * 1e-4
+        ),
+
+        betas=(0.5, 0.5),
+    )
+
+    vert_optimizable_table = vert_src_table[:, 0] != vert_src_table[:, 1]
+
+    sub_mesh_graphs = [
+        total_sub_mesh_graph.extract(
+            target_faces=target_faces[o],
+            remove_orphan_vert=False,
+        ).mesh_graph
+        for o in range(O)
+    ]
+
+    for epoch_i in tqdm.tqdm(range(800)):
+        optimizer.zero_grad()
+
+        total_sub_vert_t = torch.where(
+            vert_optimizable_table,
+            utils.smooth_clamp(raw_vert_t, T_LB, T_RB),
+            0.5,
+        )
+        # [V_] [0.1, 0.9]
+
+        cur_total_sub_vert_pos = \
+            total_sub_vert_pos_a * (1 - total_sub_vert_t)[..., None] + \
+            total_sub_vert_pos_b * total_sub_vert_t[..., None]
+
+        loss = 0.0
+
+        for o in range(O):
+            loss = loss + mesh_utils.MeshData(
+                sub_mesh_graphs[o],
+                cur_total_sub_vert_pos,
+            ).l2_uni_lap_smoothness
+
+        loss.backward()
+
+        optimizer.step()
+
+    total_sub_vert_t = torch.where(
+        vert_src_table[:, 0] == vert_src_table[:, 1],
+        0.5,
+        utils.smooth_clamp(raw_vert_t, T_LB, T_RB),
+    )
+    # [V_] [0.1, 0.9]
+
+    total_sub_vert_pos = \
+        total_sub_vert_pos_a * (1 - total_sub_vert_t)[..., None] + \
+        total_sub_vert_pos_b * total_sub_vert_t[..., None]
+    # [V_, 3]
+
+    total_sub_mesh_data = mesh_utils.MeshData(
+        mesh_graph=total_sub_mesh_graph,
+        vert_pos=total_sub_vert_pos,
+    )
+
+    remaining_faces = set(range(total_sub_mesh_graph.faces_cnt))
+
+    sub_mesh_extract_result: list[mesh_utils.MeshExtractResult] = list()
+    sub_mesh_data: list[mesh_utils.MeshData] = list()
+
+    for o in range(O):
+        remaining_faces.difference_update(target_faces[o])
+
+        cur_sub_mesh_extract_result = total_sub_mesh_graph.extract(
+            target_faces=target_faces[o],
+            remove_orphan_vert=True,
+        )
+
+        sub_mesh_extract_result.append(cur_sub_mesh_extract_result)
+
+        sub_mesh_data.append(mesh_utils.MeshData(
+            mesh_graph=cur_sub_mesh_extract_result.mesh_graph,
+            vert_pos=total_sub_vert_pos[
+                cur_sub_mesh_extract_result.vert_src_table],
+        ))
+
+    skin_sub_mesh_extract_result = total_sub_mesh_graph.extract(
+        target_faces=remaining_faces,
+        remove_orphan_vert=True,
+    )
+
+    remaining_sub_mesh_data = mesh_utils.MeshData(
+        mesh_graph=skin_sub_mesh_extract_result.mesh_graph,
+
+        vert_pos=total_sub_vert_pos[
+            skin_sub_mesh_extract_result.vert_src_table],
+    )
+
+    return ExtractSubMeshDataResult(
+        mesh_subdivide_result=mesh_subdivide_result,
+
+        total_sub_vert_pos_a=total_sub_vert_pos_a,
+        total_sub_vert_pos_b=total_sub_vert_pos_b,
+        total_sub_vert_t=total_sub_vert_t,
+        total_sub_vert_pos=total_sub_vert_pos,
+
+        total_sub_mesh_data=total_sub_mesh_data,
+
+        sub_mesh_extract_result=sub_mesh_extract_result,
+        sub_mesh_data=sub_mesh_data,
+
+        remaining_sub_mesh_extract_result=skin_sub_mesh_extract_result,
+        remaining_sub_mesh_data=remaining_sub_mesh_data,
+    )
+
+
+@beartype
+@dataclasses.dataclass
+class ExtractSmplxSubModelDataResult:
+    extract_sub_mesh_data_result: ExtractSubMeshDataResult
+
+    subdivide_model_data_result: smplx_utils.ModelDataSubdivideResult
+
+    sub_model_data_extract_result: list[smplx_utils.ModelDataExtractResult]
+
+    remaining_sub_model_data_extract_result: smplx_utils.ModelDataExtractResult
+
+
+@beartype
+def extract_smplx_sub_model_data(
+    *,
+    model_data: smplx_utils.ModelData,
+    blending_coeff_field: typing.Optional[smplx_utils.BlendingCoeffField],
+    extract_sub_mesh_data_result: ExtractSubMeshDataResult,
+):
+    sub_mesh_extract_result = \
+        extract_sub_mesh_data_result.sub_mesh_extract_result
+
+    subdivide_model_data_result = model_data.subdivide(
+        mesh_subdivide_result=extract_sub_mesh_data_result.mesh_subdivide_result,
+
+        new_vert_t=extract_sub_mesh_data_result.total_sub_vert_t,
+    )
+
+    total_sub_model_data = subdivide_model_data_result.model_data
+
+    def _f(extract_result):
+        r = total_sub_model_data.extract(
+            mesh_extract_result=extract_result,
+        )
+
+        if blending_coeff_field is not None:
+            r.model_data = blending_coeff_field.query_model_data(r.model_data)
+
+        return r
+
+    return ExtractSmplxSubModelDataResult(
+        extract_sub_mesh_data_result=extract_sub_mesh_data_result,
+
+        subdivide_model_data_result=subdivide_model_data_result,
+
+        sub_model_data_extract_result=list(map(_f, sub_mesh_extract_result)),
+
+        remaining_sub_model_data_extract_result=_f(
+            extract_sub_mesh_data_result.remaining_sub_mesh_extract_result),
+    )

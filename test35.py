@@ -496,7 +496,7 @@ def main2():
     print(f"{total_sub_vert_t.max()=}")
 
     model_data_subdivision_result = model_data.subdivide(
-        mesh_subdivision_result=mesh_segment_result.mesh_subdivision_result,
+        mesh_subdivide_result=mesh_segment_result.mesh_subdivision_result,
         new_vert_t=raw_vert_t,
     )
 
@@ -505,10 +505,10 @@ def main2():
     for k in range(K):
         obj = obj_list[k]
 
-        model_data_extraction_result = total_sub_model_data.extract(
+        model_data_extract_result = total_sub_model_data.extract(
             target_faces=mesh_segment_result.target_faces[k])
 
-        obj_model_data = model_data_extraction_result.model_data
+        obj_model_data = model_data_extract_result.model_data
 
         obj_model_data.show()
 

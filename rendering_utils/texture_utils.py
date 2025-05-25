@@ -23,12 +23,10 @@ def tex_coord_to_img_idx(
     assert 0 < img_h
     assert 0 < img_w
 
-    ret = utils.empty_like(tex_coord)
-
-    ret[..., 0] = (img_h - 1) * (1 - tex_coord[..., 1])
-    ret[..., 1] = (img_w - 1) * tex_coord[..., 0]
-
-    return ret
+    return torch.stack([
+        (img_h - 1) * (1 - tex_coord[..., 1]),  # [....]
+        (img_w - 1) * tex_coord[..., 0],  # [...]
+    ], dim=-1)  # [..., 2]
 
 
 @beartype
@@ -39,15 +37,13 @@ def img_idx_to_tex_coord(
 ) -> torch.Tensor:  # [..., 2]
     utils.check_shapes(img_coord, (..., 2))
 
-    assert 0 < img_h
-    assert 0 < img_w
+    assert 1 < img_h
+    assert 1 < img_w
 
-    ret = utils.empty_like(img_coord)
-
-    ret[:, 0] = img_coord[:, 1] / (img_w - 1)
-    ret[:, 1] = 1 - img_coord[:, 0] / (img_h - 1)
-
-    return ret
+    return torch.stack([
+        img_coord[:, 1] / (img_w - 1),  # [....]
+        1 - img_coord[:, 0] / (img_h - 1),  # [...]
+    ], dim=-1)  # [..., 2]
 
 
 @beartype
@@ -92,12 +88,11 @@ def rasterize_texture_map(
         device=utils.check_devices(tex_vert_pos, tex_faces),
     )
 
-    oven_tex_vert_pos = torch.empty(
-        (TV, 3), dtype=tex_vert_pos.dtype, device=tex_vert_pos.device)
-
-    oven_tex_vert_pos[:, 0] = (tex_vert_pos[:, 0] - 0.5) * tex_ws
-    oven_tex_vert_pos[:, 1] = (tex_vert_pos[:, 1] - 0.5) * tex_hs
-    oven_tex_vert_pos[:, 2] = 0
+    oven_tex_vert_pos = torch.stack([
+        (tex_vert_pos[:, 0] - 0.5) * tex_ws,  # [TV]
+        (tex_vert_pos[:, 1] - 0.5) * tex_hs,  # [TV]
+        utils.dummy_full(0, like=tex_vert_pos, shape=(TV,))
+    ], dim=-1)  # [TV, 3]
 
     ret = rasterize_mesh(
         oven_tex_vert_pos,
@@ -259,11 +254,11 @@ def bake_texture(
         (tex_vert_color_pca *
             tex_vert_color_std[:, :, None]).transpose(-2, -1),
 
-        torch.eye(
-            C,
+        utils.dummy_eye(
+            shape=(TV + 1, C, C),
             dtype=tex_vert_color_pca.dtype,
-            device=tex_vert_color_pca.device
-        ).expand(TV + 1, C, C)
+            device=tex_vert_color_pca.device,
+        )
     ).inverse()
     # [F, C, C]
 
@@ -405,7 +400,7 @@ def sample_texture(
     sampling_mode: SamplingMode,
 
     int_type: torch.dtype = torch.int32,
-):
+) -> torch.Tensor:  # [..., C]
     int_info = torch.iinfo(int_type)
 
     H, W, C = -1, -2, -3

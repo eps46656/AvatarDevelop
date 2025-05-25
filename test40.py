@@ -10,8 +10,7 @@ import torchrbf
 import trimesh
 from beartype import beartype
 
-from . import (config, mesh_utils, people_snapshot_utils, segment_utils,
-               smplx_utils, utils, vision_utils)
+from . import (config, mesh_utils, people_snapshot_utils, smplx_utils, utils, video_seg_utils, vision_utils)
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]

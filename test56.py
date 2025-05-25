@@ -10,23 +10,20 @@ import tqdm
 from beartype import beartype
 
 from . import (camera_utils, config, mesh_utils, people_snapshot_utils,
-               smplx_utils, tex_avatar_utils, training_utils,
-               transform_utils, utils, video_seg_utils, vision_utils)
-
-SEG_DIR = config.DIR / "video_seg_2025_0514_1"
-
-MESH_SEG_DIR = config.DIR / "mesh_seg_2025_0514_1"
+               smplx_utils, tex_avatar_utils, training_utils, transform_utils,
+               utils, video_seg_utils, vision_utils)
 
 DTYPE = torch.float64
 DEVICE = utils.CUDA_DEVICE
 
-SUBJECT_NAME = "female-1-casual"
+SUBJECT_NAME = "female-3-casual"
 
-VIDEO_SEG_DIR = config.DIR / "video_seg_2025_0514_1"
+
+VIDEO_SEG_DIR = config.DIR / "video_seg_2025_0520_1"
 
 MESH_SEG_DIR = config.DIR / "mesh_seg_2025_0514_1"
 
-TEX_AVATAR_DIR = config.DIR / "tex_avatar_2025_0516_1"
+TEX_AVATAR_DIR = config.DIR / "tex_avatar_2025_0520_1"
 
 
 @beartype
@@ -87,8 +84,13 @@ def main1():
     img = avatar_pack.img
     fps = avatar_pack.fps
 
-    init_tex = torch.rand(
-        (3, 1000, 1000), dtype=DTYPE, device=DEVICE)
+    if True:
+        init_tex = torch.rand(
+            (3, 1000, 1000), dtype=DTYPE, device=DEVICE)
+    else:
+        init_tex = vision_utils.read_image(
+            TEX_AVATAR_DIR / "tex_1747581876.png",
+        ).to(DEVICE, DTYPE)
 
     trainer = training_utils.Trainer(
         TEX_AVATAR_DIR,
@@ -100,12 +102,12 @@ def main1():
 
                 guidance_scale=7.5,
                 controlnet_conditioning_scale=1.0,
-                num_inference_steps=20,
+                num_inference_steps=10,
 
-                init_ref_imgs_cnt=3,
+                init_ref_imgs_cnt=1,
                 ref_img_gamma=0.1**(1 / 12),
 
-                lr=1e-4,
+                lr=1e-1,
                 betas=(0.5, 0.5),
                 gamma=0.95,
             ),
@@ -127,7 +129,7 @@ def main1():
                     )[0],
 
                     skin_mask=vision_utils.read_video_mask(
-                        VIDEO_SEG_DIR / "refined_mask_SKIN.avi",
+                        VIDEO_SEG_DIR / video_seg_utils.REFINED_SKIN_MASK_FILENAME,
                         dtype=DTYPE,
                         device=utils.CPU_DEVICE,
                         disk_mem=True,
@@ -138,6 +140,7 @@ def main1():
             ),
 
             text_prompt="a female with underwear, realistic, photorealistic, natural skin texture, high detail",
+
             negative_text_prompt="anime, cartoon, illustration, drawing, painting, sketch, unrealistic, 3d render, cgi, low quality, low resolution, blurry, extra limbs, mutated hands, deformed, bad anatomy",
 
             init_tex=init_tex,

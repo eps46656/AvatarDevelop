@@ -137,7 +137,7 @@ class AvatarBlender(torch.nn.Module):
         *,
         target_faces: typing.Optional[typing.Iterable[int]] = None,
         target_edges: typing.Optional[typing.Iterable[int]] = None,
-    ) -> mesh_utils.MeshSubdivisionResult:
+    ) -> mesh_utils.MeshSubdivideResult:
         raise NotImplementedError()
 
     def forward(self, blending_param) -> AvatarModel:

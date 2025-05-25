@@ -15,15 +15,9 @@ class FaceCoordResult:
 
 @beartype
 def get_face_coord(mesh_data: mesh_utils.MeshData) -> FaceCoordResult:
-    assert mesh_data.face_vert_pos.isfinite().all()
-
     vp_a = mesh_data.face_vert_pos[..., 0, :]
     vp_b = mesh_data.face_vert_pos[..., 1, :]
     vp_c = mesh_data.face_vert_pos[..., 2, :]
-
-    assert vp_a.isfinite().all()
-    assert vp_b.isfinite().all()
-    assert vp_c.isfinite().all()
 
     g = mesh_data.face_mean
     # [..., 3]

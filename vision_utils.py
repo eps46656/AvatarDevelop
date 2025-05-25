@@ -30,28 +30,6 @@ channels_cnt_table = {
 
 
 @beartype
-def normalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.float32,
-    device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:
-    return img.clamp(0, k).div(k, rounding_mode=None).to(device, dtype)
-
-
-@beartype
-def denormalize_image(
-    img: torch.Tensor,
-    *,
-    k: int = 255,
-    dtype: torch.dtype = torch.uint8,
-    device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:
-    return (img * k).round().clamp(0, k).to(device, dtype)
-
-
-@beartype
 def read_image(path: os.PathLike) -> torch.Tensor:
     img = torchvision.io.read_image(
         path, torchvision.io.ImageReadMode.RGB)
@@ -86,6 +64,27 @@ def write_image(
         return
 
     raise utils.MismatchException()
+
+
+@beartype
+def show_image(title: str, img: torch.Tensor) -> None:
+    if img.ndim == 2:
+        img = img[None, :, :]
+
+    C, H, W = utils.check_shapes(img, (-1, -2, -3))
+
+    img_np = img.numpy(force=True)
+
+    match C:
+        case 1:
+            img_np = img_np.squeeze(0)
+        case 3:
+            img_np = cv.cvtColor(
+                einops.rearrange(img_np, "c h w -> h w c"),
+                cv.COLOR_RGB2BGR)
+
+    cv.imshow(title, img_np)
+    cv.waitKey(1)
 
 
 @beartype
