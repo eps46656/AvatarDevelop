@@ -13,7 +13,7 @@ def main1():
     video_path = config.DIR / "people_snapshot_public/female-1-casual/female-1-casual.mp4"
 
     video, fps = vision_utils.read_video(
-        video_path, vision_utils.ColorType.RGB)
+        video_path, "RGB")
 
     video_seg_utils.segment(
         src=[i for i in video],  # [T, C, H, W]
@@ -32,12 +32,12 @@ def main2():
     ]
 
     person_mask_video = vision_utils.VideoReader(
-        seg_dir / video_seg_utils.PERSON_MASK_FILENAME, vision_utils.ColorType.GRAY)
+        seg_dir / video_seg_utils.PERSON_MASK_FILENAME, "GRAY")
 
     mask_videos = {
         obj_type:  vision_utils.VideoReader(
             seg_dir /
-            video_seg_utils.get_obj_mask_filename(obj_type), vision_utils.ColorType.GRAY)
+            video_seg_utils.get_obj_mask_filename(obj_type), "GRAY")
 
         for obj_type in obj_type_list
     }
@@ -46,7 +46,7 @@ def main2():
         SEG_DIR / "mask_SKIN.avi",
         height=person_mask_video.height,
         width=person_mask_video.width,
-        color_type=vision_utils.ColorType.GRAY,
+        color_type="GRAY",
         fps=person_mask_video.fps,
     )
 
@@ -78,14 +78,14 @@ def main2():
 
     video_reader = vision_utils.VideoReader(
         SEG_DIR / "mask_SKIN.avi",
-        color_type=vision_utils.ColorType.GRAY,
+        color_type="GRAY",
     )
 
     refined_video_writer = vision_utils.VideoWriter(
         SEG_DIR / "refined_mask_SKIN.avi",
         height=person_mask_video.height,
         width=person_mask_video.width,
-        color_type=vision_utils.ColorType.GRAY,
+        color_type="GRAY",
         fps=video_reader.fps,
     )
 

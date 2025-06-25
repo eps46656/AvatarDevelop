@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import argparse
 import collections
 import dataclasses
 import datetime
 import math
-import os
 import pathlib
 import shlex
 import sqlite3
@@ -34,7 +35,7 @@ class CheckpointMeta:
 
 @beartype
 class LogDatabase:
-    def __init__(self, db_path: os.PathLike):
+    def __init__(self, db_path: utils.PathLike):
         super().__init__()
 
         db_path = utils.to_pathlib_path(db_path)
@@ -270,7 +271,7 @@ class Trainer:
     def _get_cancel_token_path(proj_dir: pathlib.Path):
         return proj_dir / f"cancel_token.txt"
 
-    def __init__(self, proj_dir: os.PathLike, trainer_core: TrainerCore):
+    def __init__(self, proj_dir: utils.PathLike, trainer_core: TrainerCore):
         self.__proj_dir = utils.to_pathlib_path(proj_dir)
 
         if not self.__proj_dir.exists():
@@ -350,11 +351,13 @@ class Trainer:
 
         self.__cur_time = ckpt_meta.time
 
-    def load_latest(self) -> None:
+    def load_latest(self) -> Trainer:
         ckpt_meta = self.get_latest_ckpt_meta()
 
         if ckpt_meta is not None:
             self.load(ckpt_meta.id)
+
+        return self
 
     def save(
         self,

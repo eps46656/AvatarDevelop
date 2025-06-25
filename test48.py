@@ -54,7 +54,7 @@ def main1():
         config.DIR / f"nor_{utils.timestamp_sec()}.avi",
         height=subject_data.camera_config.img_h,
         width=subject_data.camera_config.img_w,
-        color_type=vision_utils.ColorType.RGB,
+        color_type="RGB",
         fps=subject_data.fps,
     )
 

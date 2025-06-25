@@ -195,8 +195,7 @@ class InverseMultiquadricRadialFunc(RadialFunc):
         self.eps = state_dict["eps"]
 
     def __call__(self, dist: torch.Tensor) -> torch.Tensor:
-        k = self.eps**2
-        return k * (dist.square() + k).rsqrt()
+        return (1 + (self.eps * dist).square()).rsqrt()
 
 
 @beartype
@@ -251,5 +250,39 @@ class ThinPlateSplineRadialFunc(RadialFunc):
         return
 
     def __call__(self, dist: torch.Tensor) -> torch.Tensor:
-        sq_dist = dist.square().clamp(utils.EPS[dist.dtype], None)
-        return 0.5 * sq_dist * torch.log(sq_dist)
+        return dist.square() * dist.clamp(utils.EPS[dist.dtype], None).log()
+
+
+@beartype
+class WendlandRadialFunc(RadialFunc):
+    def __init__(self, radius: float):
+        assert 0 < radius
+        self.radius = radius
+
+    @property
+    def name(self) -> str:
+        return "wendland"
+
+    @property
+    def scale_variant(self) -> bool:
+        return True
+
+    @property
+    def min_degree(self) -> int:
+        return 0
+
+    def state_dict(self) -> collections.OrderedDict[str, object]:
+        return collections.OrderedDict()
+
+    def load_state_dict(self, state_dict: typing.Mapping[str, object]) -> None:
+        assert state_dict["name"] == self.name
+        return
+
+    def __call__(self, dist: torch.Tensor) -> torch.Tensor:
+        r = dist / self.radius
+
+        return torch.where(
+            r < 1.0,
+            (1 - r).pow(4) * (4 * r + 1),
+            0,
+        )

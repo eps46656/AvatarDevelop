@@ -26,7 +26,7 @@ def tex_coord_to_img_idx(
     return torch.stack([
         (img_h - 1) * (1 - tex_coord[..., 1]),  # [....]
         (img_w - 1) * tex_coord[..., 0],  # [...]
-    ], dim=-1)  # [..., 2]
+    ], -1)  # [..., 2]
 
 
 @beartype
@@ -43,7 +43,7 @@ def img_idx_to_tex_coord(
     return torch.stack([
         img_coord[:, 1] / (img_w - 1),  # [....]
         1 - img_coord[:, 0] / (img_h - 1),  # [...]
-    ], dim=-1)  # [..., 2]
+    ], -1)  # [..., 2]
 
 
 @beartype
@@ -84,7 +84,7 @@ def rasterize_texture_map(
 
     camera_transform = transform_utils.ObjectTransform.from_matching(
         "RUB",
-        pos=torch.tensor([0, 0, length], dtype=utils.FLOAT),
+        pos=torch.tensor([0, 0, length], dtype=tex_vert_pos.dtype),
         device=utils.check_devices(tex_vert_pos, tex_faces),
     )
 
@@ -92,7 +92,7 @@ def rasterize_texture_map(
         (tex_vert_pos[:, 0] - 0.5) * tex_ws,  # [TV]
         (tex_vert_pos[:, 1] - 0.5) * tex_hs,  # [TV]
         utils.dummy_full(0, like=tex_vert_pos, shape=(TV,))
-    ], dim=-1)  # [TV, 3]
+    ], -1)  # [TV, 3]
 
     ret = rasterize_mesh(
         oven_tex_vert_pos,
@@ -142,23 +142,22 @@ def bake_texture(
     tex_f_to_vvv = torch.cat([
         avatar_model.tex_mesh_graph.f_to_vvv,  # [F, 3]
 
-        torch.tensor(
-            [[TV, TV, TV]],
-            dtype=avatar_model.tex_mesh_graph.f_to_vvv.dtype,
-            device=avatar_model.tex_mesh_graph.f_to_vvv.device
-        ),  # [1, 3]
-    ], dim=0)
+        utils.full(
+            TV,
+            like=avatar_model.tex_mesh_graph.f_to_vvv,
+            shape=(1, 3),
+        ),
+    ], 0)
     # [F + 1, 3]
 
     tex_vert_pos = torch.cat([
         avatar_model.tex_vert_pos,  # [TV, 2]
 
-        torch.tensor(
-            [[0, 0]],
-            dtype=avatar_model.tex_vert_pos.dtype,
-            device=avatar_model.tex_vert_pos.device
-        ),  # [1, 2]
-    ], dim=0)
+        utils.zeros(
+            like=avatar_model.tex_vert_pos,
+            shape=(1, 2),
+        ),
+    ], 0)
     # [TV + 1, 2]
 
     shape = utils.broadcast_shapes(
@@ -187,10 +186,10 @@ def bake_texture(
             shape, batch_size=batch_size, batches_cnt=batches_cnt, shuffle=False)):
         utils.mem_clear()
 
-        cur_camera_transform = camera_transform[batch_idx]
-        cur_blending_param = blending_param[batch_idx]
-        cur_mask = mask[batch_idx]
-        cur_img = img[batch_idx]
+        cur_camera_transform = camera_transform[batch_idx].to(device)
+        cur_blending_param = blending_param[batch_idx].to(device)
+        cur_mask = mask[batch_idx].to(device)
+        cur_img = img[batch_idx].to(device)
 
         avatar_model = avatar_blender(cur_blending_param)
 
@@ -329,7 +328,199 @@ def bake_texture(
 
     tex = (tex_vert_inlier_color_mean[tex_f_to_vvv[
         (tex_pix_to_face + (F + 1)) % (F + 1)
-    ]] * tex_bary_coord[..., None]).sum(dim=-2)
+    ]] * tex_bary_coord[..., None]).sum(-2)
+    # [tex_h, tex_w, C]
+
+    utils.print_cur_pos()
+    print(f"{tex.shape=})")
+
+    return tex
+
+
+@beartype
+@utils.mem_clear
+@torch.no_grad()
+def bake_texture_avg(
+    *,
+    camera_config: camera_utils.CameraConfig,
+    camera_transform: transform_utils.ObjectTransform,  # [...]
+
+    img: torch.Tensor,  # [..., C, H, W]
+
+    mask: torch.Tensor,  # [..., 1, H, W]
+    blending_param: typing.Any,  # [...]
+
+    avatar_blender: avatar_utils.AvatarBlender,
+
+    tex_h: int,
+    tex_w: int,
+
+    batch_size: int = 0,
+    batches_cnt: int = 0,
+
+    device: torch.device,
+) -> torch.Tensor:  # [tex_h, tex_w, C]
+    assert 0 < tex_h
+    assert 0 < tex_w
+
+    avatar_model: avatar_utils.AvatarModel = avatar_blender.get_avatar_model()
+
+    C, H, W = img.shape[-3:]
+
+    TV = avatar_model.tex_verts_cnt
+    F = avatar_model.faces_cnt
+
+    tex_f_to_vvv = torch.cat([
+        avatar_model.tex_mesh_graph.f_to_vvv,  # [F, 3]
+
+        utils.full(
+            TV,
+            like=avatar_model.tex_mesh_graph.f_to_vvv,
+            shape=(1, 3),
+        ),
+    ], 0)
+    # [F + 1, 3]
+
+    tex_vert_pos = torch.cat([
+        avatar_model.tex_vert_pos,  # [TV, 2]
+
+        utils.zeros(
+            like=avatar_model.tex_vert_pos,
+            shape=(1, 2),
+        ),
+    ], 0)
+    # [TV + 1, 2]
+
+    shape = utils.broadcast_shapes(
+        camera_transform,
+        img.shape[:-3],
+        mask.shape[:-3],
+        blending_param,
+    )
+
+    camera_transform = camera_transform.expand(shape)
+    img = img.expand(*shape, C, H, W)
+    mask = mask.expand(*shape, 1, H, W)
+    blending_param = blending_param.expand(shape)
+
+    tex_vert_color_pca_calculator = pca_utils.PCACalculator(
+        n=TV + 1,
+        dim=C,
+        dtype=torch.float64,
+        device=device,
+    )
+
+    for B, batch_idx in tqdm.tqdm(dataset_utils.BatchIdxIterator(
+            shape, batch_size=batch_size, batches_cnt=batches_cnt, shuffle=False)):
+        utils.mem_clear()
+
+        cur_camera_transform = camera_transform[batch_idx].to(device)
+        cur_blending_param = blending_param[batch_idx].to(device)
+        cur_mask = mask[batch_idx].to(device)
+        cur_img = img[batch_idx].to(device)
+
+        avatar_model = avatar_blender(cur_blending_param)
+
+        mesh_ras_result = rasterize_mesh(
+            vert_pos=avatar_model.vert_pos,
+            faces=avatar_model.mesh_graph.f_to_vvv,
+            camera_config=camera_config,
+            camera_transform=cur_camera_transform,
+            faces_per_pixel=1,
+        )
+
+        pix_to_face = mesh_ras_result.pix_to_face[..., 0]
+        # [..., H, W, 1] -> [..., H, W]
+
+        bary_coord: torch.Tensor = mesh_ras_result.bary_coord[..., 0, :]
+        # [..., H, W, 1, 3] -> [..., H, W, 3]
+
+        pix_to_face = torch.where(
+            0.5 <= cur_mask.reshape(B, H, W),
+            pix_to_face,
+            -1,
+        )
+        # discard pixels not on person
+
+        pix_to_face = (pix_to_face + (F + 1)) % (F + 1)
+
+        pix_to_tex_vert = tex_f_to_vvv[pix_to_face]
+        # [..., H, W, 3]
+
+        pix_to_tex_pos = (
+            tex_vert_pos[pix_to_tex_vert]  # [..., H, W, 3, 2]
+            *
+            bary_coord[..., None]  # [..., H, W, 3] -> [..., H, W, 3, 1]
+        ).sum(-2)
+        # [..., H, W, 2]
+
+        ref_img = einops.rearrange(
+            cur_img.reshape(B, C, H, W), "b c h w -> b h w c")
+        # [..., H, W, C]
+
+        utils.mem_clear()
+
+        tex_vert_color_pca_calculator.scatter_feed(
+            idx=tex_f_to_vvv[pix_to_face],  # [B, H, W, 3]
+            w=bary_coord,  # [B, H, W, 3]
+            x=ref_img[:, :, :, None, :],  # [B, H, W, 1, C]
+        )
+
+    tex_vert_color_mean, tex_vert_color_pca, tex_vert_color_std = \
+        tex_vert_color_pca_calculator.get_pca(True)
+
+    # tex_vert_color_mean[TV + 1, C]
+    # tex_vert_color_pca[TV + 1, C, C]
+    # tex_vert_color_std[TV + 1, C]
+
+    use_pca_threshold = 10.0
+
+    tex_vert_color_ell_mean = tex_vert_color_mean
+    # [TV + 1, C]
+
+    inv_tex_vert_color_ell_axis = torch.where(
+        (use_pca_threshold <=
+            tex_vert_color_pca_calculator.sum_w)[..., None, None]
+        .expand(TV + 1, C, C),
+
+        (tex_vert_color_pca *
+            tex_vert_color_std[:, :, None]).transpose(-2, -1),
+
+        utils.dummy_eye(
+            shape=(TV + 1, C, C),
+            dtype=tex_vert_color_pca.dtype,
+            device=tex_vert_color_pca.device,
+        )
+    ).inverse()
+    # [F, C, C]
+
+    tex_vert_inlier_color_pca_calculator = pca_utils.PCACalculator(
+        n=TV + 1,
+        dim=C,
+        dtype=torch.float64,
+        device=device,
+    )
+
+    tex_vert_inlier_color_mean, tex_vert_inlier_color_pca, tex_vert_inlier_color_std = \
+        tex_vert_inlier_color_pca_calculator.get_pca(True)
+
+    tex_frags = rasterize_texture_map(
+        tex_vert_pos=tex_vert_pos,
+        tex_faces=tex_f_to_vvv,
+
+        tex_h=tex_h,
+        tex_w=tex_w,
+    )
+
+    tex_pix_to_face = tex_frags.pix_to_face.reshape(tex_h, tex_w)
+
+    tex_bary_coord = tex_frags.bary_coord.reshape(tex_h, tex_w, 3)
+
+    tex_vert_inlier_color_mean[TV] = 1.0
+
+    tex = (tex_vert_inlier_color_mean[tex_f_to_vvv[
+        (tex_pix_to_face + (F + 1)) % (F + 1)
+    ]] * tex_bary_coord[..., None]).sum(-2)
     # [tex_h, tex_w, C]
 
     utils.print_cur_pos()
@@ -350,7 +541,8 @@ class SamplingMode(enum.Enum):
     CUBIC = enum.auto()
 
 
-def _wrap_idx(
+@beartype
+def wrap_idx(
     idx: torch.Tensor,  # [...]
     size: int,
     wrap_mode: WrapMode,
@@ -385,49 +577,52 @@ def calc_tex_coord(
     tex_vvv_pos = tex_vert_pos[tex_vvv]
     # [..., 3, 2]
 
-    tex_coord = (bary_coord[..., :, None] * tex_vvv_pos).sum(dim=-2)
+    tex_coord = (bary_coord[..., :, None] * tex_vvv_pos).sum(-2)
     # [..., 2]
 
     return tex_coord
 
 
+@dataclasses.dataclass
+class TextureSamplingData:
+    img_idx: list[tuple[torch.Tensor, torch.Tensor]]  # [...]
+    coeff: tuple[list[torch.Tensor]]  # [...]
+
+
 @beartype
-def sample_texture(
+def get_sample_texture_data(
     *,
-    texture: torch.Tensor,  # [H, W, C]
+    tex_h: int,
+    tex_w: int,
     tex_coord: torch.Tensor,  # [..., 2]
     wrap_mode: WrapMode,
     sampling_mode: SamplingMode,
 
     int_type: torch.dtype = torch.int32,
-) -> torch.Tensor:  # [..., C]
+) -> TextureSamplingData:
     int_info = torch.iinfo(int_type)
 
-    H, W, C = -1, -2, -3
+    assert 0 < tex_h
+    assert tex_h <= int_info.max // 2
 
-    H, W, C = utils.check_shapes(
-        texture, (H, W, C),
-        tex_coord, (..., 2),
-    )
+    assert 0 < tex_w
+    assert tex_w <= int_info.max // 2
 
-    assert 0 < H
-    assert H <= int_info.max // 2
+    utils.check_shapes(tex_coord, (..., 2))
 
-    assert 0 < W
-    assert W <= int_info.max // 2
-
-    # assert
-
-    img_idx = tex_coord_to_img_idx(tex_coord, H, W)
+    img_idx = tex_coord_to_img_idx(tex_coord, tex_h, tex_w)
     # [..., 2]
 
     if sampling_mode == SamplingMode.NEAREST:
         img_idx = img_idx.round()
 
-        img_idx_x = _wrap_idx(img_idx[..., 0], H, wrap_mode)
-        img_idx_y = _wrap_idx(img_idx[..., 1], W, wrap_mode)
+        img_idx_x = wrap_idx(img_idx[..., 0], tex_h, wrap_mode)
+        img_idx_y = wrap_idx(img_idx[..., 1], tex_w, wrap_mode)
 
-        return texture[img_idx_x, img_idx_y, :]
+        return TextureSamplingData(
+            img_idx=[(img_idx_x, img_idx_y)],
+            coeff=None,
+        )
 
     if sampling_mode == SamplingMode.LINEAR:
         img_idx_x = img_idx[..., 0]
@@ -442,27 +637,71 @@ def sample_texture(
         img_idx_yd = img_idx_y - img_idx_ya
         # [...]
 
-        img_idx_xa = _wrap_idx(img_idx_xa, H, wrap_mode)
-        img_idx_xb = _wrap_idx(img_idx_xb, H, wrap_mode)
-        img_idx_ya = _wrap_idx(img_idx_ya, W, wrap_mode)
-        img_idx_yb = _wrap_idx(img_idx_yb, W, wrap_mode)
+        img_idx_xa = wrap_idx(img_idx_xa, tex_h, wrap_mode)
+        img_idx_xb = wrap_idx(img_idx_xb, tex_h, wrap_mode)
+        img_idx_ya = wrap_idx(img_idx_ya, tex_w, wrap_mode)
+        img_idx_yb = wrap_idx(img_idx_yb, tex_w, wrap_mode)
         # [...]
 
-        img_idx_xd = img_idx_xd[..., None]
-        img_idx_yd = img_idx_yd[..., None]
         img_idx_xdyd = img_idx_xd * img_idx_yd
-        # [..., 1]
+        # [...]
 
-        val_aa = texture[img_idx_xa, img_idx_ya, :]
-        val_ab = texture[img_idx_xa, img_idx_yb, :]
-        val_ba = texture[img_idx_xb, img_idx_ya, :]
-        val_bb = texture[img_idx_xb, img_idx_yb, :]
-        # [..., C]
+        return TextureSamplingData(
+            img_idx=[
+                (img_idx_xa, img_idx_ya),
+                (img_idx_xa, img_idx_yb),
+                (img_idx_xb, img_idx_ya),
+                (img_idx_xb, img_idx_yb),
+            ],
 
-        return \
-            val_aa * (1 - img_idx_xd - img_idx_yd + img_idx_xdyd) + \
-            val_ab * (img_idx_yd - img_idx_xdyd) + \
-            val_ba * (img_idx_xd - img_idx_xdyd) + \
-            val_bb * (img_idx_xdyd)
+            coeff=[
+                1 - img_idx_xd - img_idx_yd + img_idx_xdyd,
+                img_idx_yd - img_idx_xdyd,
+                img_idx_xd - img_idx_xdyd,
+                img_idx_xdyd,
+            ]
+        )
 
     raise utils.MismatchException()
+
+
+@beartype
+def sample_texture(
+    *,
+    texture: torch.Tensor,  # [H, W, C]
+    tex_coord: torch.Tensor,  # [..., 2]
+    wrap_mode: WrapMode,
+    sampling_mode: SamplingMode,
+
+    int_type: torch.dtype = torch.int32,
+) -> torch.Tensor:  # [..., C]
+    H, W, C = -1, -2, -3
+
+    H, W, C = utils.check_shapes(
+        texture, (H, W, C),
+        tex_coord, (..., 2),
+    )
+
+    sample_texture_data = get_sample_texture_data(
+        tex_h=H,
+        tex_w=W,
+        tex_coord=tex_coord,
+        wrap_mode=wrap_mode,
+        sampling_mode=sampling_mode,
+        int_type=int_type,
+    )
+
+    if len(sample_texture_data.img_idx) == 1:
+        return texture[
+            sample_texture_data.img_idx[0][0],
+            sample_texture_data.img_idx[0][1],
+            :,
+        ]
+
+    return sum(
+        cur_coeff[..., None] * texture[cur_img_idx[0][0], cur_img_idx[0][1], :]
+
+        for cur_img_idx, cur_coeff in zip(
+            sample_texture_data.img_idx, sample_texture_data.coeff
+        )
+    )

@@ -85,29 +85,14 @@ def scatter_feed(
     sq_w = w.square()
 
     if inplace:
-        dst_sum_w.index_add_(
-            0, idx, w.to(dst_sum_w))
-
-        dst_sum_sq_w.index_add_(
-            0, idx, sq_w.to(dst_sum_sq_w))
-
-        dst_sum_w_x.index_add_(
-            0, idx, w_x.to(dst_sum_w_x))
-
-        dst_sum_w_xxt.index_add_(
-            0, idx, w_xxt.to(dst_sum_w_xxt))
+        def f_(dst, src): return dst.index_add_(0, idx, src.to(dst))
     else:
-        dst_sum_w = dst_sum_w.index_add(
-            0, idx, w.to(dst_sum_w))
+        def f_(dst, src): return dst.index_add(0, idx, src.to(dst))
 
-        dst_sum_sq_w.index_add_(
-            0, idx, sq_w.to(dst_sum_sq_w))
-
-        dst_sum_w_x = dst_sum_w_x.index_add(
-            0, idx, w_x.to(dst_sum_w_x))
-
-        dst_sum_w_xxt = dst_sum_w_xxt.index_add(
-            0, idx, w_xxt.to(dst_sum_w_xxt))
+    dst_sum_w = f_(dst_sum_w, w)
+    dst_sum_sq_w = f_(dst_sum_sq_w, sq_w)
+    dst_sum_w_x = f_(dst_sum_w_x, w_x)
+    dst_sum_w_xxt = f_(dst_sum_w_xxt, w_xxt)
 
     return dst_sum_w, dst_sum_sq_w, dst_sum_w_x, dst_sum_w_xxt
 

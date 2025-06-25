@@ -5,7 +5,6 @@ import itertools
 import math
 import typing
 
-import numpy as np
 import torch
 from beartype import beartype
 
@@ -24,7 +23,7 @@ def make_monomial_power(
     assert 0 <= D
     assert 0 <= DEG
 
-    ret = torch.zeros((math.comb(DEG + D, D), D), dtype=torch.int16)
+    ret = torch.zeros((math.comb(D + DEG, D), D), dtype=torch.int32)
 
     i = 0
 
@@ -56,50 +55,55 @@ def make_poly_value(
 
 @beartype
 def build(
-    data_pos: torch.Tensor,  # [N, D]
-    data_val: torch.Tensor,  # [N, C]
+    interior: bool,
+    d_pos: torch.Tensor,  # [N, D]
+    d_val: torch.Tensor,  # [N, C]
     kernel: typing.Callable[[torch.Tensor], torch.Tensor],
     degree: int,  # DEG
     smoothness: float,
 ) -> tuple[
     torch.Tensor,  # poly_power[P, D]
     torch.Tensor,  # w[N, C]
-    torch.Tensor,  # p[P, C]
+    torch.Tensor,  # c[P, C]
 ]:
     N, D, C, DEG = -1, -2, -3, degree
 
     N, D, C = utils.check_shapes(
-        data_pos, (N, D),
-        data_val, (N, C),
+        d_pos, (N, D),
+        d_val, (N, C),
     )
 
     assert 0 <= DEG
 
-    data_pos = data_pos.detach()
-    data_val = data_val.detach()
+    d_pos = d_pos.detach()
+    d_val = d_val.detach()
 
-    device = data_pos.device
+    device = d_pos.device
 
     P = math.comb(D + DEG, D)
 
-    poly_power = make_monomial_power(D, DEG).to(data_pos.device)
+    poly_power = make_monomial_power(D, DEG).to(device)
     # [P, D]
 
-    A = utils.empty(like=data_pos, shape=(N + P, N + P))
-    A[:N, :N] = utils.eye(like=data_pos, shape=(N, N)) * smoothness + \
-        kernel(utils.vec_norm(data_pos[:, None, :] - data_pos[None, :, :]))
-    A[:N, N:] = make_poly_value(data_pos, poly_power)  # [N, P]
+    kernel_dist = kernel(utils.vec_norm(
+        d_pos[:, None, :] - d_pos[None, :, :]))
+    # [N, N]
+
+    if interior:
+        kernel_dist = kernel_dist / kernel_dist.sum(-1, True)
+
+    A = utils.empty(like=d_pos, shape=(N + P, N + P))
+    A[:N, :N] = \
+        utils.eye(like=d_pos, shape=(N, N)) * smoothness + kernel_dist
+    A[:N, N:] = make_poly_value(d_pos, poly_power)  # [N, P]
     A[N:, :N] = A[:N, N:].T  # [P, N]
     A[N:, N:] = 0
 
-    b = utils.empty(like=data_pos, shape=(N + P, C))
-    b[:N] = data_val
+    b = utils.empty(like=d_pos, shape=(N + P, C))
+    b[:N] = d_val
     b[N:] = 0
 
-    # A @ [w, lambda_const, *lambda_1, ...] = b
-
-    coeff = torch.linalg.solve(A, b)
-    # [(w, lambda_const, *lambda_1, ...), C]
+    coeff = torch.linalg.lstsq(A, b).solution
     # [N + P, C]
 
     w = coeff[:N].to(device)  # [N, C]
@@ -110,46 +114,78 @@ def build(
 
 @beartype
 def query(
-    data_pos: torch.Tensor,  # [N, D]
-    poly_power: torch.Tensor,  # [P, D]
+    *,
+    interior: bool,
+    d_pos: typing.Optional[torch.Tensor] = None,  # [N, D]
+    poly_power: typing.Optional[torch.Tensor] = None,  # [P, D]
     w: torch.Tensor,  # [N, C]
     c: torch.Tensor,  # [P, C]
-    kernel: typing.Callable[[torch.Tensor], torch.Tensor],
-    point_pos: torch.Tensor,  # [..., D]
-) -> torch.Tensor:  # [..., C]
+    kernel: typing.Optional[
+        typing.Callable[[torch.Tensor], torch.Tensor]] = None,
+
+    q_pos: typing.Optional[torch.Tensor] = None,  # [..., D]
+    q_kernel_dist: typing.Optional[torch.Tensor] = None,  # [..., N]
+    q_poly_val: typing.Optional[torch.Tensor] = None,  # [..., P]
+) -> tuple[
+    torch.Tensor,  # q_val[..., C]
+    torch.Tensor,  # q_kernel_dist[..., N]
+    torch.Tensor,  # q_poly_val[..., P]
+]:
     N, P, D, C = -1, -2, -3, -4
 
     N, P, D, C = utils.check_shapes(
-        data_pos, (N, D),
+        d_pos, (N, D),
         w, (N, C),
         c, (P, C),
+        q_pos, (..., D),
     )
+
+    if q_kernel_dist is None:
+        assert d_pos is not None
+        assert kernel is not None
+        assert q_pos is not None
+
+        q_kernel_dist = kernel(utils.vec_norm(
+            q_pos[..., None, :] - d_pos))
+        # [..., N]
+
+        if interior:
+            q_kernel_dist = q_kernel_dist / \
+                q_kernel_dist.sum(-1, True)
+
+    assert q_kernel_dist.shape == (*q_pos.shape[:-1], N)
 
     w_val = utils.einsum(
         "nc, ...n -> ...c",
         w,  # [N, C]
-
-        kernel(utils.vec_norm(point_pos[..., None, :] - data_pos[None, :, :])),
-        # [..., N]
+        q_kernel_dist,  # [..., N]
     )
     # [..., C]
+
+    if q_poly_val is None:
+        assert poly_power is not None
+        assert q_pos is not None
+
+        q_poly_val = make_poly_value(q_pos, poly_power)
+        # [..., P]
+
+    assert q_poly_val.shape == (*q_pos.shape[:-1], P)
 
     c_val = utils.einsum(
         "pc, ...p -> ...c",
         c,  # [P, C]
-
-        make_poly_value(point_pos, poly_power),
-        # [..., P]
+        q_poly_val,  # [..., P]
     )
     # [..., C]
 
-    return w_val + c_val
+    return w_val + c_val, q_kernel_dist, q_poly_val
 
 
 @beartype
 class RBFInterpolator(torch.nn.Module):
     def __init__(
         self,
+        interior: bool,
         data_pos: torch.Tensor,  # [N, D]
         poly_power: torch.Tensor,  # [P, D]
         w: torch.Tensor,  # [N, C]
@@ -166,6 +202,7 @@ class RBFInterpolator(torch.nn.Module):
             c, (P, C),
         )
 
+        self.interior = interior
         self.data_pos = data_pos
         self.poly_power = poly_power
         self.w = w
@@ -174,11 +211,12 @@ class RBFInterpolator(torch.nn.Module):
 
     @staticmethod
     def from_data_point(
-        data_pos: torch.Tensor,  # [N, D]
-        data_val: torch.Tensor,  # [N, C]
+        interior: bool,
+        d_pos: torch.Tensor,  # [N, D]
+        d_val: torch.Tensor,  # [N, C]
         kernel: RadialFunc,
         degree: int = -1,  # DEG
-        smoothness: float = 1.0,
+        smoothness: float = 0.0,
     ) -> RBFInterpolator:
         if degree < 0:
             degree = kernel.min_degree
@@ -186,15 +224,17 @@ class RBFInterpolator(torch.nn.Module):
         assert kernel.min_degree <= degree
 
         poly_power, w, c = build(
-            data_pos, data_val, kernel, degree, smoothness)
+            interior, d_pos, d_val, kernel, degree, smoothness)
 
-        return RBFInterpolator(data_pos, poly_power, w, c, kernel)
+        return RBFInterpolator(interior, d_pos, poly_power, w, c, kernel)
 
     @staticmethod
     def from_state_dict(
         state_dict: typing.Mapping[str, object],
         device: typing.Optional[torch.device] = None,
     ) -> RBFInterpolator:
+        interior = state_dict["interior"]
+
         data_pos = utils.deserialize_tensor(
             state_dict["data_pos"], device=device)
 
@@ -209,12 +249,13 @@ class RBFInterpolator(torch.nn.Module):
 
         kernel = state_dict["kernel"]
 
-        return RBFInterpolator(data_pos, poly_power, w, c, kernel)
+        return RBFInterpolator(interior, data_pos, poly_power, w, c, kernel)
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
         return collections.OrderedDict([
+            ("interior", self.interior),
             ("data_pos", utils.serialize_tensor(self.data_pos)),
-            ("poly_power", self.poly_power),
+            ("poly_power", utils.serialize_tensor(self.poly_power)),
             ("w", utils.serialize_tensor(self.w)),
             ("c", utils.serialize_tensor(self.c)),
             ("kernel", self.kernel),
@@ -245,10 +286,24 @@ class RBFInterpolator(torch.nn.Module):
 
     def forward(
         self,
-        point_pos: torch.Tensor,  # [..., D]
-    ) -> torch.Tensor:  # [..., C]
+        *,
+        q_pos: typing.Optional[torch.Tensor] = None,  # [..., D]
+        q_kernel_dist: typing.Optional[torch.Tensor] = None,  # [..., N]
+        q_poly_val: typing.Optional[torch.Tensor] = None,  # [..., P]
+    ) -> tuple[
+        torch.Tensor,  # q_val[..., C]
+        torch.Tensor,  # q_kernel_dist[..., N]
+        torch.Tensor,  # q_poly_val[..., P]
+    ]:
         return query(
-            self.data_pos,
-            self.poly_power, self.w, self.c,
-            self.kernel, point_pos,
+            interior=self.interior,
+            d_pos=self.data_pos,
+            poly_power=self.poly_power,
+            w=self.w,
+            c=self.c,
+            kernel=self.kernel,
+
+            q_pos=q_pos,
+            q_kernel_dist=q_kernel_dist,
+            q_poly_val=q_poly_val,
         )

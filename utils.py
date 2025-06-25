@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import atexit
 import collections
+import colorsys
+import contextlib
 import datetime
 import functools
 import gc
 import inspect
 import itertools
+import json
 import math
 import mmap
 import os
@@ -24,10 +26,9 @@ import weakref
 
 import dateutil
 import numpy as np
+import tabulate
 import torch
 from beartype import beartype
-
-from . import config
 
 EPS = {
     np.float16: 1e-3,
@@ -48,17 +49,15 @@ MiBYTE = 1024 * KiBYTE
 GiBYTE = 1024 * MiBYTE
 TiBYTE = 1024 * GiBYTE
 
-INT = torch.int32
-FLOAT = torch.float32
 
 DISK_DEVICE = torch.device("cpu")
 CPU_DEVICE = torch.device("cpu")
 CUDA_DEVICE = torch.device("cuda")
 
-ORIGIN = torch.tensor([0, 0, 0], dtype=FLOAT)
-X_AXIS = torch.tensor([1, 0, 0], dtype=FLOAT)
-Y_AXIS = torch.tensor([0, 1, 0], dtype=FLOAT)
-Z_AXIS = torch.tensor([0, 0, 1], dtype=FLOAT)
+ORIGIN = torch.tensor([0, 0, 0], dtype=torch.float32)
+X_AXIS = torch.tensor([1, 0, 0], dtype=torch.float32)
+Y_AXIS = torch.tensor([0, 1, 0], dtype=torch.float32)
+Z_AXIS = torch.tensor([0, 0, 1], dtype=torch.float32)
 
 
 DEPTH_NEAR = 0.01
@@ -69,6 +68,10 @@ class Empty:
     def __init__(self, **kwargs: object):
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+
+class MismatchException(Exception):
+    pass
 
 
 @beartype
@@ -90,10 +93,13 @@ def print_pos(
 
 
 @beartype
-def print_cur_pos() -> None:
+def print_cur_pos(delta: int = 0) -> None:
     time = datetime.datetime.now()
 
-    frame = inspect.currentframe().f_back
+    frame = inspect.currentframe().f_back.f_back
+
+    for _ in range(delta):
+        frame = frame.f_back
 
     print_pos(
         time,
@@ -101,6 +107,14 @@ def print_cur_pos() -> None:
         frame.f_lineno,
         frame.f_code.co_name,
     )
+
+
+@beartype
+def pause() -> None:
+    print_cur_pos(2)
+    # include this function and beartype decorator
+
+    input("pause...")
 
 
 @beartype
@@ -165,6 +179,14 @@ def clamp(x: typing.Any, lb: typing.Any, ub: typing.Any) -> typing.Any:
 
 
 @beartype
+def fallback_if_none(
+    x: typing.Any,
+    y: typing.Any,
+) -> typing.Any:
+    return y if x is None else x
+
+
+@beartype
 def rand_int(lb: int, rb: int) -> int:
     assert lb <= rb
     return random.randint(lb, rb)
@@ -177,6 +199,27 @@ def rand_float(lb: float, rb: float) -> float:
 
 
 @beartype
+def make_nd_list(
+    value: typing.Any,
+    shape: tuple[int, ...],
+) -> list:
+    assert 0 < len(shape)
+
+    if len(shape) == 1:
+        return [value] * shape[0]
+
+    sub_shape = shape[1:]
+
+    return [make_nd_list(value, sub_shape) for _ in range(shape[0])]
+
+
+_serialize_datetime_format_str_table = {
+    "MIN": "%Y-%m-%d %H:%M",
+    "SEC": "%Y-%m-%d %H:%M:%S",
+}
+
+
+@beartype
 def serialize_datetime(
     dt: typing.Optional[datetime.datetime],
     precision: str,  # "MIN", "SEC"
@@ -185,21 +228,11 @@ def serialize_datetime(
         return None
 
     precision = precision.upper()
-    assert precision in ("MIN", "SEC", "USEC")
+    assert precision in _serialize_datetime_format_str_table
 
     dt = dt.replace(tzinfo=datetime.timezone.utc)
 
-    match precision:
-        case "MIN":
-            format_str = "%Y-%m-%d %H:%M"
-
-        case "SEC":
-            format_str = "%Y-%m-%d %H:%M:%S"
-
-        case _:
-            raise MismatchException()
-
-    return dt.strftime(format_str)
+    return dt.strftime(_serialize_datetime_format_str_table[precision])
 
 
 @beartype
@@ -207,8 +240,21 @@ def deserialize_datetime(dt_str: typing.Optional[str]) -> datetime.datetime:
     return None if dt_str is None else dateutil.parser.parse(dt_str)
 
 
-class MismatchException(Exception):
-    pass
+@beartype
+def generate_color(
+    *,
+    init_hue: typing.Optional[float] = None,
+    saturation: float = 0.5,
+    value: float = 1.0,
+) -> typing.Generator[tuple[int, int, int], None, None]:
+    golden_ratio_conjugate = 0.61803398875
+
+    hue = random.random() if init_hue is None else init_hue
+
+    while True:
+        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+        yield tuple(clamp(int(round(c * 255)), 0, 255) for c in rgb)
+        hue = (hue + golden_ratio_conjugate) % 1.0
 
 
 @beartype
@@ -304,6 +350,19 @@ def deferable(
 @beartype
 def defer(func: typing.Callable[[], typing.Any]) -> None:
     defer_funcs_stack[-1].append(func)
+
+
+@beartype
+class TorchDetectAnomaly(contextlib.ContextDecorator):
+    def __init__(self, *args, **kwargs):
+        self.cm = torch.autograd.set_detect_anomaly(*args, **kwargs)
+
+    def __enter__(self) -> TorchDetectAnomaly:
+        self.cm.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return self.cm.__exit__(exc_type, exc_value, traceback)
 
 
 @beartype
@@ -496,9 +555,11 @@ def check_shapes(
         for _, undet_shape in sorted(undet_shapes.items(), reverse=True)
     )
 
-    match len(ret):
-        case 0: return
-        case 1: return ret[0]
+    if len(ret) == 0:
+        return
+
+    if len(ret) == 1:
+        return ret[0]
 
     return ret
 
@@ -521,40 +582,7 @@ def print_cuda_mem_usage(device: typing.Optional[torch.device] = None) -> None:
         unit = "GiB"
         mem /= 1024
 
-    print(f"Cuda Mem Usage ({device}): {mem} {unit}")
-
-
-@beartype
-class DiskMemoty:
-    def __init__(self, size: int):
-        assert 0 <= size
-
-        if size == 0:
-            self.file = None
-            self.size = 0
-
-        self.file = tempfile.TemporaryFile(mode="w+b")
-        self.size = max(4 * 1024, size)
-
-        self.file.truncate(self.size)
-        self.file.seek(0)
-
-        self.mmap = mmap.mmap(self.file.fileno(), self.size)
-
-    def close(self) -> None:
-        if self.file is None:
-            return
-
-        self.file.close()
-        self.file = None
-
-        self.size = 0
-
-    def __enter__(self) -> DiskMemoty:
-        return self
-
-    def __exit__(self, type, value, traceback) -> None:
-        self.close()
+    print(f"Cuda Mem Usage ({device}): {mem:.3g} {unit}")
 
 
 _disk_storages: weakref.WeakSet[torch.TypedStorage] = weakref.WeakSet()
@@ -562,7 +590,7 @@ _disk_storages: weakref.WeakSet[torch.TypedStorage] = weakref.WeakSet()
 
 @beartype
 def is_disk_tensor(x: torch.Tensor) -> bool:
-    return x.storage() in _disk_storages
+    return x.untyped_storage() in _disk_storages
 
 
 @beartype
@@ -585,8 +613,7 @@ def disk_empty(
 
     x = torch.frombuffer(m, dtype=dtype).view(shape)
 
-    storage = x.storage()
-    _disk_storages.add(storage)
+    _disk_storages.add(x.untyped_storage())
 
     def _on_gc(x):
         del x
@@ -597,12 +624,18 @@ def disk_empty(
 
 
 @beartype
-def get_shape_dtype_device(
+def get_sddr(
     like: typing.Optional[torch.Tensor] = None,
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-) -> tuple[tuple[int, ...], torch.dtype, torch.device]:
+    requires_grad: typing.Optional[bool] = None,
+) -> tuple[
+    tuple[int, ...],  # shape
+    torch.dtype,  # dtype
+    torch.device,  # device
+    bool,  # requires_grad
+]:
     if shape is None:
         assert like is not None
         shape = like.shape
@@ -615,7 +648,11 @@ def get_shape_dtype_device(
         assert like is not None
         device = like.device
 
-    return shape, dtype, device
+    if requires_grad is None:
+        assert like is not None
+        requires_grad = like.requires_grad
+
+    return shape, dtype, device, requires_grad
 
 
 @beartype
@@ -625,9 +662,13 @@ def empty(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
+    requires_grad: typing.Optional[bool] = None,
 ):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.empty(shape, dtype=dtype, device=device)
+    shape, dtype, device, requires_grad = get_sddr(
+        like, shape, dtype, device, requires_grad)
+
+    return torch.empty(
+        shape, dtype=dtype, device=device, requires_grad=requires_grad)
 
 
 @beartype
@@ -637,9 +678,17 @@ def zeros(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.zeros(shape, dtype=dtype, device=device)
+    requires_grad: typing.Optional[bool] = None,
+) -> torch.Tensor:
+    shape, dtype, device, requires_grad = get_sddr(
+        like, shape, dtype, device, requires_grad)
+
+    return torch.zeros(
+        shape, dtype=dtype, device=device, requires_grad=requires_grad)
+
+
+_dummy_zeros_cache: dict[tuple[torch.dtype, torch.device], torch.Tensor] = \
+    dict()
 
 
 @beartype
@@ -649,9 +698,19 @@ def dummy_zeros(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.zeros((1,), dtype=dtype, device=device).expand(shape)
+) -> torch.Tensor:
+    shape, dtype, device, _ = get_sddr(
+        like, shape, dtype, device, False)
+
+    dd = (dtype, device)
+
+    t = _dummy_zeros_cache.get(dd)
+
+    if t is None:
+        t = torch.zeros((1,), dtype=dtype, device=device)
+        _dummy_zeros_cache[dd] = t
+
+    return t.expand(shape)
 
 
 @beartype
@@ -661,9 +720,17 @@ def ones(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.ones(shape, dtype=dtype, device=device)
+    requires_grad: typing.Optional[bool] = None,
+) -> torch.Tensor:
+    shape, dtype, device, requires_grad = get_sddr(
+        like, shape, dtype, device, requires_grad)
+
+    return torch.ones(
+        shape, dtype=dtype, device=device, requires_grad=requires_grad)
+
+
+_dummy_ones_cache: dict[tuple[torch.dtype, torch.device], torch.Tensor] = \
+    dict()
 
 
 @beartype
@@ -673,9 +740,18 @@ def dummy_ones(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.ones((1,), dtype=dtype, device=device).expand(shape)
+) -> torch.Tensor:
+    shape, dtype, device, _ = get_sddr(like, shape, dtype, device, False)
+
+    dd = (dtype, device)
+
+    t = _dummy_ones_cache.get(dd)
+
+    if t is None:
+        t = torch.ones((1,), dtype=dtype, device=device)
+        _dummy_ones_cache[dd] = t
+
+    return t.expand(shape)
 
 
 @beartype
@@ -686,9 +762,13 @@ def full(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return torch.full(shape, val, dtype=dtype, device=device)
+    requires_grad: typing.Optional[bool] = None,
+) -> torch.Tensor:
+    shape, dtype, device, requires_grad = get_sddr(
+        like, shape, dtype, device, requires_grad)
+
+    return torch.full(
+        shape, val, dtype=dtype, device=device, requires_grad=requires_grad)
 
 
 @beartype
@@ -699,8 +779,8 @@ def dummy_full(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+) -> torch.Tensor:
+    shape, dtype, device, _ = get_sddr(like, shape, dtype, device, False)
     return torch.full((1,), val, dtype=dtype, device=device).expand(shape)
 
 
@@ -711,8 +791,10 @@ def eye(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
+    requires_grad: typing.Optional[bool] = None,
+) -> torch.Tensor:
+    shape, dtype, device, requires_grad = get_sddr(
+        like, shape, dtype, device, requires_grad)
 
     assert 2 <= len(shape)
 
@@ -724,12 +806,13 @@ def eye(
     for i in range(N):
         l[i * N + i] = 1
 
-    t = torch.tensor(l, dtype=dtype).view(N, N).expand(shape).to(device)
+    t: torch.Tensor = \
+        torch.tensor(l, dtype=dtype).view(N, N).expand(shape).to(device)
 
     if 0 in t.stride():
         t = t.clone()
 
-    return t
+    return t.requires_grad_(requires_grad)
 
 
 @beartype
@@ -739,9 +822,12 @@ def dummy_eye(
     shape: typing.Optional[tuple[int, ...]] = None,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-):
-    shape, dtype, device = get_shape_dtype_device(like, shape, dtype, device)
-    return eye(shape=shape[-2:], dtype=dtype, device=device).expand(shape)
+) -> torch.Tensor:
+    shape, dtype, device, _ = get_sddr(like, shape, dtype, device, False)
+
+    return eye(
+        shape=shape[-2:], dtype=dtype, device=device, requires_grad=False
+    ).expand(shape)
 
 
 @beartype
@@ -764,14 +850,14 @@ def get_quaternion_wxyz(
 ]:
     check_shapes(q, (..., 4))
 
-    for i, k in enumerate(check_quaternion_order(order)):
-        match k:
-            case "W": w = q[..., i]
-            case "X": x = q[..., i]
-            case "Y": y = q[..., i]
-            case "Z": z = q[..., i]
+    order = check_quaternion_order(order)
 
-    return w, x, y, z
+    return \
+        q[..., order.index("W")], \
+        q[..., order.index("X")], \
+        q[..., order.index("Y")], \
+        q[..., order.index("Z")], \
+
 
 
 @beartype
@@ -782,16 +868,16 @@ def set_quaternion_wxyz(
     z: torch.Tensor,  # [...]
     order: str,  # wxyz
 ) -> torch.Tensor:  # [..., 4]
-    l: list[torch.Tensor] = list()
+    order = check_quaternion_order(order)
 
-    for i, k in enumerate(check_quaternion_order(order)):
-        match k:
-            case "W": l.append(w)
-            case "X": l.append(x)
-            case "Y": l.append(y)
-            case "Z": l.append(z)
+    l = [None, None, None, None]
 
-    return torch.stack(l, dim=-1)
+    l[order.index("W")] = w
+    l[order.index("X")] = x
+    l[order.index("Y")] = y
+    l[order.index("Z")] = z
+
+    return torch.stack(l, -1)
 
 
 @beartype
@@ -865,14 +951,25 @@ def broadcast_shapes(*args: typing.Any) \
 
 
 @beartype
-def try_get_batch_shape(x: typing.Optional[torch.Tensor], dim: int):
-    return torch.Size() if x is None else x.shape[:dim]
+def try_get_batch_shape(
+    x: typing.Optional[torch.Tensor],
+    cdim: int
+) -> torch.Size:
+    if x is None:
+        return torch.Size()
+
+    shape = x.shape
+
+    assert 0 <= cdim
+    assert cdim <= len(shape)
+
+    return shape[:len(shape) - cdim]
 
 
 @beartype
 def get_batch_idxes(shape: typing.Iterable[int]) \
-        -> typing.Iterable[tuple[int, ...]]:
-    return itertools.product(*(range(s) for s in shape))
+        -> typing.Iterable[tuple[int, tuple[int, ...]]]:
+    return enumerate(itertools.product(*(range(s) for s in shape)))
 
 
 @beartype
@@ -925,7 +1022,7 @@ def batch_indexing(
     else:
         batch_idx = (idx,)
 
-    data_idx = (slice(None) for _ in range(-cdim))
+    data_idx = (slice(None) for _ in range(cdim))
 
     return x[*batch_idx, ...,  *data_idx]
 
@@ -1099,33 +1196,28 @@ def get_param_groups(module: object, base_lr: float):
 
 @beartype
 def make_diag(
-    diag_elems: torch.Tensor,  # [..., D, ...]
-    dim: int = -1,
+    diag_elem: torch.Tensor,  # [..., D]
     shape: typing.Optional[tuple[int, int]] = None,  # (N, M)
-) -> torch.Tensor:  # [..., N, M, ...]
-    dim = normed_idx(dim, diag_elems.ndim)
-
-    sa = diag_elems.shape[:dim]
-    d = diag_elems.shape[dim]
-    sb = diag_elems.shape[dim + 1:]
+) -> torch.Tensor:  # [..., N, M]
+    D = check_shapes(diag_elem, (..., -1))
 
     if shape is None:
-        shape = (d, d)
+        shape = (D, D)
 
+    assert len(shape) == 2
     assert 0 < shape[0]
     assert 0 < shape[1]
 
     l: list[torch.Tensor] = \
-        [dummy_zeros(like=diag_elems, shape=(*sa, *sb))] * \
+        [dummy_zeros(like=diag_elem, shape=diag_elem.shape[:-1])] * \
         (shape[0] * shape[1])
 
-    ia = [slice(None) for _ in range(len(sa))]
-    ib = [slice(None) for _ in range(len(sb))]
+    for i in range(min(*shape, D)):
+        l[(shape[1] + 1) * i] = diag_elem[..., i]
 
-    for i in range(min(*shape, diag_elems.shape[-1])):
-        l[(shape[1] + 1) * i] = diag_elems[*ia, i, *ib]
+    t = torch.stack(l, -1)
 
-    return torch.stack(l, dim).reshape(*sa, *shape, *sb)
+    return t.view(*t.shape[:-1], *shape)
 
 
 @beartype
@@ -1180,10 +1272,8 @@ def vec_norm(
     x: torch.Tensor,  # [...]
     dim: int = -1,
     keepdim: bool = False,
-    *,
-    out: typing.Optional[torch.Tensor] = None,
 ) -> torch.Tensor:  # [...]
-    return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim, out=out)
+    return torch.linalg.vector_norm(x, dim=dim, keepdim=keepdim)
 
 
 @beartype
@@ -1192,7 +1282,7 @@ def vec_sq_norm(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
-    return x.square().sum(dim, keepdim)
+    return vec_dot(x, x, dim, keepdim)
 
 
 @beartype
@@ -1202,6 +1292,11 @@ def vec_dot(
     dim: int = -1,
     keepdim: bool = False,
 ) -> torch.Tensor:  # [...]
+    dtype = promote_dtypes(x, y)
+
+    x = x.to(dtype)
+    y = y.to(dtype)
+
     ret: torch.Tensor = torch.linalg.vecdot(x, y, dim=dim)
 
     if keepdim:
@@ -1216,6 +1311,12 @@ def vec_cross(
     y: torch.Tensor,  # [...]
     dim: int = -1,
 ) -> torch.Tensor:  # [...]
+    dtype = promote_dtypes(x, y)
+    device = check_devices(x, y)
+
+    x = x.to(dtype)
+    y = y.to(dtype)
+
     return torch.linalg.cross(x, y, dim=dim)
 
 
@@ -1227,6 +1328,29 @@ def vec_normed(
 ) -> torch.Tensor:  # [...]
     x_norm = vec_norm(x, dim, True) + EPS[x.dtype]
     return x / x_norm if length is None else x * (length / x_norm)
+
+
+@beartype
+def c_vec_sq_norm(
+    x: torch.Tensor,  # [..., ...(xdim), D]
+    y: torch.Tensor,  # [..., ...(ydim), D]
+    xdim: int,
+    ydim: int,
+) -> torch.Tensor:  # [..., ...(xdim), ...(ydim)]
+    assert 0 <= xdim
+    assert 0 <= ydim
+
+    D = check_shapes(x, (..., -1), y, (..., -1))
+
+    assert xdim + 1 <= x.ndim
+    assert ydim + 1 <= y.ndim
+
+    x = x.view(*x.shape[:-xdim-1], *x.shape[-xdim-1:-1], *((1,) * ydim), D)
+    y = y.view(*y.shape[:-ydim-1], *((1,) * xdim), *y.shape[-ydim-1:-1], D)
+    # x[..., D]
+    # y[..., D]
+
+    return vec_sq_norm(x) + vec_sq_norm(y) - 2 * vec_dot(x, y)
 
 
 @beartype
@@ -1251,7 +1375,7 @@ def get_cos_angle(
 
     z = x_norm * y_norm
 
-    return vec_dot(x, y, dim, keepdim) / (z + EPS[z.dtype])
+    return vec_dot(x, y, dim, keepdim) / z.clamp(EPS[z.dtype], None)
 
 
 @beartype
@@ -1266,31 +1390,35 @@ def get_angle(
 
 @beartype
 def axis_angle_to_quaternion(
-    axis: torch.Tensor,  # [..., 3]
-    angle: typing.Optional[torch.Tensor] = None,  # [...]
-    *,
+    axis_angle: torch.Tensor,  # [..., 3]
     order: str,  # permutation of "wxyz"
 ) -> torch.Tensor:  # [..., 4]
-    check_shapes(axis, (..., 3))
+    check_shapes(axis_angle, (..., 3))
 
     order = check_quaternion_order(order)
 
-    axis_norm = vec_norm(axis)
+    eps = EPS[axis_angle.dtype]
 
-    if angle is None:
-        angle = axis_norm
+    angle_sq = vec_sq_norm(axis_angle)
 
-    unit_axis = axis / (axis_norm[..., None] + EPS[axis_norm.dtype])
+    small_angle_mask = angle_sq < eps
+    save_angle_sq = angle_sq.clamp(eps, None)
+
+    angle = save_angle_sq.sqrt()
 
     half_angle = angle / 2
 
-    c = half_angle.cos()
-    s = half_angle.sin()
+    ks = torch.where(
+        small_angle_mask,
+        0.5 - angle_sq / 48 + angle_sq.square() / 3840,
+        half_angle.sin() / angle,
+    )
+    # [...]
 
-    w = c
-    x = unit_axis[..., 0] * s
-    y = unit_axis[..., 1] * s
-    z = unit_axis[..., 2] * s
+    w = half_angle.cos()
+    x = axis_angle[..., 0] * ks
+    y = axis_angle[..., 1] * ks
+    z = axis_angle[..., 2] * ks
 
     return set_quaternion_wxyz(w, x, y, z, order)
 
@@ -1298,7 +1426,6 @@ def axis_angle_to_quaternion(
 @beartype
 def quaternion_to_axis_angle(
     quaternion: torch.Tensor,  # [..., 4]
-    *,
     order: str,  # permutation of "wxyz"
 ) -> tuple[
     torch.Tensor,  # [..., 3]
@@ -1319,143 +1446,139 @@ def quaternion_to_axis_angle(
 
     p = ((1 + EPS[w.dtype]) - w.square()).rsqrt()
 
-    axis = torch.stack([x * p, y * p, z * p], dim=-1)
+    axis = torch.stack([x * p, y * p, z * p], -1)
 
     return axis, w.acos() * 2
 
 
 @beartype
-def _axis_angle_to_rot_mat(
-    *,
-    axis: torch.Tensor,  # [..., 3]
-    angle: typing.Optional[torch.Tensor],  # [...]
-    out: torch.Tensor,  # [..., 3, 3]
-):
-    check_shapes(axis, (..., 3))
-
-    axis_norm = vec_norm(axis)
-
-    if angle is None:
-        angle = axis_norm
-
-    unit_axis = axis / (axis_norm[..., None] + EPS[axis_norm.dtype])
-
-    c = angle.cos()
-    s = angle.sin()
-
-    nc = 1 - c
-
-    vx = unit_axis[..., 0]
-    vy = unit_axis[..., 1]
-    vz = unit_axis[..., 2]
-
-    vxx_nc = vx.square() * nc
-    vyy_nc = vy.square() * nc
-    vzz_nc = vz.square() * nc
-
-    vxy_nc = vyx_nc = vx * vy * nc
-    vyz_nc = vzy_nc = vy * vz * nc
-    vzx_nc = vxz_nc = vz * vx * nc
-
-    vxs = vx * s
-    vys = vy * s
-    vzs = vz * s
-
-    out[..., 0, 0] = vxx_nc + c
-    out[..., 0, 1] = vxy_nc - vzs
-    out[..., 0, 2] = vxz_nc + vys
-
-    out[..., 1, 0] = vyx_nc + vzs
-    out[..., 1, 1] = vyy_nc + c
-    out[..., 1, 2] = vyz_nc - vxs
-
-    out[..., 2, 0] = vzx_nc - vys
-    out[..., 2, 1] = vzy_nc + vxs
-    out[..., 2, 2] = vzz_nc + c
-
-
-@beartype
 def axis_angle_to_rot_mat(
-    axis: torch.Tensor,  # [..., 3]
-    angle: typing.Optional[torch.Tensor] = None,  # [...]
-    *,
-    out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
-    out: typing.Optional[torch.Tensor] = None,  # [..., 3/4, 3/4]
+    axis_angle: torch.Tensor,  # [..., 3]
+    out_shape: tuple[int, int],  # (3/4, 3/4)
 ) -> torch.Tensor:  # [..., 3/4, 3/4]
-    check_shapes(axis, (..., 3))
-
-    if out_shape is None:
-        assert out is not None
-        out_shape = check_shapes(out, (..., -1, -2))
+    check_shapes(axis_angle, (..., 3))
 
     assert 3 <= out_shape[0] <= 4
     assert 3 <= out_shape[1] <= 4
 
-    batch_shape = broadcast_shapes(axis.shape[:-1], angle)
+    eps = EPS[axis_angle.dtype]
 
-    if out is None:
-        out = torch.empty(
-            batch_shape + out_shape,
-            dtype=axis.dtype, device=axis.device
-        )
-    else:
-        check_shapes(out, [..., *out_shape])
+    buffer: list[torch.Tensor] = [
+        [None for _ in range(out_shape[1])] for _ in range(out_shape[0])]
 
-    _axis_angle_to_rot_mat(
-        axis=axis,
-        angle=angle,
-        out=out,
+    angle_sq = vec_sq_norm(axis_angle)
+
+    small_angle_mask = angle_sq < eps
+    save_angle_sq = angle_sq.clamp(eps, None)
+
+    angle = save_angle_sq.sqrt()
+    angle_sq_sq = angle_sq.square()
+
+    angle_cos = angle.cos()
+
+    ks = torch.where(
+        small_angle_mask,
+        1 - angle_sq / 6 + angle_sq_sq / 120,
+        angle.sin() / angle,
     )
+    # [...]
 
-    if out_shape == (4, 4):
-        out[..., 3, 3] = 1
+    kc = torch.where(
+        small_angle_mask,
+        0.5 - angle_sq / 24 + angle_sq_sq / 720,
+        (1 - angle_cos) / save_angle_sq,
+    )
+    # [...]
 
-    if out_shape[0] == 4:
-        out[..., 3, :3] = 0
+    vx = axis_angle[..., 0]
+    vy = axis_angle[..., 1]
+    vz = axis_angle[..., 2]
 
-    if out_shape[1] == 4:
-        out[..., :3, 3] = 0
+    vxx_nc = vx.square() * kc
+    vyy_nc = vy.square() * kc
+    vzz_nc = vz.square() * kc
 
-    return out
+    vxy_nc = vyx_nc = vx * vy * kc
+    vyz_nc = vzy_nc = vy * vz * kc
+    vzx_nc = vxz_nc = vz * vx * kc
+
+    vxs = vx * ks
+    vys = vy * ks
+    vzs = vz * ks
+
+    buffer[0][0] = vxx_nc + angle_cos
+    buffer[0][1] = vxy_nc - vzs
+    buffer[0][2] = vxz_nc + vys
+
+    buffer[1][0] = vyx_nc + vzs
+    buffer[1][1] = vyy_nc + angle_cos
+    buffer[1][2] = vyz_nc - vxs
+
+    buffer[2][0] = vzx_nc - vys
+    buffer[2][1] = vzy_nc + vxs
+    buffer[2][2] = vzz_nc + angle_cos
+
+    if 4 in out_shape:
+        z = dummy_zeros(like=buffer[0][0])
+
+        if out_shape == (4, 4):
+            buffer[3][3] = dummy_ones(like=buffer[0][0])
+
+        if out_shape[0] == 4:
+            buffer[3][0] = z
+            buffer[3][1] = z
+            buffer[3][2] = z
+
+        if out_shape[1] == 4:
+            buffer[0][3] = z
+            buffer[1][3] = z
+            buffer[2][3] = z
+
+    t = torch.stack([item for row in buffer for item in row], -1)
+
+    return t.view(*t.shape[:-1], *out_shape)
 
 
 @beartype
 def rot_mat_to_axis_angle(
     rot_mat: torch.Tensor  # [..., 3, 3]
-) -> tuple[
-    torch.Tensor,  # axis[..., 3]
-    torch.Tensor,  # angle[..., 3]
-]:
+) -> torch.Tensor:  # axis_angle[..., 3]
     check_shapes(rot_mat, (..., 3, 3))
 
     tr = rot_mat[..., 0, 0] + rot_mat[..., 1, 1] + rot_mat[..., 2, 2]
 
-    k = 0.5 * (4 - (tr - 1).square()).clamp(1e-6, None).rsqrt()
+    k = ((tr - 1) / 2).acos() * \
+        (4 - (tr - 1).square()).clamp(EPS[rot_mat.dtype], None).rsqrt()
 
-    axis = torch.empty(rot_mat.shape[:-1],
-                       dtype=rot_mat.dtype, device=rot_mat.device)
+    axis_angle = torch.stack([
+        (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) * k,
+        (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) * k,
+        (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) * k,
+    ], -1)
+    # [..., 3]
 
-    axis[..., 0] = (rot_mat[..., 2, 1] - rot_mat[..., 1, 2]) * k
-    axis[..., 1] = (rot_mat[..., 0, 2] - rot_mat[..., 2, 0]) * k
-    axis[..., 2] = (rot_mat[..., 1, 0] - rot_mat[..., 0, 1]) * k
-
-    return axis, ((tr - 1) / 2).acos()
+    return axis_angle
 
 
 @beartype
-def quaternion_to_rot_mat_(
-    *,
+def quaternion_to_rot_mat(
     quaternion: torch.Tensor,  # [..., 4]
     order: str,  # permutation of "wxyz"
-    out: torch.Tensor,  # [..., 3, 3]
-):
+    out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
+) -> torch.Tensor:  # [..., 3/4, 3/4]
     check_shapes(quaternion, (..., 4))
 
     order = check_quaternion_order(order)
 
+    assert 3 <= out_shape[0] <= 4
+    assert 3 <= out_shape[1] <= 4
+
+    buffer: list[torch.Tensor] = [
+        [None for _ in range(out_shape[1])] for _ in range(out_shape[0])]
+
     w, x, y, z = get_quaternion_wxyz(quaternion, order)
 
-    k = math.sqrt(2) / vec_norm(quaternion)
+    k = math.sqrt(2) / vec_norm(quaternion).clamp(EPS[quaternion.dtype], None)
 
     w = w * k
     x = x * k
@@ -1474,78 +1597,52 @@ def quaternion_to_rot_mat_(
     wy = w * y
     wz = w * z
 
-    out[..., 0, 0] = 1 - yy - zz
-    out[..., 0, 1] = xy - wz
-    out[..., 0, 2] = xz + wy
+    buffer[0][0] = 1 - yy - zz
+    buffer[0][1] = xy - wz
+    buffer[0][2] = xz + wy
 
-    out[..., 1, 0] = yx + wz
-    out[..., 1, 1] = 1 - zz - xx
-    out[..., 1, 2] = yz - wx
+    buffer[1][0] = yx + wz
+    buffer[1][1] = 1 - zz - xx
+    buffer[1][2] = yz - wx
 
-    out[..., 2, 0] = zx - wy
-    out[..., 2, 1] = zy + wx
-    out[..., 2, 2] = 1 - xx - yy
+    buffer[2][0] = zx - wy
+    buffer[2][1] = zy + wx
+    buffer[2][2] = 1 - xx - yy
 
+    if 4 in out_shape:
+        z = dummy_zeros(like=buffer[0][0])
 
-@beartype
-def quaternion_to_rot_mat(
-    quaternion: torch.Tensor,  # [..., 4]
-    *,
-    order: str,  # permutation of "wxyz"
-    out_shape: typing.Optional[tuple[int, int]] = None,  # (3/4, 3/4)
-    out: typing.Optional[torch.Tensor] = None,  # [..., 3/4, 3/4]
-) -> torch.Tensor:  # [..., 3/4, 3/4]
-    check_shapes(quaternion, (..., 4))
+        if out_shape == (4, 4):
+            buffer[3][3] = dummy_ones(like=buffer[0][0])
 
-    if out_shape is None:
-        out_shape = check_shapes(out, (..., -1, -2))
+        if out_shape[0] == 4:
+            buffer[3][0] = z
+            buffer[3][1] = z
+            buffer[3][2] = z
 
-    assert 3 <= out_shape[0] <= 4
-    assert 3 <= out_shape[1] <= 4
+        if out_shape[1] == 4:
+            buffer[0][3] = z
+            buffer[1][3] = z
+            buffer[2][3] = z
 
-    if out is None:
-        out = torch.empty(
-            quaternion.shape[:-1] + out_shape,
-            dtype=quaternion.dtype, device=quaternion.device
-        )
-    else:
-        check_shapes(out, [..., *out_shape])
+    t = torch.stack([item for row in buffer for item in row], -1)
 
-    quaternion_to_rot_mat_(
-        quaternion=quaternion,
-        order=order,
-        out=out,
-    )
-
-    if out_shape == (4, 4):
-        out[..., 3, 3] = 1
-
-    if out_shape[0] == 4:
-        out[..., 3, :3] = 0
-
-    if out_shape[1] == 4:
-        out[..., :3, 3] = 0
-
-    return out
+    return t.view(*t.shape[:-1], *out_shape)
 
 
 @beartype
 def rot_mat_to_quaternion(
     rot_mat: torch.Tensor,  # [..., 3, 3]
-    *,
     order: str,  # permutation of "wxyz"
-    out: typing.Optional[torch.Tensor] = None,  # [..., 4]
 ) -> torch.Tensor:  # [..., 4]
     check_shapes(rot_mat, (..., 3, 3))
 
     order = check_quaternion_order(order)
 
-    for i, k in enumerate(order):
-        match k:
-            case "W": wi = i
-            case "X": xi = i
-            case "Y": yi = i
-            case "Z": zi = i
+    wi = order.index("W")
+    xi = order.index("X")
+    yi = order.index("Y")
+    zi = order.index("Z")
 
     m00 = rot_mat[..., 0, 0]
     m01 = rot_mat[..., 0, 1]
@@ -1579,57 +1676,60 @@ def rot_mat_to_quaternion(
     a2 = a_mat[..., 2] = (tr_n + m11 * 2)
     a3 = a_mat[..., 3] = (tr_n + m22 * 2)
 
-    s0 = a0.clamp(1e-6, None).sqrt() * 2
-    s1 = a1.clamp(1e-6, None).sqrt() * 2
-    s2 = a2.clamp(1e-6, None).sqrt() * 2
-    s3 = a3.clamp(1e-6, None).sqrt() * 2
+    eps = EPS[rot_mat.dtype]
 
-    q_mat = torch.empty(
-        (*rot_mat.shape[:-2], 4, 4),
-        dtype=rot_mat.dtype, device=rot_mat.device)
+    s0 = a0.clamp(eps, None).sqrt() * 2
+    s1 = a1.clamp(eps, None).sqrt() * 2
+    s2 = a2.clamp(eps, None).sqrt() * 2
+    s3 = a3.clamp(eps, None).sqrt() * 2
 
-    q_mat[..., wi, 0] = s0 / 4
-    q_mat[..., xi, 0] = m21_sub_m12 / s0
-    q_mat[..., yi, 0] = m02_sub_m20 / s0
-    q_mat[..., zi, 0] = m10_sub_m01 / s0
+    r_s0 = 1 / s0
+    r_s1 = 1 / s1
+    r_s2 = 1 / s2
+    r_s3 = 1 / s3
 
-    q_mat[..., wi, 1] = m21_sub_m12 / s1
-    q_mat[..., xi, 1] = s1 / 4
-    q_mat[..., yi, 1] = m10_add_m01 / s1
-    q_mat[..., zi, 1] = m02_add_m20 / s1
+    q_mat_buffer = [None] * 16
 
-    q_mat[..., wi, 2] = m02_sub_m20 / s2
-    q_mat[..., xi, 2] = m10_add_m01 / s2
-    q_mat[..., yi, 2] = s2 / 4
-    q_mat[..., zi, 2] = m21_add_m12 / s2
+    q_mat_buffer[wi * 4 + 0] = s0 / 4
+    q_mat_buffer[xi * 4 + 0] = m21_sub_m12 * r_s0
+    q_mat_buffer[yi * 4 + 0] = m02_sub_m20 * r_s0
+    q_mat_buffer[zi * 4 + 0] = m10_sub_m01 * r_s0
 
-    q_mat[..., wi, 3] = m10_sub_m01 / s3
-    q_mat[..., xi, 3] = m02_add_m20 / s3
-    q_mat[..., yi, 3] = m21_add_m12 / s3
-    q_mat[..., zi, 3] = s3 / 4
+    q_mat_buffer[wi * 4 + 1] = m21_sub_m12 * r_s1
+    q_mat_buffer[xi * 4 + 1] = s1 / 4
+    q_mat_buffer[yi * 4 + 1] = m10_add_m01 * r_s1
+    q_mat_buffer[zi * 4 + 1] = m02_add_m20 * r_s1
+
+    q_mat_buffer[wi * 4 + 2] = m02_sub_m20 * r_s2
+    q_mat_buffer[xi * 4 + 2] = m10_add_m01 * r_s2
+    q_mat_buffer[yi * 4 + 2] = s2 / 4
+    q_mat_buffer[zi * 4 + 2] = m21_add_m12 * r_s2
+
+    q_mat_buffer[wi * 4 + 3] = m10_sub_m01 * r_s3
+    q_mat_buffer[xi * 4 + 3] = m02_add_m20 * r_s3
+    q_mat_buffer[yi * 4 + 3] = m21_add_m12 * r_s3
+    q_mat_buffer[zi * 4 + 3] = s3 / 4
+
+    q_mat = torch.stack(q_mat_buffer, -1)
+    # [..., 16]
+
+    q_mat = q_mat.view(*q_mat.shape[:-1], 4, 4)
+    # [..., 4, 4]
 
     a_idxes = a_mat.argmax(-1, True)[..., None]
+    # [..., 4] -> [..., 1, 1]
+
     a_idxes = a_idxes.expand(*a_idxes.shape[:-2], 4, 1)
-    # [..., 4, 1]
+    # [..., 1, 1] -> [..., 4, 1]
 
-    ret = q_mat.gather(-1, a_idxes)
-    # [..., 4, 1]
-
-    ret = ret[..., 0]
+    ret = q_mat.gather(-1, a_idxes)[..., 0]
     # [..., 4]
-
-    if out is None:
-        out = ret
-    else:
-        out.copy_(ret)
 
     """
 
     q_mat[..., q channel 4, choices 4]
 
     a_idxes[..., dummy 4, dummy 1]
-
-    out[..., q channel 4, dummy 1]
 
     q_mat[
         ...,
@@ -1639,7 +1739,7 @@ def rot_mat_to_quaternion(
 
     """
 
-    return out
+    return ret
 
 
 @beartype
@@ -1668,26 +1768,46 @@ def quaternion_mul(
 
 
 @beartype
-def make_homo(
-    x: torch.Tensor,  # [...]
-    dim: int = -1,
-) -> torch.Tensor:  # [...]
-    dim = normed_idx(dim, x.ndim)
+def make_homo_rt(
+    r: torch.Tensor,  # [..., P, Q]
+    t: torch.Tensor,  # [..., P]
+    b: bool,
+) -> torch.Tensor:  # [..., P / P + 1, Q + 1]
+    P, Q = -1, -2
 
-    shape = list(x.shape)
-    shape[dim] += 1
+    P, Q = check_shapes(
+        r, (..., P, Q),
+        t, (..., P),
+    )
 
-    ret = torch.empty(shape, dtype=x.dtype, device=x.device)
+    dtype = promote_dtypes(r, t)
+    device = all_same(r.device, t.device)
 
-    idxes = [slice(None)] * x.ndim
+    batch_shape = broadcast_shapes(r.shape[:-2], t.shape[:-1])
 
-    idxes[dim] = slice(None, -1)
-    ret[tuple(idxes)] = x
+    r = r.expand(*batch_shape, P, Q)
+    t = t.expand(*batch_shape, P)
 
-    idxes[dim] = -1
-    ret[tuple(idxes)] = 1
+    buffer = [[None for _ in range(Q + 1)] for _ in range(P + b)]
 
-    return ret
+    for p in range(P):
+        for q in range(Q):
+            buffer[p][q] = r[..., p, q]
+
+        buffer[p][Q] = t[..., p]
+
+    if b:
+        a0 = dummy_zeros(shape=batch_shape, dtype=dtype, device=device)
+        a1 = dummy_ones(shape=batch_shape, dtype=dtype, device=device)
+
+        for q in range(Q):
+            buffer[P][q] = a0
+
+        buffer[P][Q] = a1
+
+    return torch.stack(
+        [item for row in buffer for item in row], -1
+    ).view(*batch_shape, P + b, Q + 1)
 
 
 @beartype
@@ -1708,7 +1828,6 @@ def mat_mul(
     *args: torch.Tensor,
     dtype: typing.Optional[torch.dtype] = None,
     device: typing.Optional[torch.device] = None,
-    out: typing.Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     n = len(args)
 
@@ -1719,13 +1838,10 @@ def mat_mul(
 
     acc = args[0].to(device, dtype)
 
-    if n == 1:
-        return acc if out is None else out.copy_(acc.to(device, dtype))
+    for i in range(1, n):
+        acc = acc @ args[i].to(device, dtype)
 
-    for i in range(1, n - 1):
-        acc = torch.matmul(acc, args[i].to(device, dtype))
-
-    return torch.matmul(acc, args[-1].to(device, dtype), out=out)
+    return acc
 
 
 @beartype
@@ -1733,8 +1849,6 @@ def do_rt(
     r: torch.Tensor,  # [..., P, Q]
     t: torch.Tensor,  # [..., P]
     v: torch.Tensor,  # [..., Q]
-    *,
-    out: typing.Optional[torch.Tensor] = None,  # [..., P]
 ) -> torch.Tensor:  # out[..., P]
     P, Q = -1, -2
 
@@ -1744,7 +1858,13 @@ def do_rt(
         v, (..., Q),
     )
 
-    return torch.add(mat_mul(r, v[..., None])[..., 0], t, out=out)
+    dtype = promote_dtypes(r, t, v)
+
+    r = r.to(dtype)
+    t = t.to(dtype)
+    v = v.to(dtype)
+
+    return (r @ v[..., None])[..., 0] + t
 
 
 @beartype
@@ -1753,12 +1873,9 @@ def merge_rt(
     a_t: torch.Tensor,  # [..., P]
     b_r: torch.Tensor,  # [..., Q, R]
     b_t: torch.Tensor,  # [..., Q]
-    *,
-    out_r: typing.Optional[torch.Tensor] = None,  # [..., P, R]
-    out_t: typing.Optional[torch.Tensor] = None,  # [..., P]
 ) -> tuple[
-    torch.Tensor,  # out_rs[..., P, R]
-    torch.Tensor,  # out_ts[..., P]
+    torch.Tensor,  # out_r[..., P, R]
+    torch.Tensor,  # out_t[..., P]
 ]:
     P, Q, R = -1, -2, -3
 
@@ -1776,10 +1893,10 @@ def merge_rt(
     b_r = b_r.to(dtype)
     b_t = b_t.to(dtype)
 
-    out_r = mat_mul(a_r, b_r, out=out_r)
+    out_r = a_r @ b_r
     # [..., P, R]
 
-    out_t = torch.add(mat_mul(a_r, b_t[..., None])[..., 0], a_t, out=out_t)
+    out_t = (a_r @ b_t[..., None])[..., 0] + a_t
     # [..., P]
 
     return out_r, out_t
@@ -1789,9 +1906,6 @@ def merge_rt(
 def get_inv_rt(
     r: torch.Tensor,  # [..., D, D]
     t: torch.Tensor,  # [..., D]
-    *,
-    out_r: typing.Optional[torch.Tensor] = None,  # [..., D, D]
-    out_t: typing.Optional[torch.Tensor] = None,  # [..., D]
 ) -> tuple[
     torch.Tensor,  # out_rs[..., D, D]
     torch.Tensor,  # out_ts[..., D]
@@ -1801,27 +1915,13 @@ def get_inv_rt(
         t, (..., -1),
     )
 
-    if out_r is None:
-        out_r = empty(like=r)
-
-    if out_t is None:
-        out_t = torch.empty(
-            (*t.shape, 1),
-            dtype=promote_dtypes(r, t),
-            device=check_devices(out_r, t)
-        )
-
-    torch.inverse(r, out=out_r)
+    inv_r = r.inverse()
     # [..., D, D]
 
-    torch.matmul(
-        out_r,
-        -t[..., None],
-        out=out_t,
-    )
-    # [..., D, 1]
+    inv_t = (inv_r @ -t[..., None])[..., 0]
+    # [..., D]
 
-    return out_r, out_t[..., 0]
+    return inv_r, inv_t
 
 
 @beartype
@@ -1834,7 +1934,12 @@ def do_homo(
         v, (..., -2),
     )
 
-    return homo_normalize(mat_mul(h, v[..., None])[..., 0])
+    dtype = promote_dtypes(h, v)
+
+    h = h.to(dtype)
+    v = v.to(dtype)
+
+    return homo_normalize((h @ v[..., None])[..., 0])
 
 
 @beartype
@@ -1884,6 +1989,11 @@ def dlt(
     assert 2 <= P
     assert 2 <= Q
 
+    dtype = promote_dtypes(src, dst)
+
+    src = src.to(dtype)
+    dst = dst.to(dtype)
+
     if normalize:
         src_h = _get_normalize_h(src[:, :-1], math.sqrt(P-1))
         # src_h[P, P]
@@ -1891,14 +2001,13 @@ def dlt(
         dst_h = _get_normalize_h(dst[:, :-1], math.sqrt(Q - 1))
         # dst_h[Q, Q]
 
-        rep_src = mat_mul(src_h, src[..., None])[..., 0]
-        rep_dst = mat_mul(dst_h, dst[..., None])[..., 0]
+        rep_src = (src_h @ src[..., None])[..., 0]
+        rep_dst = (dst_h @ dst[..., None])[..., 0]
     else:
         rep_src = src
         rep_dst = dst
 
-    A = torch.empty([N * (Q - 1), Q * P],
-                    dtype=torch.promote_types(rep_src.dtype, rep_dst.dtype))
+    A = torch.empty([N * (Q - 1), Q * P], dtype=dtype)
 
     A[:, :-P] = 0
 
@@ -1914,7 +2023,7 @@ def dlt(
     H = Vh[-1, :].reshape(Q, P)
 
     if normalize:
-        H = mat_mul(torch.inverse(dst_h), H, src_h)
+        H = dst_h.inverse() @ H @ src_h
 
     if calc_err:
         err = math.sqrt((do_homo(H, src) - dst).square().sum() / N)
@@ -1924,13 +2033,16 @@ def dlt(
     return H, err
 
 
+PathLike = str | bytes | pathlib.Path | os.PathLike
+
+
 @beartype
-def to_pathlib_path(path: os.PathLike) -> pathlib.Path:
+def to_pathlib_path(path: PathLike) -> pathlib.Path:
     return path if isinstance(path, pathlib.Path) else pathlib.Path(path)
 
 
 @beartype
-def create_file(path: os.PathLike, mode="w", *args, **kwargs):
+def create_file(path: PathLike, mode="w", *args, **kwargs):
     path = to_pathlib_path(path)
 
     path.parents[0].mkdir(parents=True, exist_ok=True)
@@ -1940,28 +2052,75 @@ def create_file(path: os.PathLike, mode="w", *args, **kwargs):
 
 @beartype
 def read_file(
-    path: os.PathLike,
+    path: PathLike,
     mode: str,
-):
+) -> typing.Any:
     with open(path, mode) as f:
         return f.read()
 
 
 @beartype
 def write_file(
-    path: os.PathLike,
+    path: PathLike,
     mode: str,
     data: typing.Any,
-):
+) -> None:
     with create_file(path, mode) as f:
         f.write(data)
+
+
+@beartype
+def create_dir(dir: PathLike, clear: bool = False) -> pathlib.Path:
+    dir = to_pathlib_path(dir)
+    dir.mkdir(parents=True, exist_ok=True)
+
+    if clear:
+        remove_dir(dir, False)
+
+    return dir
+
+
+@beartype
+def remove_dir(dir: PathLike, rm_dir_self: bool = True) -> None:
+    dir = to_pathlib_path(dir)
+
+    if not dir.exists():
+        return
+
+    assert dir.is_dir()
+
+    if rm_dir_self:
+        shutil.rmtree(dir)
+        return
+
+    for name in os.listdir(dir):
+        child = dir / name
+
+        if os.path.isfile(child) or os.path.islink(child):
+            os.unlink(child)
+        else:
+            shutil.rmtree(child)
+
+
+@beartype
+def read_json(path: PathLike) -> typing.Any:
+    with open(path, "r", encoding="utf-8") as f:
+        ret = json.load(f)
+
+    return ret
+
+
+@beartype
+def write_json(path: PathLike, data: typing.Any) -> None:
+    with create_file(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 @beartype
 class PickleReader:
     def __init__(
         self,
-        path: os.PathLike,
+        path: PathLike,
     ):
         self.f = open(path, mode="rb", buffering=128 * MiBYTE)
 
@@ -1994,7 +2153,7 @@ class PickleReader:
 class PickleWriter:
     def __init__(
         self,
-        path: os.PathLike,
+        path: PathLike,
         mode: str = "wb+",
     ):
         self.f = create_file(path, mode=mode, buffering=128 * MiBYTE)
@@ -2026,16 +2185,14 @@ class PickleWriter:
 
 
 @beartype
-def read_pickle(
-    path: os.PathLike,
-):
+def read_pickle(path: PathLike) -> typing.Any:
     with PickleReader(path) as reader:
         return reader.read()
 
 
 @beartype
 def write_pickle(
-    path: os.PathLike,
+    path: PathLike,
     data: object,
     *,
     mode: str = "wb+",
@@ -2047,12 +2204,12 @@ def write_pickle(
 
 
 @beartype
-def write_tensor_to_file(path: os.PathLike, x: torch.Tensor) -> None:
+def write_tensor_to_file(path: PathLike, x: torch.Tensor) -> None:
     path = to_pathlib_path(path)
 
     path.parents[0].mkdir(parents=True, exist_ok=True)
 
-    if x.dtype.is_floating_point:
+    if x.is_floating_point():
         def to_str(val): return f"{float(val):+.7e}"
     else:
         def to_str(val): return str(int(val))
@@ -2206,6 +2363,63 @@ def deserialize_tensor(
 
 
 @beartype
+def show_tensor_info(
+    x: typing.Iterable[tuple[str, torch.Tensor]],
+) -> None:
+    def _f(x):
+        return None if x is None else f"{x:+.4e}"
+
+    tab = [(
+        "name",
+        "dtype",
+        "shape",
+        "device",
+        "requires_grad",
+        "grad_min",
+        "grad_max",
+        "grad_mean",
+        "grad_sum",
+        "grad_std",
+    )]
+
+    for name, t in x:
+        dtype = t.dtype
+        shape = t.shape
+        device = t.device
+        requires_grad = t.requires_grad
+
+        grad = t.grad
+
+        if grad is None:
+            grad_min = None
+            grad_max = None
+            grad_mean = None
+            grad_sum = None
+            grad_std = None
+        else:
+            grad_min = grad.min().item()
+            grad_max = grad.max().item()
+            grad_mean = grad.mean().item()
+            grad_sum = grad.sum().item()
+            grad_std = grad.std().item()
+
+        tab.append((
+            name,
+            dtype,
+            shape,
+            device,
+            requires_grad,
+            _f(grad_min),
+            _f(grad_max),
+            _f(grad_mean),
+            _f(grad_sum),
+            _f(grad_std),
+        ))
+
+    print(tabulate.tabulate(tab, tablefmt="grid"))
+
+
+@beartype
 def show_point(
     point: torch.Tensor,  # [..., 3]
 ) -> None:
@@ -2215,3 +2429,37 @@ def show_point(
         point.detach().to(CPU_DEVICE).reshape(-1, 3))
 
     pc.show()
+
+
+@beartype
+class LossTable:
+    def __init__(self):
+        self.table: dict[tuple[torch.Tensor, torch.Tensor]] = dict()
+
+    def add(
+        self,
+        name: str,
+        loss: torch.Tensor,
+        weighted_loss: torch.Tensor,
+    ) -> None:
+        assert name not in self.table
+
+        assert loss.isfinite().all()
+        assert weighted_loss.isfinite().all()
+
+        self.table[name] = (loss, weighted_loss)
+
+    def get_weighted_sum_loss(self) -> torch.Tensor:
+        return sum(w_loss for loss, w_loss in self.table.values())
+
+    def show(self) -> None:
+        def _f(x):
+            return None if x is None else f"{x.item():+.4e}"
+
+        print(tabulate.tabulate(zip(
+            ("", "loss", "weighted loss"),
+            *(
+                (loss_name, _f(loss), _f(w_loss))
+                for loss_name, (loss, w_loss) in self.table.items()
+            )
+        ), tablefmt="grid"))

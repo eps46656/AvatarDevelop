@@ -1,12 +1,13 @@
 import dataclasses
-import os
+import typing
 
 import h5py
 import torch
 import tqdm
 from beartype import beartype
 
-from . import camera_utils, smplx_utils, transform_utils, utils, vision_utils
+from . import (camera_utils, config, smplx_utils, transform_utils, utils,
+               vision_utils)
 
 
 @beartype
@@ -29,7 +30,7 @@ class SubjectData:
 
 @beartype
 def _read_mask(
-    subject_dir: os.PathLike,
+    subject_dir: utils.PathLike,
     fps: float,
     device: torch.device,
 ) -> torch.Tensor:  # [T, 1, H, W]
@@ -37,14 +38,14 @@ def _read_mask(
 
     assert subject_dir.is_dir()
 
-    mask_video_path = subject_dir / "masks.mp4"
+    mask_video_path = subject_dir / "masks.avi"
 
-    def f():
+    def read_and_return():
         return vision_utils.read_video_mask(
             mask_video_path, dtype=torch.float32, device=device)[0]
 
     if mask_video_path.exists():
-        return f()
+        return read_and_return()
 
     f = h5py.File(subject_dir / "masks.hdf5")
 
@@ -56,19 +57,19 @@ def _read_mask(
         mask_video_path,
         height=H,
         width=W,
-        color_type=vision_utils.ColorType.RGB,
+        color_type="RGB",
         fps=fps,
     ) as video_writer:
         for i in tqdm.tqdm(range(T)):
-            video_writer.write(utils.rct(torch.from_numpy(
-                masks[i]) * 255, dtype=torch.uint8).expand(3, H, W))
+            video_writer.write(torch.from_numpy(
+                masks[i] * 255).to(torch.uint8).expand(3, H, W))
 
-    return f()
+    return read_and_return()
 
 
 @beartype
 def _read_camera(
-    subject_dir: os.PathLike,
+    subject_dir: utils.PathLike,
     img_h: int,
     img_w: int,
     device: torch.device,
@@ -114,29 +115,30 @@ def _read_camera(
 
 
 @beartype
-def _read_smpl_blending_param(
-    subject_dir: os.PathLike,
-    smplx_model_data: smplx_utils.ModelData,
+def _read_blending_param(
+    subject_dir: utils.PathLike,
+    model_data: smplx_utils.ModelData,
     frames_cnt: int,
+    dtype: torch.dtype,
     device: torch.device,
 ) -> smplx_utils.BlendingParam:
     subject_dir = utils.to_pathlib_path(subject_dir)
 
     assert subject_dir.is_dir()
 
-    body_shapes_cnt = smplx_model_data.body_shape_vert_dir.shape[-1]
-    poses_cnt = smplx_model_data.body_joints_cnt
+    body_shapes_cnt = model_data.body_shape_vert_dir.shape[-1]
+    poses_cnt = model_data.body_joints_cnt
     # global_rot + smplx_utils.BODY_POSES_CNT
 
     d = h5py.File(subject_dir / "reconstructed_poses.hdf5")
 
-    body_shapes = torch.from_numpy(d["betas"][...]).to(utils.FLOAT)
+    body_shapes = torch.from_numpy(d["betas"][...])
     # [?]
 
-    global_transl = torch.from_numpy(d["trans"][...]).to(utils.FLOAT)
+    global_transl = torch.from_numpy(d["trans"][...])
     # [T, 3]
 
-    poses = torch.from_numpy(d["pose"][...]).to(utils.FLOAT)
+    poses = torch.from_numpy(d["pose"][...])
     # [T, ? * 3]
 
     # ---
@@ -185,7 +187,7 @@ def _read_smpl_blending_param(
 
     # ---
 
-    dd = (device, utils.FLOAT)
+    dd = (device, dtype)
 
     return smplx_utils.BlendingParam(
         body_shape=body_shapes[:frames_cnt].to(*dd),
@@ -197,20 +199,23 @@ def _read_smpl_blending_param(
 
 @beartype
 def _read_tex(
-    subject_dir: os.PathLike,
+    subject_dir: utils.PathLike,
     device: torch.device,
 ):
     subject_dir = utils.to_pathlib_path(subject_dir)
 
     assert subject_dir.is_dir()
 
-    return vision_utils.read_image(subject_dir / f"tex-{subject_dir.name}.jpg").to(device)
+    return vision_utils.read_image(
+        subject_dir / f"tex-{subject_dir.name}.jpg", "RGB"
+    ).image.to(device)
 
 
 @beartype
 def read_subject(
-    subject_dir: os.PathLike,
-    model_data: smplx_utils.ModelData,
+    subject_dir: utils.PathLike,
+    model_data: typing.Optional[smplx_utils.ModelData],
+    dtype: torch.dtype,
     device: torch.device,
 ):
     subject_dir = utils.to_pathlib_path(subject_dir)
@@ -219,10 +224,25 @@ def read_subject(
 
     subject_name = subject_dir.name
 
-    subject_video_path = subject_dir / f"{subject_name}.mp4"
+    if model_data is None:
+        assert "male" in subject_name or "female" in subject_name
+
+        model_data = smplx_utils.ModelData.from_origin_file(
+            model_data_path=config.SMPL_FEMALE_MODEL_PATH
+            if "female" in subject_name else
+            config.SMPL_MALE_MODEL_PATH,
+
+            model_config=smplx_utils.smpl_model_config,
+
+            dtype=dtype,
+            device=device,
+        )
 
     video, fps = vision_utils.read_video(
-        subject_video_path, vision_utils.ColorType.RGB, device=device)
+        subject_dir / f"{subject_name}.mp4",
+        "RGB",
+        device=device,
+    )
     # [T, C, H, W]
 
     mask = _read_mask(subject_dir, fps, device)
@@ -233,8 +253,8 @@ def read_subject(
     camera_config, camera_transform = \
         _read_camera(subject_dir, img_h, img_w, device)
 
-    blending_param = _read_smpl_blending_param(
-        subject_dir, model_data, video.shape[0], device)
+    blending_param = _read_blending_param(
+        subject_dir, model_data, video.shape[0], dtype, device)
 
     tex = _read_tex(subject_dir, device)
 

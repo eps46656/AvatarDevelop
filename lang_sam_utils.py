@@ -27,6 +27,7 @@ class MaskStrategy(enum.Enum):
     MAX_SCORE = enum.auto()
     MIN_AREA = enum.auto()
     MEAN = enum.auto()
+    INTERSECTION = enum.auto()
 
 
 @beartype
@@ -98,7 +99,9 @@ class predict:
                             mask = masks[masks.sum(axis=(1, 2)).argmin()]
                         case MaskStrategy.MEAN:
                             mask = masks.mean(axis=0)
+                        case MaskStrategy.INTERSECTION:
+                            mask = masks.min(axis=0)
                         case _:
                             raise utils.MismatchException()
 
-                    yield torch.from_numpy(mask)
+                    yield torch.from_numpy(mask)[None, :, :]

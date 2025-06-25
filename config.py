@@ -36,4 +36,28 @@ PEOPLE_SNAPSHOT_DIR = DIR / "people_snapshot_public"
 
 # ---
 
+CLOTH3D_DIR = DIR / "cloth3d"
+
+# ---
+
+DENSEPOSE_CONFIG = DIR / "densepose_data/densepose_rcnn_R_50_FPN_s1x.yaml"
+
+DENSEPOSE_MODEL = DIR / "densepose_data/model_final_162be9.pkl"
+
+# ---
+
+OPENPOSE_DIR = DIR / "openpose"
+
+# OPENPOSE_BIN =
+
+# ---
+
+DD_HUMAN_PARSING_DIR = DIR / "2D-Human-Parsing"
+
+# ---
+
+M3D_VTON_DIR = DIR / "M3D-VTON"
+
+# ---
+
 GART_DIR = DIR / "GART"

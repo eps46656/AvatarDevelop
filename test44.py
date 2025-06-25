@@ -1,8 +1,7 @@
 
 import os
 
-import pymeshlab
-import pymeshlab.pmeshlab
+
 import torch
 
 from . import config, mesh_utils, smplx_utils, utils
@@ -39,16 +38,15 @@ def main1():
         mesh_utils.MeshGraph.from_faces(
             V,
             faces.to(DEVICE, torch.float64),
-            DEVICE,
         ),
 
         vertices.to(DEVICE, torch.float64),
     )
 
-    new_mesh_data = mesh_data.remesh(10 * 1e-3, 5)
+    # new_mesh_data = mesh_data.remesh(10 * 1e-3, 5)
 
     mesh_data.show()
-    new_mesh_data.show()
+    # new_mesh_data.show()
 
 
 if __name__ == "__main__":

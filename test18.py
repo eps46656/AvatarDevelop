@@ -110,7 +110,7 @@ def main1():
 
     camera_proj_mat = camera_utils.make_proj_mat(
         camera_config=camera_config,
-        camera_view_transform=camera_view_transform,
+        camera_transform=camera_view_transform,
         convention=camera_utils.Convention.PyTorch3D,
         target_coord=camera_utils.Coord.NDC,
         dtype=utils.FLOAT,

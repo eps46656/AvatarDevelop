@@ -11,45 +11,78 @@ import tqdm
 from beartype import beartype
 
 from . import (avatar_utils, camera_utils, config, gom_avatar_utils,
-               people_snapshot_utils, rendering_utils, sdf_utils, smplx_utils,
-               training_utils, transform_utils, utils, vision_utils)
+               mesh_utils, people_snapshot_utils, rendering_utils, sdf_utils,
+               smplx_utils, training_utils, transform_utils, utils,
+               vision_utils)
 
 DTYPE = torch.float64
-DEVICE = torch.device("cuda")
+DEVICE = utils.CUDA_DEVICE
 
 SDF_MODULE_DIR = config.DIR / "sdf_module_2025_0522_1"
 
 
-ALPHA_SIGNED_DIST = 1.0
-ALPHA_EIKONAL = 1.0
+ALPHA_SIGNED_DIST = (lambda epoch: 1.0)
+ALPHA_EIKONAL = (lambda epoch: 1.0)
 
 BATCH_SIZE = 64
 BATCHES_CNT = 32
 
 
-LR = 1e-3
+LR = (lambda epoch: 1e-3 * (0.1 ** (epoch / 64)))
 
-SUBJECT_NAME = "female-3-casual"
+SUBJECT_NAME = "female-4-casual"
+
+
+FEMALE_3_CASUAL_BARE_TEX_PATH = config.DIR / \
+    "tex_avatar_2025_0518_4" / "tex_1747581876.png"
+
+FEMALE_3_CASUAL_OBJECT_TEX_PATH = config.DIR / \
+    "tex_avatar_f3c_2025_0609_1" / "tex_1749543458.png"
+
+FEMALE_3_CASUAL_HAIR_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0609_1" / "obj_model_data_HAIR_1749640608.pkl"
+
+FEMALE_3_CASUAL_UPPER_GARMENT_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0609_1" / "obj_model_data_UPPER_GARMENT_1749640613.pkl"
+
+FEMALE_3_CASUAL_LOWER_GARMENT_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0609_1" / "obj_model_data_LOWER_GARMENT_1749640619.pkl"
+
+
+FEMALE_4_CASUAL_BARE_TEX_PATH = config.DIR / \
+    "tex_avatar_2025_0527_1" / "tex_1748286865.png"
+
+FEMALE_4_CASUAL_OBJECT_TEX_PATH = config.DIR / \
+    "tex_avatar_2025_0529_1" / "tex_1748504545.png"
+
+FEMALE_4_CASUAL_HAIR_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0529_2" / "obj_model_data_HAIR_1748791443.pkl"
+
+FEMALE_4_CASUAL_UPPER_GARMENT_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0529_2" / "obj_model_data_UPPER_GARMENT_1748791447.pkl"
+
+FEMALE_4_CASUAL_LOWER_GARMENT_MODEL_DATA_PATH = config.DIR / \
+    "mesh_seg_2025_0529_2" / "obj_model_data_LOWER_GARMENT_1748791451.pkl"
 
 
 def read_subject(model_data: typing.Optional[smplx_utils.ModelData] = None):
     if model_data is None:
         model_data = smplx_utils.ModelData.from_origin_file(
-            model_data_path=config.SMPL_NEUTRAL_MODEL_PATH,
+            model_data_path=config.SMPL_FEMALE_MODEL_PATH,
             model_config=smplx_utils.smpl_model_config,
-            dtype=utils.FLOAT,
-            device=utils.CPU_DEVICE,
+            dtype=DTYPE,
+            device=DEVICE,
         )
 
     subject_data = people_snapshot_utils.read_subject(
-        config.PEOPLE_SNAPSHOT_DIR / SUBJECT_NAME, model_data, utils.CPU_DEVICE)
+        config.PEOPLE_SNAPSHOT_DIR / SUBJECT_NAME, model_data, DTYPE, DEVICE)
 
     return subject_data
 
 
 def load_trainer():
     model_data = smplx_utils.ModelData.from_origin_file(
-        model_data_path=config.SMPL_NEUTRAL_MODEL_PATH,
+        model_data_path=config.SMPL_FEMALE_MODEL_PATH,
         model_config=smplx_utils.smpl_model_config,
         dtype=DTYPE,
         device=DEVICE,
@@ -86,7 +119,6 @@ def load_trainer():
 
             lr=LR,
             betas=(0.9, 0.99),
-            gamma=0.1 ** (1 / 64),
 
             alpha_signed_dist=ALPHA_SIGNED_DIST,
             alpha_eikonal=ALPHA_EIKONAL,
@@ -113,7 +145,7 @@ def F(
     blending_param: list[typing.Any],
     texture: list[torch.Tensor],
 ) -> tuple[
-    torch.Tensor,  # dist[H, W]
+    torch.Tensor,  # zbuf[H, W]
     torch.Tensor,  # tex[H, W, C]
 ]:
     N = utils.all_same(
@@ -124,7 +156,7 @@ def F(
 
     H, W = camera_config.img_h, camera_config.img_w
 
-    acc_r_dist: torch.Tensor = None
+    acc_wbuf: torch.Tensor = None
     acc_tex: torch.Tensor = None
 
     for i in range(N):
@@ -149,7 +181,13 @@ def F(
 
         cur_pix_to_face = cur_rasterize_mesh_result.pix_to_face.view(H, W)
         cur_bary_coord = cur_rasterize_mesh_result.bary_coord.view(H, W, 3)
-        cur_dist = cur_rasterize_mesh_result.dist.view(H, W)
+        cur_zbuf = cur_rasterize_mesh_result.zbuf.view(H, W)
+
+        print(f"{cur_pix_to_face.min()=}")
+        print(f"{cur_pix_to_face.max()=}")
+
+        print(f"{cur_zbuf.min()=}")
+        print(f"{cur_zbuf.max()=}")
 
         cur_tex_coord = rendering_utils.calc_tex_coord(
             pix_to_face=cur_pix_to_face,
@@ -161,6 +199,8 @@ def F(
         cur_tex = rendering_utils.sample_texture(
             texture=cur_texture,
             tex_coord=cur_tex_coord,
+            wrap_mode=rendering_utils.WrapMode.MIRROR,
+            sampling_mode=rendering_utils.SamplingMode.LINEAR,
         )
 
         cur_tex = torch.where(
@@ -169,47 +209,110 @@ def F(
             cur_tex,
         )
 
-        cur_r_dist = 1 / cur_dist
+        cur_wbuf = 1 / cur_zbuf
 
-        if acc_r_dist is None:
-            acc_r_dist = cur_r_dist
+        if acc_wbuf is None:
+            acc_wbuf = cur_wbuf
             acc_tex = cur_tex
         else:
-            p = acc_r_dist < cur_r_dist
+            p = acc_wbuf < cur_wbuf
             # [H, W]
 
-            acc_r_dist = torch.where(
+            acc_wbuf = torch.where(
                 p,
-                cur_r_dist,
-                acc_r_dist,
+                cur_wbuf,
+                acc_wbuf,
             )
+
             acc_tex = torch.where(
                 p[..., None],
                 cur_tex,
                 acc_tex,
             )
 
-    return 1 / acc_r_dist, acc_tex
+    return 1 / acc_wbuf, acc_tex
+
+
+def load_origin_model_data(path):
+    return smplx_utils.ModelData.from_origin_file(
+        model_data_path=config.SMPL_FEMALE_MODEL_PATH,
+        model_config=smplx_utils.smpl_model_config,
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+
+
+def load_model_data(path):
+    return smplx_utils.ModelData.from_state_dict(
+        state_dict=utils.read_pickle(path),
+        dtype=DTYPE,
+        device=DEVICE,
+    )
+
+
+def load_tex(path):
+    return einops.rearrange(
+        (vision_utils.read_image(path, "RGB").image / 255.0),
+        "c h w -> h w c",
+    ).to(DEVICE, DTYPE)
 
 
 def main1():
+    female_model_data = load_origin_model_data(config.SMPL_FEMALE_MODEL_PATH)
+
+    blending_coeff_field = smplx_utils.BlendingCoeffField.from_model_data(
+        female_model_data)
+
     model_data = [
-        smplx_utils.ModelData.from_origin_file(
-            model_data_path=config.SMPL_FEMALE_MODEL_PATH,
-            model_config=smplx_utils.smpl_model_config,
-            dtype=DTYPE,
-            device=DEVICE,
-        ),  # naked model
+        # bare model data
+        female_model_data,
 
-
+        blending_coeff_field.query_model_data(load_model_data(
+            FEMALE_3_CASUAL_HAIR_MODEL_DATA_PATH)),
+        blending_coeff_field.query_model_data(load_model_data(
+            FEMALE_3_CASUAL_UPPER_GARMENT_MODEL_DATA_PATH)),
+        blending_coeff_field.query_model_data(load_model_data(
+            FEMALE_3_CASUAL_LOWER_GARMENT_MODEL_DATA_PATH)),
     ]
 
-    tex_path = [
-        config.DIR / "tex_avatar_2025_0518_4" / "tex_1747581876.png",
-        # naked model texture
+    for i in range(len(model_data)):
+        print(f"{model_data[i].pose_vert_dir.min()=}")
+        print(f"{model_data[i].pose_vert_dir.max()=}")
+
+        model_data[i].body_shape_vert_dir.fill_(0)
+        model_data[i].expr_shape_vert_dir.fill_(0)
+        model_data[i].pose_vert_dir.fill_(0)
+
+        print(f"{model_data[i].lbs_weight.min()=}")
+        print(f"{model_data[i].lbs_weight.max()=}")
+
+        k = model_data[i].lbs_weight.sum(-1)
+
+        print(f"{k.min()=}")
+        print(f"{k.max()=}")
+
+    mesh_utils.show_mesh_data(
+        [
+            mesh_utils.MeshData(
+                mesh_graph=m.mesh_graph,
+                vert_pos=m.vert_pos,
+            )
+            for m in model_data
+        ]
+    )
+
+    female_3_casual_object_tex = load_tex(FEMALE_3_CASUAL_OBJECT_TEX_PATH)
+    female_4_casual_object_tex = load_tex(FEMALE_4_CASUAL_OBJECT_TEX_PATH)
+
+    tex = [
+        load_tex(FEMALE_3_CASUAL_BARE_TEX_PATH),
+
+        female_3_casual_object_tex,
+        female_3_casual_object_tex,
+        female_3_casual_object_tex,
     ]
 
-    N = utils.all_same(len(model_data), tex_path)
+    N = utils.all_same(len(model_data), len(tex))
 
     model_blender = [
         smplx_utils.ModelBlender(
@@ -219,35 +322,44 @@ def main1():
         for cur_model_data in model_data
     ]
 
-    tex = [
-        (vision_utils.read_image(cur_tex_path) / 255.0).to(DEVICE, DTYPE)
-        for cur_tex_path in tex_path
-    ]
-
     subject_data = read_subject()
 
     T, C, H, W = subject_data.video.shape
+
+    subject_data.blending_param.body_shape = None
+    subject_data.blending_param.expr_shape = None
 
     video_writer = vision_utils.VideoWriter(
         path=config.DIR / f"rgb_{utils.timestamp_sec()}.avi",
         height=H,
         width=W,
-        color_type=vision_utils.ColorType.RGB,
+        color_type="RGB",
         fps=subject_data.fps,
     )
 
-    for t in range(T):
+    for t in tqdm.tqdm(range(T)):
         cur_blending_param = subject_data.blending_param[t]
 
-        cur_img = F(
+        cur_zbuf, cur_img = F(
             avatar_blender=model_blender,
             camera_config=subject_data.camera_config,
             camera_transform=subject_data.camera_transform,
             blending_param=[cur_blending_param] * N,
             texture=tex,
         )
+        # [H, W, C]
 
-        video_writer.write(utils.rct(cur_img * 255, torch.uint8))
+        cur_img = einops.rearrange(cur_img, "h w c -> c h w")
+        # [C, H, W]
+
+        print(f"{cur_img.min()=}")
+        print(f"{cur_img.max()=}")
+
+        cur_frame = utils.rct(cur_img * 255, dtype=torch.uint8)
+
+        vision_utils.show_image("cur_frame", cur_frame)
+
+        video_writer.write(cur_frame)
 
     video_writer.close()
 

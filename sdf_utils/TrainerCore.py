@@ -1,6 +1,5 @@
 import collections
 import dataclasses
-import os
 import typing
 
 import tabulate
@@ -9,28 +8,27 @@ import tqdm
 from beartype import beartype
 
 from .. import dataset_utils, training_utils, utils
-from .Dataset import Dataset, Sample
-from .Module import Module, ModuleForwardResult
+from .Dataset import *
+from .Module import *
 
 
 @dataclasses.dataclass
 class TrainerCoreConfig:
-    proj_dir: os.PathLike
+    proj_dir: utils.PathLike
 
     device: torch.device
 
     batch_size: int
 
-    lr: float
+    lr: typing.Callable[[int], float]
     betas: tuple[float, float]
-    gamma: float
 
-    alpha_signed_dist: float
-    alpha_eikonal: float
+    alpha_signed_dist: typing.Callable[[int], float]
+    alpha_eikonal: typing.Callable[[int], float]
 
 
 @beartype
-def call_eikonal_loss(
+def calc_eikonal_loss(
     point_pos: torch.Tensor,  # [..., D]
     signed_dist: torch.Tensor,  # [...]
 ) -> torch.Tensor:  # []
@@ -58,7 +56,7 @@ class TrainerCore(training_utils.TrainerCore):
         self,
         config: TrainerCoreConfig,
         module: Module,
-        dataset: Dataset,
+        dataset: typing.Optional[Dataset],
     ):
         self.config = dataclasses.replace(config)
         self.config.proj_dir = utils.to_pathlib_path(self.config.proj_dir)
@@ -79,16 +77,19 @@ class TrainerCore(training_utils.TrainerCore):
     # --
 
     def _make_optimizer(self) -> torch.optim.Optimizer:
+        base_lr = self.config.lr(0)
+
         return torch.optim.Adam(
-            utils.get_param_groups(self.module, self.config.lr),
-            lr=self.config.lr,
+            utils.get_param_groups(self.module, base_lr),
+            lr=base_lr,
             betas=self.config.betas,
         )
 
-    def _make_scheduler(self) -> torch.optim.lr_scheduler.ExponentialLR:
-        return torch.optim.lr_scheduler.ExponentialLR(
-            self.optimizer,
-            gamma=self.config.gamma,
+    def _make_scheduler(self) -> torch.optim.lr_scheduler.LambdaLR:
+        return torch.optim.lr_scheduler.LambdaLR(
+            optimizer=self.optimizer,
+            lr_lambda=lambda epoch: self.config.lr(epoch) / self.config.lr(0),
+            last_epoch=self.epoch - 1,
         )
 
     # --
@@ -132,18 +133,12 @@ class TrainerCore(training_utils.TrainerCore):
     def calc_loss(
         self,
         point_pos: torch.Tensor,  # [..., D]
-        forward_result: ModuleForwardResult
+        pr_signed_dist: torch.Tensor,  # [...]
+        gt_signed_dist: torch.Tensor,  # [...]
     ) -> torch.Tensor:
         D = point_pos.shape[-1]
 
-        def _f(x):
-            return f"{x.item():+.4e}"
-
-        loss_tab = [("", "loss", "weighted loss")]
-
-        pr_signed_dist = forward_result.pr_signed_dist
-        gt_signed_dist = forward_result.gt_signed_dist
-        # [...]
+        loss_table = utils.LossTable()
 
         # ---
 
@@ -156,28 +151,39 @@ class TrainerCore(training_utils.TrainerCore):
 
         signed_dist_diff = (pr_signed_dist - gt_signed_dist).square().mean()
 
-        w_signed_dist_diff = self.config.alpha_signed_dist * signed_dist_diff
+        w_signed_dist_diff = \
+            self.config.alpha_signed_dist(self.epoch) * signed_dist_diff
 
-        loss_tab.append(
-            ("signed_dist_diff", _f(signed_dist_diff), _f(w_signed_dist_diff)))
-
-        # ---
-
-        eikonal_loss = call_eikonal_loss(point_pos, pr_signed_dist)
-        w_eikonal_loss = self.config.alpha_eikonal * eikonal_loss
-
-        loss_tab.append(("eikonal_loss", _f(eikonal_loss), _f(w_eikonal_loss)))
+        loss_table.add(
+            "signed_dist_diff", signed_dist_diff, w_signed_dist_diff)
 
         # ---
 
-        print(tabulate.tabulate(zip(*loss_tab), tablefmt="grid"))
+        eikonal_loss = calc_eikonal_loss(point_pos, pr_signed_dist)
 
-        return w_signed_dist_diff + w_eikonal_loss
+        w_eikonal_loss = self.config.alpha_eikonal(self.epoch) * eikonal_loss
+
+        loss_table.add(
+            "eikonal_loss", eikonal_loss, w_eikonal_loss)
+
+        # ---
+
+        loss_table.show()
+
+        loss = loss_table.get_weighted_sum_loss()
+
+        assert loss.isfinite().all()
+
+        print(f"{loss=}")
+
+        return loss
 
     # --
 
     @utils.mem_clear
     def train(self) -> training_utils.TrainingResult:
+        assert self.dataset is not None
+
         sum_loss = 0.0
 
         self.dataset.refresh()
@@ -192,14 +198,11 @@ class TrainerCore(training_utils.TrainerCore):
             self.optimizer.zero_grad()
 
             point_pos = sample.point_pos.clone().requires_grad_()
-            signed_dist = sample.signed_dist
+            gt_signed_dist = sample.signed_dist
 
-            result: ModuleForwardResult = self.module(
-                point_pos=point_pos,
-                signed_dist=signed_dist,
-            )
+            pr_signed_dist = self.module(point_pos)
 
-            loss = self.calc_loss(point_pos, result)
+            loss = self.calc_loss(point_pos, pr_signed_dist, gt_signed_dist)
 
             sum_loss += float(loss) * batch_size
 
@@ -218,12 +221,5 @@ class TrainerCore(training_utils.TrainerCore):
         )
 
     @utils.mem_clear
-    def show_params(self):
-        for name, param in self.module.named_parameters():
-            mean = param.mean().item()
-            std = param.std().item()
-            grad = None if param.grad is None else param.grad.square().sum().sqrt().item()
-
-            print(f"{name}: {mean=} {std=} {grad}")
-
-        # print(self.optimizer.param_groups)
+    def show_params(self) -> None:
+        utils.show_tensor_info(self.module.named_parameters())

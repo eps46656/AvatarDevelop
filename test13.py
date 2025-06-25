@@ -55,7 +55,7 @@ def main2():
 
     my_proj_mat = camera_utils.make_proj_mat(
         camera_config=camera_config,
-        camera_view_transform=transform_utils.ObjectTransform
+        camera_transform=transform_utils.ObjectTransform
         .from_matching("LUF"),
         convention=camera_utils.Convention.PyTorch3D,
         target_coord=camera_utils.Coord.NDC,

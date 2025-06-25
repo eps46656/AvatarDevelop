@@ -1,21 +1,19 @@
-import shlex
-import prompt_toolkit
+import torch
 
 
 def main2():
-    prompt_session = prompt_toolkit.PromptSession(
-        "trainer> ",
-        style=prompt_toolkit.styles.Style.from_dict({
-            "prompt": "ansigreen bold",
-            "input": "ansiblue",
-            "": "ansiyellow",
-        }),
-    )
+    a = torch.zeros((4, 4), dtype=torch.float32)
 
-    while True:
-        cmd = prompt_session.prompt()
+    x = torch.rand((2, 2), dtype=torch.float32, requires_grad=True)
 
-        print(f"{cmd=}")
+    a[:2, :2] = x
+
+    print(f"{a=}")
+
+    loss = a.sum()
+    loss.backward()
+
+    print(x.grad)
 
 
 if __name__ == "__main__":

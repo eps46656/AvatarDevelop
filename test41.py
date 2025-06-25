@@ -65,8 +65,8 @@ def main4():
 
     my_body_shape_vert_dir_interp = \
         rbf_utils.interp_utils.RBFInterpolator.from_data_point(
-            data_pos=model_data.vert_pos.to(torch.float32),  # [V, 3]
-            data_val=model_data.body_shape_vert_dir.reshape(
+            d_pos=model_data.vert_pos.to(torch.float32),  # [V, 3]
+            d_val=model_data.body_shape_vert_dir.reshape(
                 V, 3 * BS).to(torch.float32),
             kernel=rbf_utils.radial_func.CubicRadialFunc(),
             degree=2,

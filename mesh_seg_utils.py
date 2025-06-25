@@ -102,10 +102,8 @@ def face_vert_vote(
 
     blending_param: typing.Any,
 
-    obj_mask: list[typing.Iterable[torch.Tensor]],
+    obj_conf: list[typing.Iterable[torch.Tensor]],
     # [O][H, W]] or [O][K, H, W]
-
-    mask_to_conf: typing.Callable[[torch.Tensor], torch.Tensor],
 
     batch_size: int,
 
@@ -116,7 +114,7 @@ def face_vert_vote(
 ]:
     H, W = camera_config.img_h, camera_config.img_w
 
-    O = len(obj_mask)
+    O = len(obj_conf)
 
     assert 0 < batch_size
 
@@ -177,12 +175,8 @@ def face_vert_vote(
 
             for b in range(B):
                 for o in range(O):
-                    cur_mask = next(obj_mask[o])
+                    cur_obj_conf = next(obj_conf[o])
                     # [H, W]
-
-                    if o == 2:
-                        vision_utils.show_image(
-                            utils.rct(cur_mask * 255, dtype=torch.uint8))
 
                     face_vert_vote_ras(
                         vert_weight=vert_weight[:, o],  # [V + 1]
@@ -194,7 +188,7 @@ def face_vert_vote(
                         face_idx=cur_pix_to_face[b],  # [H, W]
                         bary_coord=cur_bary_coord[b],  # [H, W, 3]
 
-                        ballot_conf=mask_to_conf(cur_mask)[0, ...].to(device),
+                        ballot_conf=cur_obj_conf[0, ...].to(device),
                         # [H, W]
                     )
 
@@ -226,7 +220,7 @@ def refine_vert_conf(
     # [V]
 
     for _ in range(iters_cnt):
-        vert_conf = kernel_splatting_utils.interp(
+        vert_conf = kernel_splatting_utils.query(
             vert_pos,  # [V, 3]
             vert_conf,  # [V, K]
             vert_weight,  # [V]
@@ -251,15 +245,33 @@ def assign_sub_mesh_faces(
     *,
     mesh_graph: mesh_utils.MeshGraph,
     vert_conf: torch.Tensor,  # [V + 1, O]
+    threshold: typing.Optional[float],
 ) -> AssignSubMeshFacesResult:
     V, F = mesh_graph.verts_cnt, mesh_graph.faces_cnt
 
     O = utils.check_shapes(vert_conf, (V + 1, -1))
 
-    vert_obj_idx = vert_conf[:-1].max(-1).indices
-    # [V]
+    vert_obj_conf, vert_obj_idx = vert_conf[:-1].max(-1)
+    # vert_obj_conf[V]
+    # vert_obj_idx[V]
 
-    mesh_subdivide_result = mesh_graph.subdivide()
+    if threshold is not None:
+        vert_obj_idx = torch.where(
+            threshold <= vert_obj_conf,
+            vert_obj_idx,
+            -1,
+        )
+
+    e_to_vv = mesh_graph.e_to_vv
+
+    edge_obj_idx = vert_obj_idx[e_to_vv]
+    # [E, 2]
+
+    border_edges = (edge_obj_idx[:, 0] != edge_obj_idx[:, 1]) \
+        .nonzero().view(-1).tolist()
+    # [E_]
+
+    mesh_subdivide_result = mesh_graph.subdivide(target_edges=border_edges)
 
     sub_mesh_graph = mesh_subdivide_result.mesh_graph
 
@@ -300,12 +312,12 @@ def assign_sub_mesh_faces(
 class ExtractSubMeshDataResult:
     mesh_subdivide_result: mesh_utils.MeshSubdivideResult
 
-    total_sub_vert_pos_a: torch.Tensor  # [V_, 3]
-    total_sub_vert_pos_b: torch.Tensor  # [V_, 3]
-    total_sub_vert_t: torch.Tensor  # [V_]
-    total_sub_vert_pos: torch.Tensor  # [V_, 3]
+    union_sub_vert_pos_a: torch.Tensor  # [V_, 3]
+    union_sub_vert_pos_b: torch.Tensor  # [V_, 3]
+    union_sub_vert_t: torch.Tensor  # [V_]
+    union_sub_vert_pos: torch.Tensor  # [V_, 3]
 
-    total_sub_mesh_data: mesh_utils.MeshData
+    union_sub_mesh_data: mesh_utils.MeshData
 
     sub_mesh_extract_result: list[mesh_utils.MeshExtractResult]
     sub_mesh_data: list[mesh_utils.MeshData]
@@ -320,7 +332,7 @@ def extract_sub_mesh_data(
     mesh_data: mesh_utils.MeshData,
     mesh_subdivide_result: mesh_utils.MeshSubdivideResult,
     target_faces: list[list[int]]  # [O]
-):
+) -> ExtractSubMeshDataResult:
     O = len(target_faces)
 
     vert_src_table = mesh_subdivide_result.vert_src_table
@@ -328,14 +340,14 @@ def extract_sub_mesh_data(
 
     V_ = vert_src_table.shape[0]
 
-    total_vert_pos = mesh_data.vert_pos[vert_src_table]
+    union_vert_pos = mesh_data.vert_pos[vert_src_table]
     # [V_, 2, 3]
 
-    total_sub_vert_pos_a = total_vert_pos[:, 0]
-    total_sub_vert_pos_b = total_vert_pos[:, 1]
+    union_sub_vert_pos_a = union_vert_pos[:, 0]
+    union_sub_vert_pos_b = union_vert_pos[:, 1]
     # [V_, 3]
 
-    total_sub_mesh_graph = mesh_subdivide_result.mesh_graph
+    union_sub_mesh_graph = mesh_subdivide_result.mesh_graph
 
     T_LB = 0.1
     T_RB = 0.9
@@ -362,7 +374,7 @@ def extract_sub_mesh_data(
     vert_optimizable_table = vert_src_table[:, 0] != vert_src_table[:, 1]
 
     sub_mesh_graphs = [
-        total_sub_mesh_graph.extract(
+        union_sub_mesh_graph.extract(
             target_faces=target_faces[o],
             remove_orphan_vert=False,
         ).mesh_graph
@@ -372,47 +384,47 @@ def extract_sub_mesh_data(
     for epoch_i in tqdm.tqdm(range(800)):
         optimizer.zero_grad()
 
-        total_sub_vert_t = torch.where(
+        union_sub_vert_t = torch.where(
             vert_optimizable_table,
             utils.smooth_clamp(raw_vert_t, T_LB, T_RB),
             0.5,
         )
         # [V_] [0.1, 0.9]
 
-        cur_total_sub_vert_pos = \
-            total_sub_vert_pos_a * (1 - total_sub_vert_t)[..., None] + \
-            total_sub_vert_pos_b * total_sub_vert_t[..., None]
+        cur_union_sub_vert_pos = \
+            union_sub_vert_pos_a * (1 - union_sub_vert_t)[..., None] + \
+            union_sub_vert_pos_b * union_sub_vert_t[..., None]
 
         loss = 0.0
 
         for o in range(O):
             loss = loss + mesh_utils.MeshData(
                 sub_mesh_graphs[o],
-                cur_total_sub_vert_pos,
+                cur_union_sub_vert_pos,
             ).l2_uni_lap_smoothness
 
         loss.backward()
 
         optimizer.step()
 
-    total_sub_vert_t = torch.where(
+    union_sub_vert_t = torch.where(
         vert_src_table[:, 0] == vert_src_table[:, 1],
         0.5,
         utils.smooth_clamp(raw_vert_t, T_LB, T_RB),
     )
     # [V_] [0.1, 0.9]
 
-    total_sub_vert_pos = \
-        total_sub_vert_pos_a * (1 - total_sub_vert_t)[..., None] + \
-        total_sub_vert_pos_b * total_sub_vert_t[..., None]
+    union_sub_vert_pos = \
+        union_sub_vert_pos_a * (1 - union_sub_vert_t)[..., None] + \
+        union_sub_vert_pos_b * union_sub_vert_t[..., None]
     # [V_, 3]
 
-    total_sub_mesh_data = mesh_utils.MeshData(
-        mesh_graph=total_sub_mesh_graph,
-        vert_pos=total_sub_vert_pos,
+    union_sub_mesh_data = mesh_utils.MeshData(
+        mesh_graph=union_sub_mesh_graph,
+        vert_pos=union_sub_vert_pos,
     )
 
-    remaining_faces = set(range(total_sub_mesh_graph.faces_cnt))
+    remaining_faces = set(range(union_sub_mesh_graph.faces_cnt))
 
     sub_mesh_extract_result: list[mesh_utils.MeshExtractResult] = list()
     sub_mesh_data: list[mesh_utils.MeshData] = list()
@@ -420,7 +432,7 @@ def extract_sub_mesh_data(
     for o in range(O):
         remaining_faces.difference_update(target_faces[o])
 
-        cur_sub_mesh_extract_result = total_sub_mesh_graph.extract(
+        cur_sub_mesh_extract_result = union_sub_mesh_graph.extract(
             target_faces=target_faces[o],
             remove_orphan_vert=True,
         )
@@ -429,36 +441,36 @@ def extract_sub_mesh_data(
 
         sub_mesh_data.append(mesh_utils.MeshData(
             mesh_graph=cur_sub_mesh_extract_result.mesh_graph,
-            vert_pos=total_sub_vert_pos[
+            vert_pos=union_sub_vert_pos[
                 cur_sub_mesh_extract_result.vert_src_table],
         ))
 
-    skin_sub_mesh_extract_result = total_sub_mesh_graph.extract(
+    remaining_sub_mesh_extract_result = union_sub_mesh_graph.extract(
         target_faces=remaining_faces,
         remove_orphan_vert=True,
     )
 
     remaining_sub_mesh_data = mesh_utils.MeshData(
-        mesh_graph=skin_sub_mesh_extract_result.mesh_graph,
+        mesh_graph=remaining_sub_mesh_extract_result.mesh_graph,
 
-        vert_pos=total_sub_vert_pos[
-            skin_sub_mesh_extract_result.vert_src_table],
+        vert_pos=union_sub_vert_pos[
+            remaining_sub_mesh_extract_result.vert_src_table],
     )
 
     return ExtractSubMeshDataResult(
         mesh_subdivide_result=mesh_subdivide_result,
 
-        total_sub_vert_pos_a=total_sub_vert_pos_a,
-        total_sub_vert_pos_b=total_sub_vert_pos_b,
-        total_sub_vert_t=total_sub_vert_t,
-        total_sub_vert_pos=total_sub_vert_pos,
+        union_sub_vert_pos_a=union_sub_vert_pos_a,
+        union_sub_vert_pos_b=union_sub_vert_pos_b,
+        union_sub_vert_t=union_sub_vert_t,
+        union_sub_vert_pos=union_sub_vert_pos,
 
-        total_sub_mesh_data=total_sub_mesh_data,
+        union_sub_mesh_data=union_sub_mesh_data,
 
         sub_mesh_extract_result=sub_mesh_extract_result,
         sub_mesh_data=sub_mesh_data,
 
-        remaining_sub_mesh_extract_result=skin_sub_mesh_extract_result,
+        remaining_sub_mesh_extract_result=remaining_sub_mesh_extract_result,
         remaining_sub_mesh_data=remaining_sub_mesh_data,
     )
 
@@ -488,13 +500,13 @@ def extract_smplx_sub_model_data(
     subdivide_model_data_result = model_data.subdivide(
         mesh_subdivide_result=extract_sub_mesh_data_result.mesh_subdivide_result,
 
-        new_vert_t=extract_sub_mesh_data_result.total_sub_vert_t,
+        new_vert_t=extract_sub_mesh_data_result.union_sub_vert_t,
     )
 
-    total_sub_model_data = subdivide_model_data_result.model_data
+    union_sub_model_data = subdivide_model_data_result.model_data
 
     def _f(extract_result):
-        r = total_sub_model_data.extract(
+        r = union_sub_model_data.extract(
             mesh_extract_result=extract_result,
         )
 

@@ -1,9 +1,11 @@
 import dataclasses
+import math
+import typing
 
 import torch
 from beartype import beartype
 
-from .. import mesh_utils, utils
+from .. import mesh_utils, utils, vision_utils
 
 
 @dataclasses.dataclass
@@ -63,3 +65,67 @@ def get_face_coord(mesh_data: mesh_utils.MeshData) -> FaceCoordResult:
     """
 
     return FaceCoordResult(r=r, t=g, area=area)
+
+
+@beartype
+def make_dilate_kernel(
+    *,
+    img_h: typing.Optional[int],
+    img_w: typing.Optional[int],
+
+    sigma:  typing.Optional[float] = None,
+    ratio_sigma:  typing.Optional[float] = None,
+
+    opacity: float,
+) -> torch.Tensor:  # [1, 1, K, K]
+    if sigma is None:
+        assert img_h is not None
+        assert img_w is not None
+        assert ratio_sigma is not None
+
+        sigma = vision_utils.get_sigma(img_h, img_w, ratio_sigma)
+
+    assert 0 < sigma
+
+    kernel_radius = max(1, math.ceil(sigma * 3))
+
+    kernel = (1 - opacity * vision_utils.make_gaussian_kernel(
+        sigma=sigma,
+        kernel_radius=kernel_radius,
+        make_mean=False,
+        dtype=torch.float64,
+        device=utils.CUDA_DEVICE,
+    )).log()[None, None, :, :]
+    # [1, 1, K, K]
+
+    return kernel
+
+
+@beartype
+def make_dilated_mask(
+    mask: torch.Tensor,  # [..., H, W]
+    kernel: torch.Tensor,  # [1, 1, K, K]
+) -> torch.Tensor:  # [..., H, W]
+    H, W, K = -1, -2, -3
+
+    H, W, K = utils.check_shapes(
+        mask, (..., H, W),
+        kernel, (1, 1, K, K),
+    )
+
+    assert K % 2 == 1
+
+    kernel_radius = K // 2
+
+    # [-1, 1, H, W]
+
+    dilated_mask = 1 - (
+        torch.nn.functional.conv2d(
+            input=mask.reshape(-1, 1, H, W),
+            weight=kernel,
+            padding=kernel_radius,
+        ).view(mask.shape) / mask.sum((-2, -1), keepdim=True)
+    ).exp()
+    # [..., H, W]
+
+    return dilated_mask

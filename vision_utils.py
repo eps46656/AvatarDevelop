@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-import os
+import math
 import typing
 
 import cv2 as cv
@@ -11,16 +11,19 @@ import PIL
 import PIL.Image
 import torch
 import torchvision
+import torchvision.transforms.functional
 from beartype import beartype
 
 from . import utils
 
 
 class ColorType(enum.StrEnum):
-    GRAY = "gray"
-    RGB = "rgb"
-    RGBA = "rgba"
+    GRAY = "GRAY"
+    RGB = "RGB"
+    RGBA = "RGBA"
 
+
+ColorTypeLike = str | ColorType
 
 channels_cnt_table = {
     ColorType.GRAY: 1,
@@ -29,112 +32,365 @@ channels_cnt_table = {
 }
 
 
-@beartype
-def read_image(path: os.PathLike) -> torch.Tensor:
-    img = torchvision.io.read_image(
-        path, torchvision.io.ImageReadMode.RGB)
-    # [C, H, W]
+DEFUALT_FOURCC = "FFV1"
 
-    return img
+
+class ImageWithColorType(typing.NamedTuple):
+    image: torch.Tensor  # [..., C, H, W]
+    color_type: ColorType
+
+
+@beartype
+def to_color_type(
+    color_type: ColorTypeLike,
+) -> ColorType:
+    if isinstance(color_type, ColorType):
+        return color_type
+
+    match color_type.upper():
+        case "GRAY" | "G" | "L": return ColorType.GRAY
+        case "RGB": return ColorType.RGB
+        case "RGBA": return ColorType.RGBA
+        case _: raise utils.MismatchException()
+
+
+@beartype
+def read_image(
+    path: utils.PathLike,
+    color_type: typing.Optional[ColorTypeLike] = None,
+) -> ImageWithColorType:
+    return from_pillow_image(PIL.Image.open(path), color_type)
 
 
 @beartype
 def write_image(
-    path: os.PathLike,
+    path: utils.PathLike,
     img: torch.Tensor,  # [C, H, W]
-):
-    assert img.ndim == 3
-
-    assert img.dtype == torch.uint8
-
+    color_type: typing.Optional[ColorTypeLike] = None,
+) -> None:
     path = utils.to_pathlib_path(path)
 
     path.parents[0].mkdir(parents=True, exist_ok=True)
 
-    img = img.to(utils.CPU_DEVICE)
-
     print(f"Writing image to \"{path}\".")
 
-    if path.suffix == ".png":
-        torchvision.io.write_png(img, path)
-        return
+    to_pillow_image(img, color_type).save(path)
 
-    if path.suffix == ".jpg" or path.suffix == ".jpeg":
-        torchvision.io.write_jpeg(img, path)
-        return
+
+@beartype
+def derive_color_type(
+    img: torch.Tensor,  # [C, H, W]
+) -> ColorType:
+    C, H, W = utils.check_shapes(img, (-1, -2, -3))
+
+    match C:
+        case 1: return ColorType.GRAY
+        case 3: return ColorType.RGB
+        case 4: return ColorType.RGBA
+        case _: raise utils.MismatchException()
+
+
+@beartype
+def change_color_type(
+    img: torch.Tensor,  # [..., C, H, W]
+    src_color_type: typing.Optional[ColorTypeLike],
+    dst_color_type: ColorTypeLike,
+) -> torch.Tensor:
+    C, H, W = utils.check_shapes(img, (..., -1, -2, -3))
+
+    shape = img.shape[:-3]
+
+    assert not img.is_floating_point()
+
+    if src_color_type is None:
+        src_color_type = derive_color_type(img)
+
+    src_color_type = to_color_type(src_color_type)
+    dst_color_type = to_color_type(dst_color_type)
+
+    assert C == channels_cnt_table[src_color_type]
+
+    if src_color_type == dst_color_type:
+        return img
+
+    match (src_color_type, dst_color_type):
+        case (ColorType.GRAY, ColorType.RGB):
+            return img.expand(*shape, 3, H, W)
+
+        case (ColorType.GRAY, ColorType.RGBA):
+            return torch.cat([img, img, img, utils.full(255, like=img)], -3)
+
+        case (ColorType.RGB, ColorType.GRAY):
+            return (img.sum(
+                -3, True, utils.promote_dtypes(img.dtype, torch.uint16)
+            ) + 1) // 3
+
+        case (ColorType.RGB, ColorType.RGBA):
+            return torch.cat([img, utils.full(255, like=img)], -3)
+
+        case (ColorType.RGBA, ColorType.RGB):
+            return img[..., :3, :, :]
+
+        case (ColorType.RGBA, ColorType.GRAY):
+            return (img[..., :3, :, :].sum(
+                -3, True, utils.promote_dtypes(img.dtype, torch.uint16)
+            ) + 1) // 3
+
+        case _:
+            raise utils.MismatchException()
+
+
+@beartype
+def make_gaussian_kernel(
+    sigma: float,
+    kernel_radius: int,
+    make_mean: bool,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    ax = torch.arange(
+        -kernel_radius, kernel_radius + 1,
+        dtype=dtype,
+        device=device,
+    )
+
+    xx, yy = torch.meshgrid(ax, ax, indexing='ij')
+
+    kernel = (-(xx**2 + yy**2) / (2 * sigma**2)).exp()
+
+    if make_mean:
+        kernel = kernel / kernel.sum()
+
+    return kernel
+
+
+@beartype
+def get_sigma(
+    img_h: int,
+    img_w: int,
+    ratio_sigma: float,
+) -> float:
+    assert 0 < img_h
+    assert 0 < img_w
+    assert 0 < ratio_sigma
+
+    return math.sqrt(img_h ** 2 + img_w ** 2) * ratio_sigma
+
+
+@beartype
+def gaussian_blur(
+    img: torch.Tensor,  # [..., H, W]
+    *,
+    sigma: typing.Optional[float] = None,
+    ratio_sigma: typing.Optional[float] = None,
+) -> torch.Tensor:  # [..., H, W]
+    H, W = utils.check_shapes(img, (..., -1, -2))
+
+    if sigma is None:
+        assert ratio_sigma is not None
+        assert 0 < ratio_sigma
+
+        sigma = get_sigma(H, W, ratio_sigma)
+
+    assert 0 < sigma
+
+    kernel_radius = max(1, math.ceil(sigma * 3))
+
+    blurred_img = torchvision.transforms.functional.gaussian_blur(
+        img.reshape(-1, H, W),
+        kernel_size=kernel_radius * 2 + 1,
+        sigma=sigma,
+    )
+
+    return blurred_img.view(img.shape)
+
+
+@beartype
+def dilate(
+    img: torch.Tensor,  # [..., H, W]
+    *,
+    sigma: typing.Optional[float] = None,
+    ratio_sigma: typing.Optional[float] = None,
+):
+    H, W = utils.check_shapes(img, (..., -1, -2))
+
+    if sigma is None:
+        assert ratio_sigma is not None
+        assert 0 < ratio_sigma
+
+        sigma = get_sigma(H, W, ratio_sigma)
+
+    assert 0 < sigma
+
+    kernel_radius = max(1, math.ceil(sigma * 3))
+
+    kernel = make_gaussian_kernel(
+        sigma=sigma,
+        kernel_radius=kernel_radius,
+        make_mean=False,
+        dtype=img.dtype,
+        device=img.device,
+    )
+
+    ret_img = torch.nn.functional.conv2d(
+        input=img.reshape(-1, 1, H, W),
+        weight=kernel[None, None, :, :],
+        padding=kernel_radius,
+    ).view(img.shape)
+    # [B, 1, H, W]
+
+    return ret_img
+
+
+@beartype
+def show_image(
+    title: str,
+    img: torch.Tensor,  # [C, H, W]
+    color_type: typing.Optional[ColorTypeLike] = None,
+    *,
+    pause: bool = False,
+) -> None:
+    if img.ndim == 2:
+        img = img[None, :, :]
+
+    if color_type is None:
+        color_type = derive_color_type(img)
+
+    cv.imshow(title, to_opencv_image(img, color_type))
+    cv.waitKey(0 if pause else 1)
+
+
+@beartype
+def to_opencv_image(
+    img: torch.Tensor,  # [..., C, H, W]
+    color_type: typing.Optional[ColorTypeLike] = None,
+) -> np.ndarray:  # [..., H, W, C]
+    C, H, W = utils.check_shapes(img, (..., -1, -2, -3))
+
+    if color_type is None:
+        color_type = derive_color_type(img)
+
+    assert C == channels_cnt_table[color_type]
+
+    img = utils.rct(img.detach(), dtype=torch.uint8, device=utils.CPU_DEVICE)
+
+    if color_type == ColorType.GRAY:
+        return img[..., 0, :, :].numpy(force=True)
+
+    if color_type == ColorType.RGB:
+        r = img[..., 0, :, :]
+        g = img[..., 1, :, :]
+        b = img[..., 2, :, :]
+
+        return torch.stack([b, g, r], -1).numpy(force=True)
+
+    if color_type == ColorType.RGBA:
+        r = img[..., 0, :, :]
+        g = img[..., 1, :, :]
+        b = img[..., 2, :, :]
+        a = img[..., 3, :, :]
+
+        return torch.stack([b, g, r, a], -1).numpy(force=True)
 
     raise utils.MismatchException()
 
 
 @beartype
-def show_image(title: str, img: torch.Tensor) -> None:
-    if img.ndim == 2:
-        img = img[None, :, :]
+def from_opencv_image(
+    img: np.ndarray,  # [..., H, W, (C)]
+    color_type: ColorTypeLike,
+) -> torch.Tensor:  # [..., C, H, W]
+    assert img.dtype == np.uint8
 
-    C, H, W = utils.check_shapes(img, (-1, -2, -3))
+    img = torch.from_numpy(img)
 
-    img_np = img.numpy(force=True)
+    color_type = to_color_type(color_type)
 
-    match C:
-        case 1:
-            img_np = img_np.squeeze(0)
-        case 3:
-            img_np = cv.cvtColor(
-                einops.rearrange(img_np, "c h w -> h w c"),
-                cv.COLOR_RGB2BGR)
+    if color_type == ColorType.GRAY:
+        utils.check_shapes(img, (..., -1, -2))
+        return img[..., None, :, :]
 
-    cv.imshow(title, img_np)
-    cv.waitKey(1)
+    H, W, C = utils.check_shapes(img, (..., -1, -2, -3))
+
+    assert C == channels_cnt_table[color_type]
+
+    if color_type == ColorType.RGB:
+        b = img[..., :, :, 0]
+        g = img[..., :, :, 1]
+        r = img[..., :, :, 2]
+
+        return torch.stack([r, g, b], -3)
+
+    if color_type == ColorType.RGBA:
+        b = img[..., :, :, 0]
+        g = img[..., :, :, 1]
+        r = img[..., :, :, 2]
+        a = img[..., :, :, 3]
+
+        return torch.stack([r, g, b, a], -3)
+
+    raise utils.MismatchException()
 
 
 @beartype
 def to_pillow_image(
-    img: torch.Tensor,  # [H, W] or [C, H, W]
+    img: torch.Tensor,  # [C, H, W]
+    color_type: typing.Optional[ColorTypeLike] = None,
 ) -> PIL.Image.Image:
-    if img.ndim == 2:
-        img = img[None, :, :]
-
     C, H, W = utils.check_shapes(img, (-1, -2, -3))
 
-    assert C in (1, 3, 4)
+    color_type = to_color_type(
+        derive_color_type(img) if color_type is None else color_type)
 
     if C == 1:
         np_img = img[0].numpy(force=True)
     else:
         np_img = einops.rearrange(img, "c h w -> h w c").numpy(force=True)
 
-    return PIL.Image.fromarray(np_img)
+    return PIL.Image.fromarray(
+        np_img,
+        {
+            ColorType.GRAY: "L",
+            ColorType.RGB: "RGB",
+            ColorType.RGBA: "RGBA",
+        }[color_type]
+    )
 
 
 @beartype
 def from_pillow_image(
     img: PIL.Image.Image,
-    color_type: ColorType,
-    *,
-    dtype: typing.Optional[torch.dtype] = None,
-    device: typing.Optional[torch.device] = None,
-) -> torch.Tensor:  # [C, H, W]
-    match color_type:
-        case ColorType.GRAY:
-            img = img.convert("L")
-        case ColorType.RGB:
-            img = img.convert("RGB")
-        case _:
-            raise utils.MismatchException()
+    color_type: typing.Optional[ColorTypeLike] = None,
+) -> ImageWithColorType:
+    x_color_type = {
+        "L": ColorType.GRAY,
+        "RGB": ColorType.RGB,
+        "RGBA": ColorType.RGBA,
+    }[img.mode]
 
-    ret = torch.from_numpy(np.array(img))
+    x = torch.from_numpy(np.array(img))
     # [H, W] or [H, W, C]
 
-    if ret.ndim == 2:
-        ret = ret[:, :, None]
+    if x.ndim == 2:
+        x = x[:, :, None]
 
-    return einops.rearrange(ret, "h w c -> c h w").to(device, dtype)
+    x = einops.rearrange(x, "h w c -> c h w")
+
+    if color_type is not None:
+        color_type = to_color_type(color_type)
+        x = change_color_type(x, x_color_type, color_type)
+        x_color_type = color_type
+
+    return ImageWithColorType(
+        image=x,
+        color_type=x_color_type
+    )
 
 
 @beartype
 def _frame_to_image(
     frame: np.ndarray,  # [... H, W, C]
-    color_type: ColorType,
+    color_type: ColorTypeLike,
 ) -> torch.Tensor:
     assert 3 <= frame.ndim
 
@@ -153,35 +409,6 @@ def _frame_to_image(
 
     return torch.from_numpy(einops.rearrange(
         arr, "... h w c -> ... c h w"))
-
-
-@beartype
-def _to_target_color_type(
-    img: torch.Tensor,  # [C, H, W] or [H, W]
-    color_type: ColorType,
-):
-    if img.ndim == 2:
-        img = img[None, :, :]
-
-    assert img.ndim == 3
-
-    match (img.shape[0], color_type):
-        case (1, ColorType.GRAY):
-            img = img
-        case (1, ColorType.RGB):
-            img = img.expand(3, img.shape[1], img.shape[2])
-        case (3, ColorType.GRAY):
-            img = torch.div(
-                img.to(torch.int).sum(0, True),
-                3,
-                rounding_mode="trunc",
-            ).to(torch.uint8)
-        case (3, ColorType.RGB):
-            img = img
-        case _:
-            raise utils.MismatchException()
-
-    return img
 
 
 @beartype
@@ -281,13 +508,15 @@ class SeqVideoGenerator(VideoGenerator):
 class VideoReader(VideoGenerator):
     def __init__(
         self,
-        path: os.PathLike,
-        color_type: ColorType = ColorType.RGB,
+        path: utils.PathLike,
+        color_type: ColorTypeLike = ColorType.RGB,
     ):
         path = utils.to_pathlib_path(path)
 
+        assert path.is_file()
+
         self.reader = cv.VideoCapture(path)
-        self.color_type = color_type
+        self.color_type = to_color_type(color_type)
 
     def __del__(self):
         return self.close()
@@ -325,6 +554,23 @@ class VideoReader(VideoGenerator):
         b, frame = self.reader.read()
         return _frame_to_image(frame, self.color_type) if b else None
 
+    def read_many(
+        self,
+        max_num: int = -1,
+    ) -> typing.Optional[torch.Tensor]:  # [T, C, H, W]
+        l: list[torch.Tensor] = list()
+        # [][C, H, W]
+
+        while max_num != len(l):
+            image = self.read()
+
+            if image is None:
+                break
+
+            l.append(image)
+
+        return None if len(l) == 0 else torch.stack(l, 0)
+
     def close(self) -> None:
         self.reader.release()
 
@@ -333,12 +579,12 @@ class VideoReader(VideoGenerator):
 class VideoWriter:
     def __init__(
         self,
-        path: os.PathLike,
+        path: utils.PathLike,
         height: int,
         width: int,
-        color_type: ColorType,
+        color_type: ColorTypeLike,
         fps: float,
-        fourcc: str = "XVID",
+        fourcc: str = DEFUALT_FOURCC,
     ):
         path = utils.to_pathlib_path(path)
 
@@ -347,12 +593,18 @@ class VideoWriter:
         self.path = path
         self.height = height
         self.width = width
-        self.color_type = color_type
+        self.color_type = to_color_type(color_type)
         self.fps = fps
 
         fourcc = cv.VideoWriter_fourcc(*fourcc)
+
         self.writer = cv.VideoWriter(
-            path, fourcc, fps, (self.width, self.height))
+            filename=path,
+            fourcc=fourcc,
+            fps=fps,
+            frameSize=(self.width, self.height),
+            isColor=self.color_type != ColorType.GRAY,
+        )
 
     def __del__(self) -> None:
         self.close()
@@ -370,30 +622,10 @@ class VideoWriter:
     def write(
         self,
         img: torch.Tensor,  # [C, H, W]
+        color_type: typing.Optional[ColorTypeLike] = None,
     ) -> None:
-        assert img.dtype == torch.uint8
-
-        if img.ndim == 2:
-            img = img[None, :, :]
-
-        match (img.shape[0], self.color_type):
-            case (1, ColorType.GRAY):
-                img = img
-            case (1, ColorType.RGB):
-                img = img.expand(3, self.height, self.width)
-            case (3, ColorType.GRAY):
-                img = torch.div(
-                    img.to(torch.int).sum(0, True),
-                    3,
-                    rounding_mode="trunc",
-                ).to(torch.uint8)
-            case (3, ColorType.RGB):
-                img = img
-            case _:
-                raise utils.MismatchException()
-
-        self.writer.write(cv.cvtColor(einops.rearrange(
-            img.cpu().numpy(), "c h w -> h w c"), cv.COLOR_RGB2BGR))
+        self.writer.write(to_opencv_image(change_color_type(
+            img, color_type, self.color_type), self.color_type))
 
     def write_all(self, img: typing.Iterable[torch.Tensor]) -> None:
         for i in img:
@@ -409,110 +641,48 @@ class VideoWriter:
 
 @beartype
 def read_video(
-    path: os.PathLike,
-    color_type: ColorType,
+    path: utils.PathLike,
+    color_type: ColorTypeLike,
     *,
     dtype: typing.Optional[torch.dtype] = None,
     device: torch.device,
-    disk_mem: bool = False,
 ) -> tuple[
-    typing.Optional[torch.Tensor],  # imgs
+    typing.Optional[torch.Tensor],  # img
     float,  # fps
 ]:
     reader = VideoReader(path, color_type)
 
-    first_frame = reader.read()
-
-    fps = reader.fps
-
-    if first_frame is None:
-        return None, fps
-
-    C, H, W = first_frame.shape
-
-    frames_cnt = 1
-
-    while reader.grab():
-        frames_cnt += 1
-
-    reader = VideoReader(path, color_type)
-
-    if disk_mem:
-        assert device == utils.CPU_DEVICE
-
-        ret = utils.disk_empty(
-            (frames_cnt, channels_cnt_table[color_type], H, W),
-            dtype=first_frame.dtype if dtype is None else dtype,
-        )
-    else:
-        ret = torch.empty(
-            (frames_cnt, channels_cnt_table[color_type], H, W),
-            dtype=first_frame.dtype if dtype is None else dtype,
-            device=device,
-        )
-
-    for frame_i, frame in enumerate(reader):
-        ret[frame_i] = frame
-
-    return ret, fps
+    return torch.stack([
+        frame.to(device, dtype)
+        for frame in reader
+    ]), reader.fps
 
 
 @beartype
 def read_video_mask(
-    path: os.PathLike,
+    path: utils.PathLike,
     *,
     dtype: typing.Optional[torch.dtype] = torch.float32,
     device: torch.device,
-    disk_mem: bool = False,
 ) -> tuple[
     typing.Optional[torch.Tensor],  # mask[T, 1, H, W]
     float,  # fps
 ]:
     reader = VideoReader(path, ColorType.GRAY)
 
-    first_frame = reader.read()
-
-    fps = reader.fps
-
-    if first_frame is None:
-        print(f"Not found {path}")
-        return None, fps
-
-    C, H, W = first_frame.shape
-
-    frames_cnt = 1
-
-    while reader.grab():
-        frames_cnt += 1
-
-    reader = VideoReader(path, ColorType.GRAY)
-
-    if disk_mem:
-        assert device == utils.CPU_DEVICE
-
-        ret = utils.disk_empty(
-            (frames_cnt, 1, H, W),
-            dtype=dtype,
-        )
-    else:
-        ret = torch.empty(
-            (frames_cnt, 1, H, W),
-            dtype=dtype,
-            device=device,
-        )
-
-    for frame_i, frame in enumerate(reader):
-        ret[frame_i] = frame.to(dtype=dtype) / 255
-
-    return ret, fps
+    return torch.stack([
+        frame.to(device, dtype) / 255
+        for frame in reader
+    ]), reader.fps
 
 
 @beartype
 @utils.mem_clear
 def write_video(
-    path: os.PathLike,
+    path: utils.PathLike,
     video: torch.Tensor,  # [T, C, H, W]
     fps: float,
+    fourcc: str = DEFUALT_FOURCC,
 ) -> None:
     T, C, H, W = -1, -2, -3, -4
 
@@ -527,6 +697,7 @@ def write_video(
         width=W,
         color_type=ColorType.RGB,
         fps=fps,
+        fourcc=fourcc,
     ) as writer:
         for t in range(T):
             writer.write(video[t])

@@ -56,7 +56,7 @@ async def LoopEmitSMPLXParams(smplx_params, duration):
 def main1():
     smplx_params = list()
 
-    smplx_params_dir = DIR / "0421/smplx_params"
+    smplx_params_dir = DIR / "0513/smplx_params"
 
     with open(DIR / "merged.json") as f:
         hand_pose = json.load(f)
@@ -69,8 +69,8 @@ def main1():
         with open(filename) as f:
             d = json.load(f)
 
-            d["lhand_pose"] = hand_pose["lhand_pose"]
-            d["rhand_pose"] = hand_pose["rhand_pose"]
+            # d["lhand_pose"] = hand_pose["lhand_pose"]
+            # d["rhand_pose"] = hand_pose["rhand_pose"]
 
             smplx_params.append(d)
 

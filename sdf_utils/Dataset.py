@@ -35,8 +35,7 @@ class Dataset(dataset_utils.Dataset):
     def __init__(
         self,
 
-        mesh_graph: mesh_utils.MeshGraph,
-        vert_pos: torch.Tensor,  # [..., V, 3]
+        mesh_data: mesh_utils.MeshData,
 
         std: float,
 
@@ -46,7 +45,7 @@ class Dataset(dataset_utils.Dataset):
 
         assert 0 < math.prod(shape)
 
-        self.mesh_data = mesh_utils.MeshData(mesh_graph, vert_pos)
+        self.mesh_data = mesh_data
 
         self.std = std
 

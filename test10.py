@@ -15,7 +15,7 @@ DIR = FILE.parents[0]
 
 INT = torch.int32
 FLOAT = torch.float32
-DEVICE = utils.CPU_DEVICE
+DEVICE = utils.CUDA_DEVICE
 
 
 def main1():
@@ -180,11 +180,11 @@ def main5():
     vertices_cnt = mesh_graph.verts_cnt
     faces_cnt = mesh_graph.faces_cnt
 
-    vertex_positions = torch.rand((vertices_cnt, 3), dtype=utils.FLOAT)
-    face_normals = torch.rand((faces_cnt, 3), dtype=utils.FLOAT)
+    vert_pos = torch.rand((vertices_cnt, 3), dtype=torch.float32) * 10.0
+    face_normals = torch.rand((faces_cnt, 3), dtype=torch.float32)
 
-    vps_1 = vertex_positions.clone()
-    vps_2 = vertex_positions.clone()
+    vps_1 = vert_pos.clone()
+    vps_2 = vert_pos.clone()
 
     vps_1.requires_grad = True
     vps_2.requires_grad = True

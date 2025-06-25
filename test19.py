@@ -85,7 +85,7 @@ def main2():
     proj_mat = camera_utils.make_proj_mat_with_config(
         camera_config=camera_config,
 
-        camera_view_transform=transform_utils.ObjectTransform.
+        camera_transform=transform_utils.ObjectTransform.
         from_matching("RDF"),
 
         proj_config=camera_utils.ProjConfig(

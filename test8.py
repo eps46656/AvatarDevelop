@@ -60,20 +60,24 @@ def main1():
 
     for _ in range(1):
         axis = utils.rand_unit((B, 3), dtype=FLOAT, device=DEVICE)
-        angle = torch.abs(torch.rand(B)) * (math.pi -
-                                            utils.EPS * 10) + utils.EPS * 5
+        angle = torch.abs(torch.rand(B)) * \
+            (math.pi - 1e-3)
 
-        rot_mat = utils.axis_angle_to_rot_mat(axis, angle, out_shape=(3, 3))
+        print(f"{angle.min()=}")
+        print(f"{angle.max()=}")
+
+        axis_angle = axis * angle[..., None]
+
+        rot_mat = utils.axis_angle_to_rot_mat(axis_angle, out_shape=(3, 3))
 
         CheckIsRotMat(rot_mat)
 
-        re_axis, re_angle = utils.rot_mat_to_axis_angle(rot_mat)
+        re_axis_angle = utils.rot_mat_to_axis_angle(rot_mat)
 
-        assert re_axis.isfinite().all()
-        assert re_angle.isfinite().all()
+        assert re_axis_angle.isfinite().all()
 
         re_rot_mat = utils.axis_angle_to_rot_mat(
-            re_axis, re_angle, out_shape=(3, 3))
+            re_axis_angle, out_shape=(3, 3))
 
         CheckIsRotMat(re_rot_mat)
 
@@ -163,8 +167,8 @@ def main4():
 
 
 if __name__ == "__main__":
-    # main1()
-    main2()
+    main1()
+    # main2()
     # main3()
     # main4()
     print("Finish")

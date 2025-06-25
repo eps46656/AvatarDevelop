@@ -23,29 +23,6 @@ class ProjType(enum.StrEnum):
 
 
 @beartype
-def make_view(
-    origin: torch.Tensor,  # [..., 3]
-    aim: torch.Tensor,  # [..., 3]
-    quasi_u_dir: torch.Tensor,  # [..., 3]
-) -> transform_utils.ObjectTransform:
-    utils.check_shapes(
-        origin, (..., 3),
-        aim, (..., 3),
-        quasi_u_dir, (..., 3),
-    )
-
-    f_vec = utils.vec_normed(aim - origin)
-    r_vec = utils.vec_normed(utils.vec_cross(f_vec, quasi_u_dir))
-    u_vec = utils.vec_cross(r_vec, f_vec)
-
-    return transform_utils.ObjectTransform.from_matching(
-        dirs="FRU",
-        pos=origin,
-        vecs=(f_vec, r_vec, u_vec),
-    )
-
-
-@beartype
 def make_focal_length_by_fov_diag(img_h: int, img_w: int, fov_diag: float) \
         -> float:
     assert 0 < img_h
@@ -478,25 +455,24 @@ def make_proj_config(
 def make_proj_mat_with_config(
     *,
     camera_config: CameraConfig,
-    camera_view_transform: transform_utils.ObjectTransform,  # [...]
+    camera_transform: transform_utils.ObjectTransform,  # [...]
     proj_config: ProjConfig,
-    dtype: torch.dtype,
 ) -> torch.Tensor:  # [4, 4]
-    device = camera_view_transform.device
-    dtype = camera_view_transform.dtype
+    device = camera_transform.device
+    dtype = camera_transform.dtype
 
     camera_std_transform = transform_utils.ObjectTransform.from_matching(
         "LUF", device=device, dtype=dtype)
     # camera <-> std
 
-    # camera_view_transform
-    # camera <-> view
+    # camera_transform
+    # camera <-> src
 
     # proj_config.camera_proj_transform
     # camera <-> proj
 
-    src_to_std = camera_view_transform.get_trans_to(camera_std_transform)
-    # view -> std
+    src_to_std = camera_transform.get_trans_to(camera_std_transform)
+    # src -> std
     # [..., 4, 4]
 
     std_to_dst = camera_std_transform.get_trans_to(
@@ -606,18 +582,16 @@ def make_proj_mat_with_config(
 def make_proj_mat(
     *,
     camera_config: CameraConfig,
-    camera_view_transform: transform_utils.ObjectTransform,  # [...]
+    camera_transform: transform_utils.ObjectTransform,  # [...]
     convention: Convention,
     target_coord: Coord,
-    dtype: torch.dtype = utils.FLOAT,
 ) -> torch.Tensor:  # [4, 4]
     return make_proj_mat_with_config(
         camera_config=camera_config,
-        camera_view_transform=camera_view_transform,
+        camera_transform=camera_transform,
         proj_config=make_proj_config(
             camera_config=camera_config,
             convention=convention,
             target_coord=target_coord,
         ),
-        dtype=dtype,
     )

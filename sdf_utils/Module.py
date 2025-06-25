@@ -25,14 +25,26 @@ def init(
 
 
 @beartype
-@dataclasses.dataclass
-class ModuleForwardResult:
-    gt_signed_dist: torch.Tensor  # [...]
-    pr_signed_dist: torch.Tensor  # [...]
+def get_positional_encoding_dim(L: int) -> int:
+    return 2 * L + 1
 
 
 @beartype
-class Block(torch.nn.Module):
+def positional_encoding(
+    x: torch.Tensor,  # [..., D]
+    L: int,
+) -> torch.Tensor:
+    out = [x]
+
+    for i in range(L):
+        out.append(((2 ** i) * torch.pi * x).sin())
+        out.append(((2 ** i) * torch.pi * x).cos())
+
+    return torch.cat(out, dim=-1)
+
+
+@beartype
+class ResBlock(torch.nn.Module):
     def __init__(
         self,
         io_features: int,
@@ -46,7 +58,7 @@ class Block(torch.nn.Module):
             init(torch.nn.Linear(
                 io_features, m_features, dtype=dtype, device=device)),
 
-            torch.nn.SiLU(),
+            torch.nn.Softplus(beta=100),
 
             init(torch.nn.Linear(
                 m_features, io_features, dtype=dtype, device=device)),
@@ -82,18 +94,22 @@ class Module(torch.nn.Module):
 
         self.norm_m: torch.Tensor  # [3, 4]
 
+        self.L = 6
+
+        positional_encoding_dim = 3 * get_positional_encoding_dim(self.L)
+
         layers: list[torch.nn.Module] = list()
 
         layers.append(init(torch.nn.Linear(
-            3, 1024, dtype=dtype, device=device)))
+            positional_encoding_dim, 256, dtype=dtype, device=device)))
 
-        layers.append(torch.nn.SiLU())
+        layers.append(torch.nn.Softplus(beta=100))
 
-        for _ in range(24):
-            layers.append(Block(1024, 128, dtype, device))
+        for _ in range(8):
+            layers.append(ResBlock(256, 256, dtype, device))
 
         layers.append(init(torch.nn.Linear(
-            1024, 1, dtype=dtype, device=device)))
+            256, 1, dtype=dtype, device=device)))
 
         self.module = torch.nn.Sequential(*layers)
 
@@ -118,20 +134,16 @@ class Module(torch.nn.Module):
     def forward(
         self,
         point_pos: torch.Tensor,  # [..., 3]
-        signed_dist: torch.Tensor,  # [...]
-    ) -> ModuleForwardResult:
-        utils.check_shapes(
-            point_pos, (..., 3),
-            signed_dist, (...,),
-        )
+    ) -> torch.Tensor:  # [...]
+        utils.check_shapes(point_pos, (..., 3))
 
         norm_m = self.norm_m.to(point_pos)
 
-        pr_signed_dist: torch.Tensor = self.module(utils.do_rt(
-            norm_m[:, :3], norm_m[:, 3], point_pos))[..., 0]
+        normed_x = utils.do_rt(norm_m[:, :3], norm_m[:, 3], point_pos)
+
+        pr_signed_dist: torch.Tensor = self.module(
+            positional_encoding(normed_x, self.L)
+        )[..., 0]
         # [...]
 
-        return ModuleForwardResult(
-            gt_signed_dist=signed_dist,
-            pr_signed_dist=pr_signed_dist,
-        )
+        return pr_signed_dist

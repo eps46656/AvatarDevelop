@@ -7,8 +7,9 @@ import torch
 from beartype import beartype
 
 from .. import avatar_utils, mesh_utils, utils
-from .blending_utils import BlendingParam, blending
-from .ModelBuilder import ModelBuilder
+from .blending_utils import *
+from .Model import *
+from .ModelBuilder import *
 
 
 @beartype
@@ -27,36 +28,25 @@ class ModelBlender(avatar_utils.AvatarBlender):
 
         model_data = model_builder.get_model_data()
 
+        def make_zeros(*shape):
+            return torch.zeros(shape, dtype=torch.float32, device=device)
+
         self.canonical_blending_param = BlendingParam(
-            body_shape=torch.zeros(
-                (model_data.body_shapes_cnt,), dtype=utils.FLOAT, device=device),
+            body_shape=make_zeros(model_data.body_shapes_cnt),
+            expr_shape=make_zeros(model_data.expr_shapes_cnt),
 
-            expr_shape=torch.zeros(
-                (model_data.expr_shapes_cnt,), dtype=utils.FLOAT, device=device),
+            global_transl=make_zeros(3),
+            global_rot=make_zeros(3),
 
-            global_transl=torch.zeros(
-                (3,), dtype=utils.FLOAT, device=device),
+            body_pose=make_zeros(model_data.body_joints_cnt - 1, 3),
 
-            global_rot=torch.zeros(
-                (3,), dtype=utils.FLOAT, device=device),
+            jaw_pose=make_zeros(model_data.jaw_joints_cnt, 3),
 
-            body_pose=torch.zeros(
-                (model_data.body_joints_cnt - 1, 3), dtype=utils.FLOAT, device=device),
+            leye_pose=make_zeros(model_data.eye_joints_cnt, 3),
+            reye_pose=make_zeros(model_data.eye_joints_cnt, 3),
 
-            jaw_pose=torch.zeros(
-                (model_data.jaw_joints_cnt, 3), dtype=utils.FLOAT, device=device),
-
-            leye_pose=torch.zeros(
-                (model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
-
-            reye_pose=torch.zeros(
-                (model_data.eye_joints_cnt, 3), dtype=utils.FLOAT, device=device),
-
-            lhand_pose=torch.zeros(
-                (model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
-
-            rhand_pose=torch.zeros(
-                (model_data.hand_joints_cnt, 3), dtype=utils.FLOAT, device=device),
+            lhand_pose=make_zeros(model_data.hand_joints_cnt, 3),
+            rhand_pose=make_zeros(model_data.hand_joints_cnt, 3),
         )
 
     def get_avatar_model(self) -> avatar_utils.AvatarModel:

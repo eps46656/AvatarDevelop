@@ -449,7 +449,7 @@ class TrainerCore(training_utils.TrainerCore):
             path=self.config.proj_dir / f"rgb_{utils.timestamp_sec()}.avi",
             height=H,
             width=W,
-            color_type=vision_utils.ColorType.RGB,
+            color_type="RGB",
             fps=25.0,
         )
 

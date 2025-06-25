@@ -6,9 +6,8 @@ import typing
 
 import torch
 
-import smplx
 
-from . import blending_utils, config, kin_utils, mesh_utils, smplx_utils, utils
+from . import blending_utils, config, kin_utils, mesh_utils, smplx_utils, utils, smplx
 
 FILE = pathlib.Path(__file__)
 DIR = FILE.parents[0]

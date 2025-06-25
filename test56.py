@@ -10,20 +10,20 @@ import tqdm
 from beartype import beartype
 
 from . import (camera_utils, config, mesh_utils, people_snapshot_utils,
-               smplx_utils, tex_avatar_utils, training_utils, transform_utils,
+               smplx_utils, bare_avatar_utils, training_utils, transform_utils,
                utils, video_seg_utils, vision_utils)
 
 DTYPE = torch.float64
 DEVICE = utils.CUDA_DEVICE
 
-SUBJECT_NAME = "female-3-casual"
+SUBJECT_NAME = "female-4-casual"
 
 
-VIDEO_SEG_DIR = config.DIR / "video_seg_2025_0520_1"
+VIDEO_SEG_DIR = config.DIR / "video_seg_2025_0526_1"
 
 MESH_SEG_DIR = config.DIR / "mesh_seg_2025_0514_1"
 
-TEX_AVATAR_DIR = config.DIR / "tex_avatar_2025_0520_1"
+BARE_AVATAR_DIR = config.DIR / "tex_avatar_2025_0527_1"
 
 
 @beartype
@@ -89,14 +89,15 @@ def main1():
             (3, 1000, 1000), dtype=DTYPE, device=DEVICE)
     else:
         init_tex = vision_utils.read_image(
-            TEX_AVATAR_DIR / "tex_1747581876.png",
-        ).to(DEVICE, DTYPE)
+            BARE_AVATAR_DIR / "tex_1747581876.png",
+            "RGB",
+        ).image.to(DEVICE, DTYPE)
 
     trainer = training_utils.Trainer(
-        TEX_AVATAR_DIR,
-        tex_avatar_utils.TrainerCore(
-            config=tex_avatar_utils.TrainerCoreConfig(
-                proj_dir=TEX_AVATAR_DIR,
+        BARE_AVATAR_DIR,
+        bare_avatar_utils.TrainerCore(
+            config=bare_avatar_utils.TrainerCoreConfig(
+                proj_dir=BARE_AVATAR_DIR,
                 device=DEVICE,
                 batch_size=8,
 
@@ -114,8 +115,8 @@ def main1():
 
             avatar_blender=avatar_blender,
 
-            dataset=tex_avatar_utils.Dataset(
-                tex_avatar_utils.Sample(
+            dataset=bare_avatar_utils.Dataset(
+                bare_avatar_utils.Sample(
                     camera_config=camera_config,
                     camera_transform=camera_transform,
 
@@ -139,7 +140,7 @@ def main1():
                 )
             ),
 
-            text_prompt="a female with underwear, realistic, photorealistic, natural skin texture, high detail",
+            text_prompt="the same naked female, realistic, photorealistic, natural skin texture, high detail",
 
             negative_text_prompt="anime, cartoon, illustration, drawing, painting, sketch, unrealistic, 3d render, cgi, low quality, low resolution, blurry, extra limbs, mutated hands, deformed, bad anatomy",
 

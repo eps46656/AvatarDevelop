@@ -3,22 +3,25 @@ from __future__ import annotations
 import collections
 import dataclasses
 import typing
+import math
 
 import torch
 from beartype import beartype
 
 from .. import (avatar_utils, camera_utils, gaussian_utils, mesh_utils,
-                transform_utils, utils)
+                rendering_utils, transform_utils, utils, vision_utils)
 from .utils import FaceCoordResult, get_face_coord
 
 
 @beartype
 @dataclasses.dataclass
-class ModuleWorldGPResult:
-    face_coord_result: FaceCoordResult
-    gp_mean: torch.Tensor  # [..., F, 3]
-    gp_rot_q: torch.Tensor  # [..., F, 4]
-    gp_scale: torch.Tensor  # [..., F, 3]
+class ModuleObservationGPResult:
+    obs_gp_mean: torch.Tensor  # [..., F, 3]
+
+    local_gp_rot: torch.Tensor  # [F, 3, 3]
+    local_gp_scale: torch.Tensor  # [F, 3]
+    obs_gp_cov3d: torch.Tensor  # [..., F, 3, 3]
+
     gp_color: torch.Tensor  # [..., F, 3]
     gp_opacity: torch.Tensor  # [..., F, 1]
 
@@ -31,11 +34,10 @@ class ModuleForwardResult:
     gp_render_img: torch.Tensor  # [..., C, H, W]
 
     img_diff: torch.Tensor  # [...]
+    gp_mask_diff: list[torch.Tensor]  # [][...]
     lap_diff: torch.Tensor  # [...]
     nor_sim: torch.Tensor  # [...]
     edge_var: torch.Tensor  # [...]
-    gp_color_diff: torch.Tensor  # [...]
-    gp_scale_diff: torch.Tensor  # [...]
 
 
 @beartype
@@ -44,6 +46,8 @@ class Module(torch.nn.Module):
         self,
         avatar_blender: avatar_utils.AvatarBlender,
         color_channels_cnt: int,
+        dtype: torch.dtype,
+        device: torch.device,
     ):
         super().__init__()
 
@@ -51,28 +55,35 @@ class Module(torch.nn.Module):
 
         avatar_model: avatar_utils.AvatarModel = self.avatar_blender.get_avatar_model()
 
-        faces_cnt = avatar_model.faces_cnt
-        assert 0 < faces_cnt
+        verts_cnt = avatar_model.verts_cnt
+        assert 0 < verts_cnt
 
         assert 1 <= color_channels_cnt
 
-        self.gp_rot_z = torch.nn.Parameter(torch.zeros(
-            (faces_cnt,), dtype=utils.FLOAT))
+        self.gp_rot = torch.nn.Parameter(torch.zeros(
+            (verts_cnt, 3),
+            dtype=dtype,
+            device=device,
+        ))
 
-        self.gp_scale_x = torch.nn.Parameter(torch.full(
-            (faces_cnt,), 0, dtype=utils.FLOAT))
+        self.gp_scale = torch.nn.Parameter(torch.full(
+            (verts_cnt, 3),
+            5,
+            dtype=dtype,
+            device=device,
+        ))
 
-        self.gp_scale_y = torch.nn.Parameter(torch.full(
-            (faces_cnt,), 0, dtype=utils.FLOAT))
-
-        self.gp_scale_z = torch.nn.Parameter(torch.full(
-            (faces_cnt,), 0, dtype=utils.FLOAT))
-
-        self.gp_color = torch.nn.Parameter(torch.rand(
-            (faces_cnt, color_channels_cnt), dtype=utils.FLOAT))
+        self.gp_color = torch.nn.Parameter(torch.zeros(
+            (verts_cnt, color_channels_cnt),
+            dtype=dtype,
+            device=device,
+        ))
 
         self.gp_opacity = torch.nn.Parameter(torch.zeros(
-            (faces_cnt,), dtype=utils.FLOAT))
+            (verts_cnt,),
+            dtype=dtype,
+            device=device,
+        ))
 
     def to(self, *args, **kwargs) -> Module:
         super().to(*args, **kwargs)
@@ -86,10 +97,8 @@ class Module(torch.nn.Module):
 
         ret.append({
             "params": [
-                self.gp_rot_z,
-                self.gp_scale_x,
-                self.gp_scale_y,
-                self.gp_scale_z,
+                self.gp_rot,
+                self.gp_scale,
                 self.gp_color,
                 self.gp_opacity,
             ],
@@ -98,19 +107,13 @@ class Module(torch.nn.Module):
 
         return ret
 
-    @property
-    def faces_cnt(self) -> int:
-        return self.gp_color.shape[0]
-
     def state_dict(self) -> collections.OrderedDict:
         return collections.OrderedDict([
             ("avatar_blender", self.avatar_blender.state_dict()),
 
-            ("gp_rot_z", self.gp_rot_z),
+            ("gp_rot", self.gp_rot),
 
-            ("gp_scale_x", self.gp_scale_x),
-            ("gp_scale_y", self.gp_scale_y),
-            ("gp_scale_z", self.gp_scale_z),
+            ("gp_scale", self.gp_scale),
 
             ("gp_color", self.gp_color),
             ("gp_opacity", self.gp_opacity),
@@ -120,17 +123,11 @@ class Module(torch.nn.Module):
         self.avatar_blender.load_state_dict(
             state_dict["avatar_blender"])
 
-        self.gp_rot_z = torch.nn.Parameter(
-            state_dict["gp_rot_z"].to(self.gp_rot_z, copy=True))
+        self.gp_rot = torch.nn.Parameter(
+            state_dict["gp_rot"].to(self.gp_rot, copy=True))
 
-        self.gp_scale_x = torch.nn.Parameter(
-            state_dict["gp_scale_x"].to(self.gp_scale_x, copy=True))
-
-        self.gp_scale_y = torch.nn.Parameter(
-            state_dict["gp_scale_y"].to(self.gp_scale_y, copy=True))
-
-        self.gp_scale_z = torch.nn.Parameter(
-            state_dict["gp_scale_z"].to(self.gp_scale_z, copy=True))
+        self.gp_scale = torch.nn.Parameter(
+            state_dict["gp_scale"].to(self.gp_scale, copy=True))
 
         self.gp_color = torch.nn.Parameter(
             state_dict["gp_color"].to(self.gp_color, copy=True))
@@ -149,100 +146,53 @@ class Module(torch.nn.Module):
             target_faces=target_faces,
         )
 
-        face_src_table = mesh_subdivide_result.face_src_table
+        vert_src_table = mesh_subdivide_result.vert_src_table
+        # [V_, 2]
 
-        self.gp_rot_z = torch.nn.Parameter(self.gp_rot_z[face_src_table])
-        # [F_]
+        self.gp_rot = torch.nn.Parameter(
+            self.gp_rot[vert_src_table].mean(-2))
+        # [V_, 3]
 
-        self.gp_scale_x = torch.nn.Parameter(self.gp_scale_x[face_src_table])
-        # [F_]
+        self.gp_scale = torch.nn.Parameter(
+            self.gp_scale[vert_src_table].mean(-2))
+        # [V_, 3]
 
-        self.gp_scale_y = torch.nn.Parameter(self.gp_scale_y[face_src_table])
-        # [F_]
+        self.gp_color = torch.nn.Parameter(
+            self.gp_color[vert_src_table].mean(-2))
+        # [V_, C]
 
-        self.gp_scale_z = torch.nn.Parameter(self.gp_scale_z[face_src_table])
-        # [F_]
-
-        self.gp_color = torch.nn.Parameter(self.gp_color[face_src_table])
-        # [F_, C]
-
-        self.gp_opacity = torch.nn.Parameter(self.gp_opacity[face_src_table])
-        # [F_]
+        self.gp_opacity = torch.nn.Parameter(
+            self.gp_opacity[vert_src_table].mean(-1))
+        # [V_]
 
         return self
 
-    def get_world_gp(
+    def get_obs_gp(
         self,
-        mesh_data: mesh_utils.MeshData
-    ) -> ModuleWorldGPResult:
-        F = self.faces_cnt
+        avatar_model: avatar_utils.AvatarModel,
+    ) -> ModuleObservationGPResult:
+        obs_gp_mean = avatar_model.vert_pos
+        # [..., V, 3]
 
-        assert mesh_data.faces_cnt == F
-
-        face_coord_result = get_face_coord(mesh_data)
-        # face_coord_result.rs[..., F, 3, 3]
-        # face_coord_result.ts[..., F, 3]
-        # face_coord_result.areas[..., F]
-
-        face_coord_rot_qs = utils.rot_mat_to_quaternion(
-            face_coord_result.r, order="WXYZ")
-
-        zeros = utils.zeros(like=self.gp_rot_z, shape=()).expand(F)
-        # [F]
-
-        half_gp_rot_thetas = self.gp_rot_z * 0.5
-        # [F]
-
-        local_gp_rot_qs = torch.stack([
-            half_gp_rot_thetas.cos(),  # W
-            zeros,  # X
-            zeros,  # Y
-            half_gp_rot_thetas.sin(),  # Z
-        ], -1)
-        # [F, 4]
-
-        utils.check_shapes(
-            local_gp_rot_qs, (F, 4)
+        local_gp_rot = utils.axis_angle_to_rot_mat(
+            axis_angle=self.gp_rot,  # [V, 3]
+            out_shape=(3, 3),
         )
+        # [V, 3, 3]
 
-        world_gp_mean = face_coord_result.t
-        # [..., F, 3]
+        local_gp_scale = 5e-3 + 1e-4 * torch.nn.functional.softplus(
+            self.gp_scale)
+        # [..., V, 3]
 
-        world_gp_rot_q = utils.quaternion_mul(
-            face_coord_rot_qs, local_gp_rot_qs,
-            order_1="WXYZ",
-            order_2="WXYZ",
-            order_out="WXYZ",
-        )
-        # [..., F, 4] wxyz
+        vert_trans = avatar_model.vert_trans[..., :3, :3]
+        # [..., V, 3, 3]
 
-        scale_factor = face_coord_result.area.sqrt()
-        # [..., F]
+        world_gp_cov3d = gaussian_utils.trans_to_cov3d(utils.mat_mul(
+            vert_trans, local_gp_rot, utils.make_diag(local_gp_scale)
+        ))
+        # [..., V, 3, 3]
 
-        world_gp_scale_x = scale_factor * utils.smooth_clamp(
-            x=self.gp_scale_x,  # clamp local scale
-            lb=2.0 / 3,
-            rb=4.0 / 3,
-        )
-        # [..., F]
-
-        world_gp_scale_y = scale_factor * utils.smooth_clamp(
-            x=self.gp_scale_y,  # clamp local scale
-            lb=2.0 / 3,
-            rb=4.0 / 3,
-        )
-        # [..., F]
-
-        world_gp_scale_z = utils.smooth_clamp(
-            x=scale_factor * self.gp_scale_z,  # clamp global scale
-            lb=20e-3 / 3,
-            rb=30e-3 / 3,
-        )
-        # [..., F]
-
-        world_gp_scale = torch.stack([
-            world_gp_scale_x, world_gp_scale_y, world_gp_scale_z], -1)
-        # [..., F, 3]
+        world_gp_color = self.gp_color.sigmoid()
 
         world_gp_opacity = utils.smooth_clamp(
             x=self.gp_opacity,
@@ -250,26 +200,33 @@ class Module(torch.nn.Module):
             rb=1.0,
         )
 
-        return ModuleWorldGPResult(
-            face_coord_result=face_coord_result,
-            gp_mean=world_gp_mean,
-            gp_rot_q=world_gp_rot_q,
-            gp_scale=world_gp_scale,
-            gp_color=self.gp_color,
+        return ModuleObservationGPResult(
+            obs_gp_mean=obs_gp_mean,
+
+            local_gp_rot=local_gp_rot,
+            local_gp_scale=local_gp_scale,
+            obs_gp_cov3d=world_gp_cov3d,
+
+            gp_color=world_gp_color,
             gp_opacity=world_gp_opacity,
         )
 
     def forward(
         self,
+        *,
         camera_config: camera_utils.CameraConfig,
         camera_transform: transform_utils.ObjectTransform,
         img: torch.Tensor,  # [..., C, H, W]
-        mask: torch.Tensor,  # [..., H, W]
+        mask: torch.Tensor,  # [..., 1, H, W]
+        dilated_mask: list[torch.Tensor],  # [..., 1, H, W]
         blending_param: object,
+
+        silhouette_sigma: list[float],
+        silhouette_opacity: list[float],
     ) -> ModuleForwardResult:
         device = next(self.parameters()).device
 
-        C = self.gp_color.shape[-1]
+        V, C = self.gp_color.shape
 
         H, W = -1, -2
 
@@ -278,129 +235,272 @@ class Module(torch.nn.Module):
             mask, (..., 1, H, W),
         )
 
-        avatar_model: avatar_utils.AvatarModel = self.avatar_blender(
-            blending_param)
+        batch_shape = utils.broadcast_shapes(
+            camera_transform,
+            img.shape[:-3],
+            mask.shape[:-3],
+            *(x.shape[:-3] for x in dilated_mask),
+            blending_param,
+        )
 
-        world_gp_result = self.get_world_gp(avatar_model.mesh_data)
+        first_idx = (0,) * len(batch_shape)
 
-        normal_bg_color = 1.0
-        abnormal_bg_color = 2.0
+        mask_sum = mask.sum((-3, -2, -1))
+        # [...]
 
-        gp_render_result = gaussian_utils.render_gaussian(
-            camera_config=camera_config,
-            camera_transform=camera_transform,
+        sigma_n = len(dilated_mask)
 
-            bg_color=utils.full(
-                normal_bg_color,
-                shape=(C,),
-                dtype=world_gp_result.gp_color.dtype,
-            ),
+        dilated_mask = [
+            (1 - (1 - cur_dilated_mask).pow(V))
+            for cur_dilated_mask in dilated_mask
+        ]
 
-            gp_mean=world_gp_result.gp_mean,
-            gp_rot_q=world_gp_result.gp_rot_q,
-            gp_scale=world_gp_result.gp_scale,
+        avatar_model: avatar_utils.AvatarModel = \
+            self.avatar_blender(blending_param)
 
-            gp_sh=None,
-            gp_color=world_gp_result.gp_color,
+        canon_avatar_model: avatar_utils.AvatarModel = \
+            self.avatar_blender.get_avatar_model()
 
-            gp_opacity=world_gp_result.gp_opacity,
+        obs_gp_result = self.get_obs_gp(avatar_model)
 
-            device=device,
-        )  # [...]
+        gp_rgb_render_result: gaussian_utils.RenderGaussianResult = \
+            gaussian_utils.render_gaussian(
+                camera_config=camera_config,
+                camera_transform=camera_transform,
 
-        gp_render_img = gp_render_result.color
+                bg_color=utils.ones(
+                    shape=(C,),
+                    like=obs_gp_result.gp_color,
+                ),
+
+                gp_mean=obs_gp_result.obs_gp_mean,
+                gp_cov3d=obs_gp_result.obs_gp_cov3d,
+
+                gp_sh=None,
+                gp_color=obs_gp_result.gp_color,
+
+                gp_opacity=obs_gp_result.gp_opacity,
+
+                calc_alpha=False,
+            )  # [...]
+
+        gp_render_img = gp_rgb_render_result.color
         # [..., C, H, W]
 
+        # ---
+
+        gp_dist = utils.vec_dot(
+            obs_gp_result.obs_gp_mean.detach() -
+            camera_transform.pos[..., None, :],
+
+            camera_transform.vec_f[..., None, :],
+        )
+        # [..., V]
+
+        gp_silhouette_base_scale = gp_dist * (1.0 * math.sqrt(
+            ((camera_config.foc_u + camera_config.foc_d) ** 2 +
+             (camera_config.foc_l + camera_config.foc_r) ** 2) /
+            (H ** 2 + W ** 2)
+        ))
+        # [..., V]
+
+        gp_silhouette_rot_q = torch.tensor(
+            [0, 0, 0, 1],
+            dtype=obs_gp_result.obs_gp_mean.dtype,
+            device=gp_silhouette_base_scale.device,
+        ).expand(V, 4)
+
+        gp_silhouette_color = utils.dummy_ones(
+            shape=(V, C,), like=obs_gp_result.gp_color)
+
+        # ---
+
         if not self.training:
-            ret_img_diff = torch.Tensor()
-        else:
-            normal_person_masked_img = img * mask + \
-                normal_bg_color * (1 - mask)
-
-            abnormal_person_masked_img = img * mask + \
-                abnormal_bg_color * (1 - mask)
-
-            raw_rgb_sum_sq_diff_base = (
-                normal_person_masked_img - abnormal_person_masked_img
-            ).square().sum((-3, -2, -1))
-            # [...]
-
-            raw_rgb_sum_sq_diff = (
-                gp_render_img - abnormal_person_masked_img
-            ).square().sum((-3, -2, -1))
-            # [...]
-
-            rgb_sum_sq_diff = raw_rgb_sum_sq_diff - raw_rgb_sum_sq_diff_base
-            # [...]
-
-            ret_img_diff = rgb_sum_sq_diff / mask.sum((-3, -2, -1))
-            # [...]
-
-        if not self.training:
-            ret_lap_diff = torch.Tensor()
-        else:
-            raw_lap_diff = avatar_model.mesh_data.uni_lap_diff
-            # [..., V, 3]
-
-            """
-            lap_diff_norm = utils.vec_norm(raw_lap_diff.detach(), keepdim=True)
-            # [..., V, 1]
-
-            lap_diff = raw_lap_diff * (
-                lap_diff_clamp_norm /
-                lap_diff_norm.clamp(lap_diff_clamp_norm, None)
+            ret_img_diff = utils.zeros(
+                shape=img.shape[:-3],
+                like=img,
             )
+        else:
+            person_masked_img = img * mask + (1 - mask)
+
+            vision_utils.show_image(
+                "img",
+                utils.rct(
+                    img[*first_idx, :, :, :] * 255,
+                    dtype=torch.uint8,
+                ),
+            )
+
+            vision_utils.show_image(
+                "gp_render_img",
+                utils.rct(
+                    gp_render_img[*first_idx, :, :, :] * 255,
+                    dtype=torch.uint8,
+                ),
+            )
+
+            vision_utils.show_image(
+                "merged_gp_render_img",
+                utils.rct((
+                    img[*first_idx, :, :, :] +
+                    gp_render_img[*first_idx, :, :, :]
+                ) * (255 / 2),
+                    dtype=torch.uint8,
+                ),
+            )
+
+            ret_img_diff = (
+                gp_render_img - person_masked_img
+            ).abs().sum((-3, -2, -1)) / (H * W)
+            # [...]
+
+        ret_gp_mask_diff: list[torch.Tensor] = list()
+
+        for sigma_idx in range(sigma_n):
+            if not self.training:
+                ret_gp_mask_diff.append(utils.zeros(
+                    shape=batch_shape,
+                    like=dilated_mask[sigma_idx],
+                ))
+
+                continue
+
+            gp_silhouette_scale = silhouette_sigma[sigma_idx] * \
+                gp_silhouette_base_scale
+            # [..., V]
+
+            gp_silhouette_scale = gp_silhouette_scale[..., None].expand(
+                *gp_silhouette_scale.shape, 3)
             # [..., V, 3]
+
+            gp_silhouette_render_result: gaussian_utils.RenderGaussianResult = \
+                gaussian_utils.render_gaussian(
+                    camera_config=camera_config,
+                    camera_transform=camera_transform,
+
+                    bg_color=utils.zeros(
+                        shape=(C,),
+                        requires_grad=False,
+                        like=obs_gp_result.gp_color,
+                    ),
+
+                    gp_mean=obs_gp_result.obs_gp_mean,
+
+                    gp_rot_q=gp_silhouette_rot_q,
+
+                    gp_scale=gp_silhouette_scale,
+
+                    gp_sh=None,
+                    gp_color=gp_silhouette_color,
+
+                    gp_opacity=torch.where(
+                        1e-2 <= obs_gp_result.gp_opacity,  # [V]
+
+                        torch.tensor(
+                            silhouette_opacity[sigma_idx],
+                            dtype=obs_gp_result.gp_opacity.dtype,
+                            device=obs_gp_result.gp_opacity.device,
+                        ),
+
+                        torch.tensor(
+                            0.0,
+                            dtype=obs_gp_result.gp_opacity.dtype,
+                            device=obs_gp_result.gp_opacity.device,
+                        ),
+                    ),
+
+                    calc_alpha=False,
+                )  # [...]
+
+            gp_silhouette_render_img = \
+                gp_silhouette_render_result.color[..., :1, :, :]
+            # [..., 1, H, W]
+
+            vision_utils.show_image(
+                f"dilated_mask ({sigma_idx})",
+                utils.rct(
+                    dilated_mask[sigma_idx][first_idx] * 255,
+                    dtype=torch.uint8,
+                ),
+            )
+
+            vision_utils.show_image(
+                f"dilated_mask + alpha ({sigma_idx})",
+
+                torch.cat([
+                    utils.rct(
+                        gp_silhouette_render_img[first_idx] * 255,
+                        dtype=torch.uint8,
+                    ),
+
+                    utils.rct(
+                        dilated_mask[sigma_idx][first_idx] * 255,
+                        dtype=torch.uint8,
+                    ),
+
+                    utils.dummy_zeros(
+                        like=gp_silhouette_render_img[first_idx],
+                        dtype=torch.uint8,
+                    ),
+                ], 0)
+            )
+
+            gp_mask_diff = gp_silhouette_render_img - dilated_mask[sigma_idx]
+
             """
 
-            lap_diff = raw_lap_diff
+            pr gt
+            0  1     neg
+            1  0     pos
 
-            ret_lap_diff = lap_diff.square().sum((-2, -1)) / lap_diff.shape[-2]
+            """
+
+            """
+            ret_gp_mask_diff.append((
+                0.3 * gp_mask_diff.clamp(0, None) -
+                1.7 * gp_mask_diff.clamp(None, 0)
+            ).sum((-3, -2, -1)) / (H * W))
+            """
+
+            ret_gp_mask_diff.append((
+                gp_mask_diff.abs()
+            ).sum((-3, -2, -1)) / (H * W))
             # [...]
 
         if not self.training:
-            ret_nor_sim = torch.Tensor()
+            ret_lap_diff = utils.zeros(
+                shape=batch_shape,
+                like=canon_avatar_model.vert_pos,
+            )
         else:
-            nor_sim = avatar_model.mesh_data.face_norm_cos_sim
+            vert_lap_diff = canon_avatar_model.mesh_data.uni_lap_diff
+            # [..., V, D]
+
+            ret_lap_diff = utils.vec_sq_norm(vert_lap_diff).mean(-1)
+            # [...]
+
+        if not self.training:
+            ret_nor_sim = utils.zeros(
+                shape=batch_shape,
+                like=canon_avatar_model.vert_pos,
+            )
+        else:
+            nor_sim = canon_avatar_model.mesh_data.face_norm_cos_sim
             # [..., FP]
 
-            ret_nor_sim = (1 - nor_sim).square().mean(-1)
+            ret_nor_sim = (1 - nor_sim).mean(-1)
             # [...]
 
         if not self.training:
-            ret_edge_var = torch.Tensor()
+            ret_edge_var = utils.zeros(
+                shape=batch_shape,
+                like=canon_avatar_model.vert_pos,
+            )
         else:
-            rel_edge_var = avatar_model.mesh_data.face_edge_rel_var
+            edge_var = canon_avatar_model.mesh_data.face_edge_var
             # [..., F]
 
-            ret_edge_var = rel_edge_var.mean(-1)
-            # [...]
-
-        if not self.training:
-            ret_gp_color_diff = torch.Tensor()
-        else:
-            gp_color_diff = avatar_model.mesh_graph.calc_face_cos_sim(
-                world_gp_result.gp_color)
-            # [..., FP]
-
-            ret_gp_color_diff = gp_color_diff.square().mean(-1)
-            # [...]
-
-        if not self.training:
-            ret_gp_scale_diff = torch.Tensor()
-        else:
-            world_gp_x_scale = world_gp_result.gp_scale[..., 0]
-            world_gp_y_scale = world_gp_result.gp_scale[..., 1]
-
-            word_gp_xy_scale = world_gp_x_scale * world_gp_y_scale
-            # [..., F]
-
-            word_gp_xy_scale_diff = avatar_model.mesh_graph.calc_face_diff(
-                word_gp_xy_scale[..., None])
-            # [..., FP, 1]
-
-            ret_gp_scale_diff = word_gp_xy_scale_diff.sum((-2, -1)) / \
-                word_gp_xy_scale_diff.shape[-2]
+            ret_edge_var = edge_var.mean(-1)
             # [...]
 
         return ModuleForwardResult(
@@ -409,13 +509,11 @@ class Module(torch.nn.Module):
             gp_render_img=gp_render_img,
 
             img_diff=ret_img_diff,
+            gp_mask_diff=ret_gp_mask_diff,
             lap_diff=ret_lap_diff,
             nor_sim=ret_nor_sim,
             edge_var=ret_edge_var,
-            gp_color_diff=ret_gp_color_diff,
-            gp_scale_diff=ret_gp_scale_diff,
         )
 
     def refresh(self) -> None:
-        if hasattr(self, "avatar_blender"):
-            self.avatar_blender.refresh()
+        self.avatar_blender.refresh()

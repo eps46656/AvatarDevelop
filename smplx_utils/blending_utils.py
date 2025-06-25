@@ -6,8 +6,8 @@ import torch
 from beartype import beartype
 
 from .. import blending_utils, utils
-from .Model import Model
-from .ModelData import ModelData
+from .Model import *
+from .ModelData import *
 
 
 @beartype
@@ -58,19 +58,19 @@ class BlendingParam:
         self.shape = utils.broadcast_shapes(
             shape,
 
-            utils.try_get_batch_shape(body_shape, -1),
-            utils.try_get_batch_shape(expr_shape, -1),
+            utils.try_get_batch_shape(body_shape, 1),
+            utils.try_get_batch_shape(expr_shape, 1),
 
-            utils.try_get_batch_shape(global_transl, -1),
-            utils.try_get_batch_shape(global_rot, -1),
+            utils.try_get_batch_shape(global_transl, 1),
+            utils.try_get_batch_shape(global_rot, 1),
 
-            utils.try_get_batch_shape(body_pose, -2),
-            utils.try_get_batch_shape(jaw_pose, -2),
-            utils.try_get_batch_shape(leye_pose, -2),
-            utils.try_get_batch_shape(reye_pose, -2),
+            utils.try_get_batch_shape(body_pose, 2),
+            utils.try_get_batch_shape(jaw_pose, 2),
+            utils.try_get_batch_shape(leye_pose, 2),
+            utils.try_get_batch_shape(reye_pose, 2),
 
-            utils.try_get_batch_shape(lhand_pose, -2),
-            utils.try_get_batch_shape(rhand_pose, -2),
+            utils.try_get_batch_shape(lhand_pose, 2),
+            utils.try_get_batch_shape(rhand_pose, 2),
         )
 
         def f(obj):
@@ -218,19 +218,22 @@ def blending(
 
     pre_lbs_vp_trans_t = utils.zeros(like=model_data.vert_pos, shape=())
 
-    if blending_param.body_shape is not None:
+    if model_data.body_shape_vert_dir is not None and \
+            blending_param.body_shape is not None:
         pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + get_shape_vert_dir(
             model_data.body_shape_vert_dir, blending_param.body_shape)
         # [..., V, 3]
 
-    if blending_param.expr_shape is not None:
+    if model_data.expr_shape_vert_dir is not None and \
+            blending_param.expr_shape is not None:
         pre_lbs_vp_trans_t = pre_lbs_vp_trans_t + get_shape_vert_dir(
             model_data.expr_shape_vert_dir, blending_param.expr_shape)
         # [..., V, 3]
 
     binding_joint_t = model_data.joint_t_mean
 
-    if blending_param.body_shape is not None:
+    if model_data.body_shape_joint_dir is not None and \
+            blending_param.body_shape is not None:
         binding_joint_t = binding_joint_t + utils.einsum(
             "...jxb, ...b -> ...jx",
             model_data.body_shape_joint_dir,
@@ -259,12 +262,11 @@ def blending(
             binding_joint_t[..., model_data.kin_tree.parents[u], :]
 
     target_pose_r = utils.axis_angle_to_rot_mat(
-        blending_param.get_poses(model_data), out_shape=(3, 3))
+        blending_param.get_poses(model_data), (3, 3))
     # [..., J, 3, 3]
 
-    identity = utils.eye(like=target_pose_r, shape=(3, 3))
-
-    pose_feature = target_pose_r[..., 1:, :, :] - identity
+    pose_feature = target_pose_r[..., 1:, :, :] - \
+        utils.eye(like=target_pose_r, shape=(3, 3))
     # [..., J - 1, 3, 3]
 
     pose_feature = pose_feature.view(

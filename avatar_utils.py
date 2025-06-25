@@ -72,10 +72,10 @@ class AvatarModel:
 
         self.shape = utils.broadcast_shapes(
             shape,
-            utils.try_get_batch_shape(joint_T, -3),
-            utils.try_get_batch_shape(vert_pos, -2),
-            utils.try_get_batch_shape(tex_vert_pos, -2),
-            utils.try_get_batch_shape(vert_trans, -3),
+            utils.try_get_batch_shape(joint_T, 3),
+            utils.try_get_batch_shape(vert_pos, 2),
+            utils.try_get_batch_shape(tex_vert_pos, 2),
+            utils.try_get_batch_shape(vert_trans, 3),
         )
 
         self.joints_cnt = J
@@ -98,10 +98,13 @@ class AvatarModel:
 
         self.vert_trans = vert_trans  # [..., V, 4, 4]
 
-        self.mesh_data = mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
+        self.mesh_data = None \
+            if self.mesh_graph is None or self.vert_pos is None else \
+            mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
 
-        self.tex_mesh_data = mesh_utils.MeshData(
-            self.tex_mesh_graph, self.tex_vert_pos)
+        self.tex_mesh_data = None \
+            if self.tex_mesh_graph is None or self.tex_vert_pos is None \
+            else mesh_utils.MeshData(self.tex_mesh_graph, self.tex_vert_pos)
 
     def __getitem__(self, idx) -> AvatarModel:
         return AvatarModel(
@@ -140,5 +143,8 @@ class AvatarBlender(torch.nn.Module):
     ) -> mesh_utils.MeshSubdivideResult:
         raise NotImplementedError()
 
-    def forward(self, blending_param) -> AvatarModel:
+    def forward(self, blending_param: typing.Any) -> AvatarModel:
         raise NotImplementedError()
+
+    def refresh(self) -> None:
+        pass

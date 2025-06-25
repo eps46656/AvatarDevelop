@@ -20,7 +20,8 @@ def main1():
     )
 
     normal_map = vision_utils.read_image(
-        config.DIR / "test_normal_map.png") / 255
+        config.DIR / "test_normal_map.png", "RGB"
+    ).image / 255
 
     print(f"{normal_map.shape=}")
     print(f"{normal_map.min()=}")

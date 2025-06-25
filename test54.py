@@ -9,7 +9,7 @@ from beartype import beartype
 from . import (avatar_utils, camera_utils, config, controlnet_utils,
                mesh_utils, people_snapshot_utils, rendering_utils,
                sds_texture_avatar_trainer, smplx_utils, training_utils,
-               transform_utils, utils, vision_utils, tex_avatar_utils)
+               transform_utils, utils, vision_utils, bare_avatar_utils)
 
 SUBJECT_NAME = "female-1-casual"
 
@@ -48,7 +48,7 @@ def main1():
     normal_map = vision_utils.normalize_image(
         vision_utils.read_video(
             config.DIR / "nor_1746349999.avi",
-            vision_utils.ColorType.RGB,
+            "RGB",
         )[0],
         dtype=DTYPE,
         device=utils.CPU_DEVICE,

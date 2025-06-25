@@ -84,7 +84,7 @@ def main1():
         obj_type: vision_utils.VideoReader(
             VIDEO_SEG_DIR /
             video_seg_utils.get_refined_obj_mask_filename(obj_type),
-            vision_utils.ColorType.GRAY,
+            "GRAY",
         )
         for obj_type in obj_type_list
     }

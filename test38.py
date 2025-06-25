@@ -26,7 +26,7 @@ def main1():
 
     video, _ = vision_utils.read_video(
         config.DIR / "nor_1747289760.avi",
-        vision_utils.ColorType.RGB,
+        "RGB",
         device=DEVICE,
     )
 
@@ -48,7 +48,7 @@ def main1():
         fps=subject_data.fps,
         height=video.shape[2],
         width=video.shape[3],
-        color_type=vision_utils.ColorType.RGB,
+        color_type="RGB",
     ) as out_video_writer:
         for i in range(video.shape[0]):
             img = video[i]

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import collections
 import dataclasses
-import os
 import typing
 
 import numpy as np
@@ -50,8 +49,6 @@ class ModelData:
         vert_pos: typing.Optional[torch.Tensor],  # [..., V, 3]
         tex_vert_pos: typing.Optional[torch.Tensor],  # [..., TV, 2]
 
-        lbs_weight: typing.Optional[torch.Tensor],  # [..., V, J]
-
         body_shape_joint_dir: typing.Optional[torch.Tensor],  # [..., J, 3, BS]
         expr_shape_joint_dir: typing.Optional[torch.Tensor],  # [..., J, 3, ES]
 
@@ -63,6 +60,8 @@ class ModelData:
 
         pose_vert_dir: typing.Optional[torch.Tensor],
         # [..., V, 3, (J - 1) * 3 * 3]
+
+        lbs_weight: typing.Optional[torch.Tensor],  # [..., V, J]
     ):
         BODYJ = body_joints_cnt
         JAWJ = jaw_joints_cnt
@@ -78,8 +77,6 @@ class ModelData:
             vert_pos, (..., V, 3),
             tex_vert_pos, (..., TV, 2),
 
-            lbs_weight, (..., V, J),
-
             body_shape_joint_dir, (..., J, 3, BS),
             expr_shape_joint_dir, (..., J, 3, ES),
 
@@ -90,6 +87,8 @@ class ModelData:
             rhand_pose_mean, (..., HANDJ, 3),
 
             pose_vert_dir, (..., V, 3, P),
+
+            lbs_weight, (..., V, J),
 
             set_zero_if_undet=False,
         )
@@ -128,9 +127,10 @@ class ModelData:
 
         F = max(0, F)
 
-        P = max(0, P)
-
-        assert P == max(0, J - 1) * 3 * 3
+        if P < 0:
+            P = 0
+        else:
+            assert P == max(0, J - 1) * 3 * 3
 
         assert BODYJ + JAWJ + EYEJ * 2 + HANDJ * 2 == J
 
@@ -160,8 +160,6 @@ class ModelData:
         self.vert_pos = vert_pos  # [..., V, 3]
         self.tex_vert_pos = tex_vert_pos  # [..., TV, 2]
 
-        self.lbs_weight = lbs_weight  # [..., V, J]
-
         self.body_shape_joint_dir = body_shape_joint_dir  # [..., J, 3, BS]
         self.expr_shape_joint_dir = expr_shape_joint_dir  # [..., J, 3, ES]
 
@@ -173,10 +171,12 @@ class ModelData:
 
         self.pose_vert_dir = pose_vert_dir  # [..., V, 3, (J - 1) * 3 * 3]
 
+        self.lbs_weight = lbs_weight  # [..., V, J]
+
     @staticmethod
     def from_origin_file(
         *,
-        model_data_path: os.PathLike,
+        model_data_path: utils.PathLike,
         model_config: ModelConfig,
         dtype: typing.Optional[torch.dtype] = None,
         device: typing.Optional[torch.device] = None,
@@ -234,13 +234,13 @@ class ModelData:
         vert_pos = try_fetch_float("v_template")
         tex_vert_pos = try_fetch_float("vt")
 
-        lbs_weight = try_fetch_float("weights")
-
         joint_regressor = try_fetch_float("J_regressor")
 
         shape_vert_dir = try_fetch_float("shapedirs")
 
         pose_vert_dir = try_fetch_float("posedirs")
+
+        lbs_weight = try_fetch_float("weights")
 
         V, TV, F = -1, -2, -3
 
@@ -251,10 +251,10 @@ class ModelData:
             vert_pos, (V, 3),
             tex_vert_pos, (TV, 2),
 
-            lbs_weight, (V, J),
-
             joint_regressor, (J, V),
             pose_vert_dir, (V, 3, (J - 1) * 3 * 3),
+
+            lbs_weight, (V, J),
         )
 
         # ---
@@ -358,8 +358,6 @@ class ModelData:
             vert_pos=f(vert_pos),
             tex_vert_pos=f(tex_vert_pos),
 
-            lbs_weight=f(lbs_weight),
-
             body_shape_joint_dir=f(body_shape_joint_dir),
             expr_shape_joint_dir=f(expr_shape_joint_dir),
 
@@ -370,6 +368,8 @@ class ModelData:
             rhand_pose_mean=f(rhand_pose_mean),
 
             pose_vert_dir=f(pose_vert_dir),
+
+            lbs_weight=f(lbs_weight),
         )
 
     @staticmethod
@@ -419,8 +419,6 @@ class ModelData:
             vert_pos=vert_pos,
             tex_vert_pos=tex_vert_pos,
 
-            lbs_weight=try_fetch_float("lbs_weight"),
-
             body_shape_vert_dir=try_fetch_float("body_shape_vert_dir"),
             expr_shape_vert_dir=try_fetch_float("expr_shape_vert_dir"),
 
@@ -431,6 +429,8 @@ class ModelData:
             rhand_pose_mean=try_fetch_float("rhand_pose_mean"),
 
             pose_vert_dir=try_fetch_float("pose_vert_dir"),
+
+            lbs_weight=try_fetch_float("lbs_weight"),
         )
 
     def state_dict(self) -> collections.OrderedDict[str, object]:
@@ -457,8 +457,6 @@ class ModelData:
             ("vert_pos", to_float_np(self.vert_pos)),
             ("tex_vert_pos", to_float_np(self.tex_vert_pos)),
 
-            ("lbs_weight", to_float_np(self.lbs_weight)),
-
             ("body_shape_joint_dir", to_float_np(self.body_shape_joint_dir)),
             ("expr_shape_joint_dir", to_float_np(self.expr_shape_joint_dir)),
 
@@ -469,6 +467,8 @@ class ModelData:
             ("rhand_pose_mean", to_float_np(self.rhand_pose_mean)),
 
             ("pose_vert_dir", to_float_np(self.pose_vert_dir)),
+
+            ("lbs_weight", to_float_np(self.lbs_weight)),
         ])
 
     def load_state_dict(self, state_dict: dict) -> None:
@@ -483,15 +483,14 @@ class ModelData:
         self.jaw_joints_cnt = model_data.jaw_joints_cnt
         self.eye_joints_cnt = model_data.eye_joints_cnt
 
-        self.mesh_graph = f(model_data.mesh_graph, self.device)
-        self.tex_mesh_graph = f(model_data.tex_mesh_graph, self.device)
+        self.mesh_graph = f(model_data.mesh_graph, self.mesh_graph.device)
+        self.tex_mesh_graph = \
+            f(model_data.tex_mesh_graph, self.tex_mesh_graph.device)
 
         self.joint_t_mean = f(model_data.joint_t_mean, self.joint_t_mean)
 
         self.vert_pos = f(model_data.vert_pos, self.vert_pos)
         self.tex_vert_pos = f(model_data.tex_vert_pos, self.tex_vert_pos)
-
-        self.lbs_weight = f(model_data.lbs_weight, self.lbs_weight)
 
         self.body_shape_joint_dir = f(
             model_data.body_shape_joint_dir, self.body_shape_joint_dir)
@@ -510,6 +509,8 @@ class ModelData:
 
         self.pose_vert_dir = f(
             model_data.pose_vert_dir, self.pose_vert_dir)
+
+        self.lbs_weight = f(model_data.lbs_weight, self.lbs_weight)
 
     @property
     def device(self):
@@ -534,8 +535,6 @@ class ModelData:
             vert_pos=f(self.vert_pos),
             tex_vert_pos=f(self.tex_vert_pos),
 
-            lbs_weight=f(self.lbs_weight),
-
             body_shape_joint_dir=f(self.body_shape_joint_dir),
             expr_shape_joint_dir=f(self.expr_shape_joint_dir),
 
@@ -546,6 +545,8 @@ class ModelData:
             rhand_pose_mean=f(self.rhand_pose_mean),
 
             pose_vert_dir=f(self.pose_vert_dir),
+
+            lbs_weight=f(self.lbs_weight),
         )
 
     def subdivide(
@@ -681,9 +682,6 @@ class ModelData:
         new_tex_vert_pos = _f(
             self.tex_vert_pos, tex_mesh_vert_src_table, None, None, 1)
 
-        new_lbs_weight = _f(
-            self.lbs_weight, vert_src_table, new_vert_t, new_vert_s, 1)
-
         new_body_shape_vert_dir = _f(
             self.body_shape_vert_dir, vert_src_table, new_vert_t, new_vert_s, 2)
 
@@ -692,6 +690,9 @@ class ModelData:
 
         new_pose_vert_dir = _f(
             self.pose_vert_dir, vert_src_table, new_vert_t, new_vert_s, 2)
+
+        new_lbs_weight = _f(
+            self.lbs_weight, vert_src_table, new_vert_t, new_vert_s, 1)
 
         model_data = ModelData(
             body_joints_cnt=self.body_joints_cnt,
@@ -708,8 +709,6 @@ class ModelData:
             vert_pos=new_vert_pos,
             tex_vert_pos=new_tex_vert_pos,
 
-            lbs_weight=new_lbs_weight,
-
             body_shape_joint_dir=self.body_shape_joint_dir,
             expr_shape_joint_dir=self.expr_shape_joint_dir,
 
@@ -720,6 +719,8 @@ class ModelData:
             rhand_pose_mean=self.rhand_pose_mean,
 
             pose_vert_dir=new_pose_vert_dir,
+
+            lbs_weight=new_lbs_weight,
         )
 
         return ModelDataSubdivideResult(
@@ -810,8 +811,6 @@ class ModelData:
             vert_pos=new_vert_pos,
             tex_vert_pos=new_tex_vert_pos,
 
-            lbs_weight=new_lbs_weight,
-
             body_shape_joint_dir=self.body_shape_joint_dir,
             expr_shape_joint_dir=self.expr_shape_joint_dir,
 
@@ -822,6 +821,8 @@ class ModelData:
             rhand_pose_mean=self.rhand_pose_mean,
 
             pose_vert_dir=new_pose_vert_dir,
+
+            lbs_weight=new_lbs_weight,
         )
 
         return ModelDataExtractResult(
@@ -831,7 +832,7 @@ class ModelData:
         )
 
     def remesh(self, remesh_arg_pack: utils.ArgPack) -> ModelData:
-        mesh_data = mesh_utils.MeshGraph(self.mesh_graph, self.vert_pos)
+        mesh_data = mesh_utils.MeshData(self.mesh_graph, self.vert_pos)
 
         remeshed_mesh_data = mesh_data.remesh(
             *remesh_arg_pack.args,
@@ -849,14 +850,12 @@ class ModelData:
             kin_tree=self.kin_tree,
 
             mesh_graph=new_mesh_graph,
-            tex_mesh_graph=None,
+            tex_mesh_graph=self.tex_mesh_graph,
 
             joint_t_mean=self.joint_t_mean,
 
             vert_pos=new_vert_pos,
-            tex_vert_pos=None,
-
-            lbs_weight=None,
+            tex_vert_pos=self.tex_vert_pos,
 
             body_shape_joint_dir=self.body_shape_joint_dir,
             expr_shape_joint_dir=self.expr_shape_joint_dir,
@@ -868,6 +867,8 @@ class ModelData:
             rhand_pose_mean=self.rhand_pose_mean,
 
             pose_vert_dir=None,
+
+            lbs_weight=None,
         )
 
     def show(self) -> None:

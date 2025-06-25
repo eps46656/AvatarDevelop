@@ -146,13 +146,11 @@ class KinTree:
             cur_joint_T = joint_T[..., u, :, :]  # [..., D + 1, D + 1]
             parent_joint_T = joint_T[..., p, :, :]  # [... D + 1, D + 1]
 
-            utils.merge_rt(
+            cur_joint_T[..., :D, :D], cur_joint_T[..., :D, D] = utils.merge_rt(
                 parent_joint_T[..., :D, :D],
                 parent_joint_T[..., :D, D],
                 pose_r[..., u, :, :],
                 pose_t[..., u, :],
-                out_r=cur_joint_T[..., :D, :D],
-                out_t=cur_joint_T[..., :D, D],
             )
 
         return joint_T

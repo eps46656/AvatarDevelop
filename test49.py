@@ -48,7 +48,7 @@ def main1():
     normal_map = vision_utils.normalize_image(
         vision_utils.read_video(
             config.DIR / "nor_1746349999.avi",
-            vision_utils.ColorType.RGB,
+            "RGB",
         )[0],
         dtype=DTYPE,
         device=utils.CPU_DEVICE,
